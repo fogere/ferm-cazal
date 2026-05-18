@@ -35,8 +35,8 @@ onBackgroundMessage(messaging, (payload) => {
   const { title, body, icon } = payload.notification ?? {}
   self.registration.showNotification(title ?? 'Ferme Nilslamber', {
     body:  body ?? '',
-    icon:  icon ?? '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
+    icon:  icon ?? '/icons/farm-icon.svg',
+    badge: '/icons/farm-icon.svg',
     vibrate: [200, 100, 200],
     requireInteraction: payload.data?.['severity'] === 'urgent',
   } as NotificationOptions)

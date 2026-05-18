@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Fond carré arrondi vert forêt -->
+  <rect width="512" height="512" rx="96" fill="#1A4731"/>
+  <!-- Feuille stylisée -->
+  <g transform="translate(110 100)">
+    <!-- Tige -->
+    <path d="M148 280 Q140 240 140 200 Q145 130 165 80 Q175 55 200 30"
+          stroke="#95D5B2" stroke-width="14" fill="none" stroke-linecap="round"/>
+    <!-- Feuille gauche -->
+    <path d="M140 220 Q70 200 30 130 Q90 110 140 160 Q145 195 140 220 Z"
+          fill="#95D5B2"/>
+    <!-- Feuille droite (plus grande) -->
+    <path d="M160 180 Q260 150 290 60 Q210 50 165 130 Q160 160 160 180 Z"
+          fill="#74C69D"/>
+    <!-- Highlight intérieur feuille droite -->
+    <path d="M180 150 Q230 130 260 80" stroke="#D8F3DC" stroke-width="6"
+          fill="none" stroke-linecap="round" opacity="0.7"/>
+  </g>
+</svg>

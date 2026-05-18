@@ -1,10 +1,6 @@
 import { initializeApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
-import {
-  initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
-} from 'firebase/firestore'
+import { initializeFirestore, memoryLocalCache } from 'firebase/firestore'
 import { getMessaging, isSupported } from 'firebase/messaging'
 
 const firebaseConfig = {
@@ -19,11 +15,25 @@ const firebaseConfig = {
 export const app = initializeApp(firebaseConfig)
 export const auth = getAuth(app)
 
+// Cache mémoire : pas de localStorage / IndexedDB → plus de QuotaExceededError.
+// Trade-off : la cache est perdue entre rechargements (les données sont refetched depuis le serveur),
+// mais ça évite la corruption quand le quota navigateur sature (photos base64, multi-tab coordination).
 export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager(),
-  }),
+  localCache: memoryLocalCache(),
 })
+
+// Nettoyage best-effort des résidus de l'ancienne cache persistante qui ont déclenché QuotaExceededError.
+// Sans cela, le localStorage reste plein et peut affecter d'autres écritures futures.
+if (typeof window !== 'undefined') {
+  try {
+    const keys = Object.keys(window.localStorage)
+    for (const k of keys) {
+      if (k.startsWith('firestore_') || k.includes('firestore/')) {
+        try { window.localStorage.removeItem(k) } catch { /* ignoré */ }
+      }
+    }
+  } catch { /* localStorage indisponible — ignoré */ }
+}
 
 export const getMessagingIfSupported = async () => {
   const supported = await isSupported()

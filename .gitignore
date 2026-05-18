@@ -1,0 +1,67 @@
+# ── Dépendances ──
+node_modules/
+.pnp
+.pnp.js
+
+# ── Builds ──
+dist/
+dist-ssr/
+lib/
+build/
+
+# ── Variables d'environnement — NE JAMAIS COMMITER ──
+.env
+.env.local
+.env.development
+.env.production
+.env.*.local
+# .env.example reste committé pour servir de template
+
+# ── Firebase ──
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+serviceAccountKey.json
+firebase-adminsdk*.json
+
+# ── Cloudflare Workers (wrangler cache contient account ID) ──
+.wrangler/
+.dev.vars
+
+# ── Logs & debug ──
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+dev-output.txt
+
+# ── Éditeurs / IDE ──
+.vscode/
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+
+# ── Outils Claude (configs locales) ──
+.claude/
+
+# ── Captures d'écran / fichiers temporaires ──
+*.local
+*.tmp
+~$*
+# Screenshots droppés à la racine (UUID format)
+[0-9A-F]*-[0-9A-F]*-[0-9A-F]*-[0-9A-F]*-[0-9A-F]*.png
+[0-9A-F]*-[0-9A-F]*-[0-9A-F]*-[0-9A-F]*-[0-9A-F]*.jpg
+
+# ── Système ──
+Thumbs.db
+ehthumbs.db

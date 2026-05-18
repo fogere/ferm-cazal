@@ -1,0 +1,134 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Utilisateur régulier (email/password)
+    function isRegularUser() {
+      return request.auth != null &&
+             request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    // Aide temporaire : anonyme avec une session valide dans tempSessions
+    function isTempUser() {
+      return request.auth != null &&
+             request.auth.token.firebase.sign_in_provider == 'anonymous' &&
+             exists(/databases/$(database)/documents/tempSessions/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/tempSessions/$(request.auth.uid)).data.expiresAt
+               > request.time.toMillis();
+    }
+
+    function hasAccess() {
+      return isRegularUser() || isTempUser();
+    }
+
+    // ── Profils utilisateurs ──
+    match /users/{uid} {
+      allow read: if hasAccess();
+      // Les réguliers gèrent leur propre profil ; les temps aussi (créé à la connexion)
+      allow create, update: if (isRegularUser() || isTempUser()) && request.auth.uid == uid;
+      allow delete: if isRegularUser() && request.auth.uid == uid;
+    }
+
+    // ── Tâches ──
+    // Les aides peuvent lire et compléter (update), pas créer ni supprimer
+    match /tasks/{taskId} {
+      allow read:          if hasAccess();
+      allow create, delete: if isRegularUser();
+      allow update:        if hasAccess();
+    }
+
+    // ── Épingles carte — aides en lecture seule ──
+    match /map_pins/{pinId} {
+      allow read:  if hasAccess();
+      allow write: if isRegularUser();
+    }
+
+    // ── Config — tout auth peut lire (validation du code avant session) ──
+    match /config/{docId} {
+      allow read:  if request.auth != null;
+      allow write: if isRegularUser();
+    }
+
+    // ── Alertes — aides en lecture seule ──
+    match /alerts/{alertId} {
+      allow read:  if hasAccess();
+      allow write: if isRegularUser();
+    }
+
+    // ── Codes d'accès temporaires ──
+    // Tout auth peut lire UN code par son ID (besoin de connaître le code) ; list réservé aux réguliers
+    match /tempCodes/{codeId} {
+      allow get:   if request.auth != null;
+      allow list:  if isRegularUser();
+      allow write: if isRegularUser();
+    }
+
+    // ── Sessions temporaires ──
+    match /tempSessions/{uid} {
+      allow get:  if request.auth != null && request.auth.uid == uid;
+      allow list: if isRegularUser();
+      // Un anonyme peut créer SA session uniquement si le code référencé existe et que l'expiry correspond
+      allow create: if request.auth != null &&
+                       request.auth.uid == uid &&
+                       request.auth.token.firebase.sign_in_provider == 'anonymous' &&
+                       exists(/databases/$(database)/documents/tempCodes/$(request.resource.data.codeId)) &&
+                       request.resource.data.expiresAt ==
+                         get(/databases/$(database)/documents/tempCodes/$(request.resource.data.codeId)).data.expiresAt &&
+                       request.resource.data.expiresAt > request.time.toMillis();
+      allow delete: if isRegularUser() ||
+                       (request.auth != null && request.auth.uid == uid);
+    }
+
+    // ── Utilisateurs temporaires (aide sans compte, pour assignation de tâches) ──
+    match /tempUsers/{userId} {
+      allow read:  if hasAccess();
+      allow write: if isRegularUser();
+    }
+
+    // ── Animaux individuels ──
+    match /animals/{animalId} {
+      allow read:  if hasAccess();
+      allow write: if isRegularUser();
+    }
+
+    // ── Photos attachées aux épingles ──
+    // Tout utilisateur connecté peut voir et ajouter ; suppression réservée à l'auteur ou aux réguliers
+    match /pin_photos/{photoId} {
+      allow read:   if hasAccess();
+      allow create: if hasAccess() && request.resource.data.uploadedBy == request.auth.uid;
+      allow delete: if isRegularUser() ||
+                       (hasAccess() && resource.data.uploadedBy == request.auth.uid);
+      allow update: if false;
+    }
+
+    // ── Carnet de soins des animaux ──
+    // Lecture libre pour tout utilisateur ayant accès ; écriture réservée aux réguliers
+    match /animal_care/{careId} {
+      allow read:  if hasAccess();
+      allow write: if isRegularUser();
+    }
+
+    // ── Réserves (foin, paille, granulés, etc.) ──
+    // Lecture libre + ajustement quantité par tout utilisateur ; gestion (créer/supprimer) réservée aux réguliers
+    match /reserves/{reserveId} {
+      allow read:   if hasAccess();
+      allow update: if hasAccess();   // permettre les ajustements quotidiens par les aides aussi
+      allow create, delete: if isRegularUser();
+    }
+
+    // ── Historique des mouvements d'animaux entre enclos ──
+    // Lecture libre, création par tout utilisateur ayant accès (auto-log lors d'un changement d'enclos)
+    // Pas de update / delete : c'est un log immuable
+    match /enclosure_movements/{moveId} {
+      allow read:   if hasAccess();
+      allow create: if hasAccess();
+      allow update, delete: if isRegularUser();
+    }
+
+    // Tout le reste : refusé
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

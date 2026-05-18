@@ -1,0 +1,196 @@
+@import "tailwindcss";
+
+@theme {
+  --color-forest:        #1A4731;
+  --color-forest-light:  #2D6A4F;
+  --color-forest-deep:   #0F2D1E;
+  --color-meadow:        #52B788;
+  --color-meadow-light:  #95D5B2;
+  --color-cream:         #F8F4EE;
+  --color-earth:         #8B5E3C;
+  --color-sun:           #F59E0B;
+  --color-sun-light:     #FEF3C7;
+  --color-danger:        #DC2626;
+  --color-danger-light:  #FEE2E2;
+  --color-sky:           #0EA5E9;
+  --color-sky-light:     #E0F2FE;
+  --color-orange:        #EA580C;
+  --color-orange-light:  #FFEDD5;
+  --color-charcoal:      #1C1C1E;
+  --color-muted:         #6B7280;
+  --color-border:        #E5E7EB;
+  --color-card:          #FFFFFF;
+  --font-sans: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  height: 100%;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  height: 100%;
+  background-color: var(--color-cream);
+  color: var(--color-charcoal);
+  overscroll-behavior: none;
+}
+
+/* ── Mode sombre ── */
+/* Surcharge des couleurs de surface uniquement — les couleurs d'accent restent identiques pour garder la cohérence (forest, danger, sun, etc.) */
+html.dark {
+  --color-cream:    #15191A;
+  --color-card:     #1F2426;
+  --color-charcoal: #F1EDE7;
+  --color-muted:    #9CA3AF;
+  --color-border:   #374151;
+  /* Versions des couleurs sky / sun / danger gardent leur teinte, juste les "light" sont assombris */
+  --color-sun-light:    #3D2E10;
+  --color-danger-light: #3A1414;
+  --color-sky-light:    #0E2734;
+  --color-orange-light: #3D1F0A;
+}
+
+html.dark body {
+  background-color: var(--color-cream);
+  color: var(--color-charcoal);
+}
+
+/* Inputs et cartes ressentent le dark mode via les classes Tailwind */
+html.dark input,
+html.dark select,
+html.dark textarea {
+  color-scheme: dark;
+  background-color: var(--color-card);
+  color: var(--color-charcoal);
+}
+
+/* ── Compatibilité dark mode pour les classes Tailwind hardcodées ── */
+/* On surcharge les arrière-plans clairs des cartes & inputs pour qu'ils utilisent le surface sombre */
+html.dark .bg-white {
+  background-color: var(--color-card) !important;
+}
+
+/* Arrière-plans Tailwind clairs utilisés pour les badges d'accent : on les rend translucides sur la teinte */
+html.dark .bg-orange-50  { background-color: rgba(234, 88, 12, 0.10) !important; }
+html.dark .bg-orange-100 { background-color: rgba(234, 88, 12, 0.18) !important; }
+
+/* Couleurs de texte foncées qui deviendraient illisibles sur fond sombre : on les éclaircit */
+html.dark .text-orange-600 { color: #FB923C !important; }
+html.dark .text-orange-700 { color: #FDBA74 !important; }
+html.dark .text-pink-600   { color: #F472B6 !important; }
+html.dark .text-rose-600   { color: #FB7185 !important; }
+html.dark .text-earth      { color: #D4A574 !important; }
+
+/* Borders trop claires deviennent gris foncé pour rester subtiles */
+html.dark .border-orange-400 { border-color: rgba(234, 88, 12, 0.55) !important; }
+
+/* text-forest (vert très foncé) → vert clair lisible sur fond sombre.
+   Couvre la nav active, les liens "Voir tout", boutons sélectionnés, badges. */
+html.dark .text-forest { color: #6FCF97 !important; }
+html.dark .border-forest { border-color: #6FCF97 !important; }
+/* Mais on garde bg-forest tel quel : c'est un bouton vert foncé "primaire", visible sur tout fond. */
+/* Les tints (.bg-forest/10, /15, /20) sont calculés par Tailwind à partir de --color-forest.
+   On les laisse pour conserver l'indication subtile de sélection. */
+
+/* meadow trop léger sur fond sombre : on garde tel quel (meadow #52B788 ressort bien) */
+
+/* Couleurs accentuées des badges "vigilance" / "fire" sur header sombre — bg-meadow/20, bg-sun/20 fonctionnent OK */
+
+/* Placeholder lisible en dark */
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: rgba(241, 237, 231, 0.45);
+}
+
+/* Date inputs et number spinners adoptent la couleur dark */
+html.dark input[type="date"]::-webkit-calendar-picker-indicator,
+html.dark input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+}
+
+/* Map Leaflet : son fond grey par défaut s'harmonise mal — on l'assombrit légèrement */
+html.dark .leaflet-container {
+  background: #2a2f31;
+}
+
+/* Map controls + attribution : fond sombre, texte clair */
+html.dark .leaflet-control-attribution {
+  background: rgba(31, 36, 38, 0.85) !important;
+  color: rgba(241, 237, 231, 0.7) !important;
+}
+html.dark .leaflet-control-attribution a {
+  color: rgba(241, 237, 231, 0.85) !important;
+}
+
+/* Labels animaux dans les enclos : adaptent fond/bordure au mode */
+.enclosure-label {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+html.dark .enclosure-label {
+  background: rgba(31, 36, 38, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+input, button, select, textarea {
+  font-family: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* Shake animation pour erreur login */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%       { transform: translateX(-8px); }
+  40%       { transform: translateX(8px); }
+  60%       { transform: translateX(-6px); }
+  80%       { transform: translateX(6px); }
+}
+
+.shake {
+  animation: shake 0.4s ease;
+}
+
+/* Fade in doux pour les pages */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fadeIn 0.25s ease forwards;
+}
+
+/* Toast notification slide-down */
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-110%); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.toast-enter { animation: slideDown 0.28s ease forwards; }
+
+/* Leaflet override pour s'intégrer au design */
+.leaflet-container {
+  font-family: var(--font-sans) !important;
+  border-radius: 16px;
+}
+
+.leaflet-control-attribution {
+  font-size: 10px !important;
+}

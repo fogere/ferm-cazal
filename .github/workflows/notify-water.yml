@@ -1,0 +1,39 @@
+name: notify-water
+
+# Scanner FCM toutes les 5 min pour envoyer les rappels d'eau / batteries.
+# GitHub Actions cron est "best effort" — peut être retardé de 5-15 min sous charge.
+# Acceptable pour les rappels (préavis 3h+).
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {} # permet de lancer manuellement depuis l'UI GitHub
+
+# Pas d'écriture nécessaire sur le repo
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    # 2 min max — si on dépasse c'est qu'il y a un loop
+    timeout-minutes: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: cron
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        working-directory: cron
+        run: npm install --omit=dev --no-audit --no-fund
+
+      - name: Run scanner
+        working-directory: cron
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node notify-water.cjs

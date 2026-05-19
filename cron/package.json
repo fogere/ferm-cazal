@@ -1,0 +1,14 @@
+{
+  "name": "ferme-cazal-cron",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cron scanner pour les rappels FCM (eau, batteries, tâches récurrentes)",
+  "main": "notify-water.cjs",
+  "scripts": {
+    "notify": "node notify-water.cjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  }
+}

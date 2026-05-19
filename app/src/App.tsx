@@ -10,6 +10,8 @@ import Toaster from './components/Toaster'
 import ErrorBoundary from './components/ErrorBoundary'
 import BugReportButton from './components/BugReportButton'
 import OfflineIndicator from './components/OfflineIndicator'
+import OnboardingModal from './components/OnboardingModal'
+import InstallPWAPrompt from './components/InstallPWAPrompt'
 
 const Login      = lazy(() => import('./pages/Login'))
 const Dashboard  = lazy(() => import('./pages/Dashboard'))
@@ -117,6 +119,20 @@ function FloatingBugButton() {
   return <BugReportButton />
 }
 
+/* Onboarding (demande permissions notifs + GPS) — uniquement si connecté */
+function OnboardingLayer() {
+  const { user } = useAuth()
+  if (!user) return null
+  return <OnboardingModal />
+}
+
+/* Bannière install PWA — uniquement si connecté */
+function InstallPromptLayer() {
+  const { user } = useAuth()
+  if (!user) return null
+  return <InstallPWAPrompt />
+}
+
 function AppRoutes() {
   return (
     <ErrorBoundary>
@@ -126,6 +142,8 @@ function AppRoutes() {
       <BugReporterLayer />
       <ChunkPrefetcher />
       <FloatingBugButton />
+      <OnboardingLayer />
+      <InstallPromptLayer />
       <Suspense fallback={<LoadingScreen />}>
         <Routes>
           <Route path="/login" element={

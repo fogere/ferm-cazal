@@ -8,7 +8,7 @@ import { useTheme } from '../hooks/useTheme'
 import { updateDocBounded, FirestoreWriteTimeoutError } from '../services/firestoreWrite'
 
 export default function Settings() {
-  const { user, profile, logout } = useAuth()
+  const { user, profile, logout, isTemp } = useAuth()
   const navigate = useNavigate()
 
   const [editName,    setEditName]    = useState(false)
@@ -109,7 +109,9 @@ export default function Settings() {
           </div>
           <div>
             <h1 className="text-white text-xl font-bold m-0">{profile?.displayName ?? '…'}</h1>
-            <p className="text-white/60 text-sm mt-0.5">{user?.email}</p>
+            <p className="text-white/60 text-sm mt-0.5">
+              {isTemp ? 'Accès temporaire' : 'Compte permanent'}
+            </p>
           </div>
         </div>
       </div>

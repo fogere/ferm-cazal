@@ -351,6 +351,110 @@ async function processOverdueTasks() {
   }
 }
 
+/* ─── Push résumé du matin (par user, à leur morningReminderTime) ─── */
+/*
+ * Chaque user a son propre horaire de résumé matinal (champ
+ * morningReminderTime, défaut = silentEnd ou '07:00'). Le cron tourne toutes
+ * les 5 min ; on déclenche le push si :
+ *   - l'heure actuelle (Europe/Paris) est dans une fenêtre de ±5 min autour
+ *     de morningReminderTime
+ *   - le push n'a pas déjà été envoyé aujourd'hui (lastMorningPushDate)
+ *
+ * Le message contient le compte de tâches : prises par toi, libres, faites.
+ */
+
+function dayStringParis(ts = Date.now()) {
+  const d = new Date(ts)
+  const fmt = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+  })
+  const parts = fmt.formatToParts(d)
+  const y = parts.find(p => p.type === 'year')?.value ?? '0000'
+  const m = parts.find(p => p.type === 'month')?.value ?? '00'
+  const day = parts.find(p => p.type === 'day')?.value ?? '00'
+  return `${y}-${m}-${day}`
+}
+
+function isWithinMinutes(targetHHMM, now = Date.now(), windowMin = 5) {
+  if (!targetHHMM || !/^\d{2}:\d{2}$/.test(targetHHMM)) return false
+  const { hh, mm } = localHourMinutes(now)
+  const nowMin = hh * 60 + mm
+  const [th, tm] = targetHHMM.split(':').map(Number)
+  const targetMin = th * 60 + tm
+  return Math.abs(nowMin - targetMin) <= windowMin
+}
+
+async function processMorningSummary() {
+  const today = dayStringParis()
+  const allUsers = await getAllRegularUsers()
+  const allTasks = await db.collection('tasks').get()
+
+  // Calcule les compteurs du jour (1× pour tous, pas par user)
+  const todayStart = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime() })()
+  const todayEnd   = (() => { const d = new Date(); d.setHours(23,59,59,999); return d.getTime() })()
+
+  const todayPending = []
+  for (const doc of allTasks.docs) {
+    const t = doc.data()
+    if (t.completed) continue
+    if (t.dueDate >= todayStart && t.dueDate <= todayEnd) todayPending.push({ id: doc.id, ...t })
+  }
+
+  for (const u of allUsers) {
+    const time = u.morningReminderTime || u.silentEnd || '07:00'
+    if (!isWithinMinutes(time)) continue
+    if (u.lastMorningPushDate === today) continue  // déjà envoyé aujourd'hui
+
+    const mine = todayPending.filter(t => t.assignedTo === u.uid).length
+    const free = todayPending.filter(t => !t.assignedTo || t.assignedTo === 'auto').length
+    const total = todayPending.length
+    let body
+    if (total === 0) {
+      body = "Aucune tâche prévue aujourd'hui — bonne journée"
+    } else if (mine > 0) {
+      body = `${mine} pour toi · ${free} à prendre · ${total} au total`
+    } else if (free > 0) {
+      body = `${free} tâche${free > 1 ? 's' : ''} à prendre aujourd'hui`
+    } else {
+      body = `${total} tâche${total > 1 ? 's' : ''} prévue${total > 1 ? 's' : ''}`
+    }
+
+    await sendNotification(u, {
+      title: '🌅 Bonjour ! Programme du jour',
+      body,
+      severity: 'info',
+      data: { kind: 'morning_summary' },
+    })
+
+    // Marque comme envoyé (champ user direct, pas une collection séparée)
+    await db.collection('users').doc(u.uid).update({ lastMorningPushDate: today })
+  }
+}
+
+/* ─── Push bilan du soir (19h Paris, tous les users) ─── */
+/*
+ * À 19h00 (±5 min), push à tous les utilisateurs réguliers :
+ * "Bilan du soir disponible — ouvre l'app". Le modal EveningRecap dans l'app
+ * fait le reste de l'expérience (récap visuel, planifier demain, etc.).
+ */
+const EVENING_TIME = '19:00'
+
+async function processEveningPush() {
+  if (!isWithinMinutes(EVENING_TIME)) return
+  const today = dayStringParis()
+  const allUsers = await getAllRegularUsers()
+  for (const u of allUsers) {
+    if (u.lastEveningPushDate === today) continue
+    await sendNotification(u, {
+      title: '🌙 Bilan du soir',
+      body:  'Récap de la journée et plan de demain — ouvre l\'app',
+      severity: 'info',
+      data: { kind: 'evening_recap' },
+    })
+    await db.collection('users').doc(u.uid).update({ lastEveningPushDate: today })
+  }
+}
+
 /* ─── Système opti : bump et re-sync ─── */
 
 const optiRef = db.collection('opti').doc('state')
@@ -414,6 +518,8 @@ async function main() {
     await processRecurringTasks()
     await processOverdueTasks()
     await processUrgentReleases()
+    await processMorningSummary()
+    await processEveningPush()
     await syncOpti()
   } catch (e) {
     console.error('Erreur scan :', e)

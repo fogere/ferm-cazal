@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Wind, Thermometer, Droplets, CheckCircle2, Circle,
   AlertTriangle, ChevronRight, RefreshCw, Flame, Stethoscope,
-  Navigation, Zap,
+  Navigation, Zap, Hand, ChevronDown, BellRing,
 } from 'lucide-react'
 import { doc, updateDoc, collection, query, where, onSnapshot } from 'firebase/firestore'
 import { db } from '../firebase'
@@ -133,19 +133,22 @@ export default function Dashboard() {
 
   useEffect(() => { loadWeather() }, [loadWeather])
 
-  // Tâches assignées — filtrées côté client pour éviter l'index composite Firestore
+  // Pool model : on lit TOUTES les tâches du jour (pas juste les miennes)
+  // pour pouvoir séparer "Pour moi", "Libres" et "Pour les autres".
   useEffect(() => {
     if (!user) return
-    const q = query(collection(db, 'tasks'), where('assignedTo', '==', user.uid))
+    const q = query(collection(db, 'tasks'))
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
     const todayEnd   = new Date(); todayEnd.setHours(23, 59, 59, 999)
 
     const unsub = onSnapshot(q, snap => {
       const all = snap.docs.map(d => ({ id: d.id, ...d.data() } as Task))
-      // Garde uniquement les tâches d'aujourd'hui (non complétées ou complétées aujourd'hui)
+      // Aujourd'hui = dueDate dans la journée OU déjà fait aujourd'hui
       const todayTasks = all.filter(t => {
-        const due = t.dueDate
-        return due >= todayStart.getTime() && due <= todayEnd.getTime()
+        if (t.dueDate >= todayStart.getTime() && t.dueDate <= todayEnd.getTime()) return true
+        if (t.completed && t.completedAt &&
+            t.completedAt >= todayStart.getTime() && t.completedAt <= todayEnd.getTime()) return true
+        return false
       })
       setTasks(todayTasks)
     })
@@ -345,6 +348,30 @@ export default function Dashboard() {
 
   const done = tasks.filter(t => t.completed).length
   const total = tasks.length
+
+  // Pool model — partitions des tâches du jour
+  const myTasks    = useMemo(() => tasks.filter(t => !t.completed && t.assignedTo === user?.uid), [tasks, user?.uid])
+  const freeTasks  = useMemo(() => tasks.filter(t => !t.completed && (!t.assignedTo || t.assignedTo === 'auto')), [tasks])
+  const otherTasks = useMemo(() => tasks.filter(t => !t.completed && t.assignedTo && t.assignedTo !== 'auto' && t.assignedTo !== user?.uid), [tasks, user?.uid])
+  const [showOthers, setShowOthers] = useState(false)
+
+  async function claimTaskQuick(task: Task) {
+    if (!user) return
+    await updateDoc(doc(db, 'tasks', task.id), { assignedTo: user.uid, claimedAt: Date.now() })
+  }
+
+  // Liste des autres users pour afficher qui prend quoi
+  const [allUsers, setAllUsers] = useState<Array<{ uid: string; displayName: string; color: string }>>([])
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'users'), snap =>
+      setAllUsers(snap.docs.map(d => d.data() as { uid: string; displayName: string; color: string }))
+    )
+    return unsub
+  }, [])
+  function userInfo(uid: string | null | undefined) {
+    if (!uid) return null
+    return allUsers.find(u => u.uid === uid) ?? null
+  }
 
   return (
     <div className="pb-4">
@@ -601,11 +628,11 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Mes tâches du jour */}
+        {/* Tâches du jour — Pool model */}
         <div className="bg-card rounded-2xl p-4 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <p className="text-xs font-semibold text-muted uppercase tracking-wider">
-              Mes tâches du jour
+              Tâches du jour
             </p>
             {total > 0 && (
               <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
@@ -622,29 +649,121 @@ export default function Dashboard() {
               <p className="text-muted text-sm">Aucune tâche pour aujourd'hui</p>
             </div>
           ) : (
-            <ul className="space-y-1">
-              {tasks.map(task => (
-                <li key={task.id}>
+            <>
+              {/* Pour moi */}
+              {myTasks.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-forest mb-1.5 flex items-center gap-1">
+                    <Hand size={11} /> Pour toi ({myTasks.length})
+                  </p>
+                  <ul className="space-y-0.5">
+                    {myTasks.map(task => (
+                      <li key={task.id}>
+                        <button
+                          onClick={() => toggleTask(task)}
+                          className="w-full flex items-center gap-3 py-2.5 px-1 rounded-xl active:bg-cream transition-colors text-left"
+                        >
+                          <Circle size={20} className="text-forest flex-shrink-0" />
+                          <span className="flex-1 text-sm font-medium text-charcoal">{task.title}</span>
+                          {task.priority === 'urgent' && (
+                            <span className="text-danger text-[10px] font-bold">URGENT</span>
+                          )}
+                          {task.urgentReleaseAt && (
+                            <BellRing size={12} className="text-danger" />
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Libres — à prendre */}
+              {freeTasks.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-meadow mb-1.5">
+                    À prendre ({freeTasks.length})
+                  </p>
+                  <ul className="space-y-0.5">
+                    {freeTasks.map(task => (
+                      <li key={task.id} className="flex items-center gap-2 py-2 px-1">
+                        <span className="w-2 h-2 rounded-full bg-meadow flex-shrink-0" />
+                        <span className="flex-1 text-sm text-charcoal truncate">{task.title}</span>
+                        {task.urgentReleaseAt && (
+                          <BellRing size={12} className="text-danger flex-shrink-0" />
+                        )}
+                        <button
+                          onClick={() => claimTaskQuick(task)}
+                          className="text-[11px] font-bold text-white bg-forest px-2 py-1 rounded-lg
+                                     active:scale-95 flex-shrink-0 flex items-center gap-1"
+                        >
+                          <Hand size={11} /> Je prends
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Faites */}
+              {done > 0 && (
+                <div className="mb-2">
+                  <ul className="space-y-0.5">
+                    {tasks.filter(t => t.completed).map(task => {
+                      const by = userInfo(task.completedBy)
+                      return (
+                        <li key={task.id} className="flex items-center gap-2 py-1.5 px-1 text-sm opacity-60">
+                          <CheckCircle2 size={16} className="text-meadow flex-shrink-0" />
+                          <span className="flex-1 truncate line-through text-muted">{task.title}</span>
+                          {by && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-white"
+                                  style={{ backgroundColor: by.color }}>
+                              {by.displayName}
+                            </span>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              )}
+
+              {/* Autres (prises par les autres) — collapsible */}
+              {otherTasks.length > 0 && (
+                <div className="mt-2 border-t border-border/40 pt-2">
                   <button
-                    onClick={() => toggleTask(task)}
-                    className="w-full flex items-center gap-3 py-3 px-1 rounded-xl active:bg-cream transition-colors text-left"
+                    onClick={() => setShowOthers(v => !v)}
+                    className="w-full flex items-center justify-between py-1.5 px-1 active:bg-cream rounded-lg"
                   >
-                    {task.completed
-                      ? <CheckCircle2 size={22} className="text-meadow flex-shrink-0" />
-                      : <Circle size={22} className="text-border flex-shrink-0" />
-                    }
-                    <span className={`flex-1 text-sm font-medium ${
-                      task.completed ? 'line-through text-muted' : 'text-charcoal'
-                    }`}>
-                      {task.title}
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-muted">
+                      Prises par les autres ({otherTasks.length})
                     </span>
-                    {task.priority === 'urgent' && !task.completed && (
-                      <span className="text-danger text-xs font-bold">URGENT</span>
-                    )}
+                    {showOthers
+                      ? <ChevronDown size={14} className="text-muted" />
+                      : <ChevronRight size={14} className="text-muted" />}
                   </button>
-                </li>
-              ))}
-            </ul>
+                  {showOthers && (
+                    <ul className="space-y-0.5 mt-1">
+                      {otherTasks.map(task => {
+                        const by = userInfo(task.assignedTo)
+                        return (
+                          <li key={task.id} className="flex items-center gap-2 py-2 px-1">
+                            <Hand size={12} className="text-muted/60 flex-shrink-0" />
+                            <span className="flex-1 text-sm text-muted truncate">{task.title}</span>
+                            {by && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-white flex-shrink-0"
+                                    style={{ backgroundColor: by.color }}>
+                                {by.displayName}
+                              </span>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
           {/* Lien vers toutes les tâches */}

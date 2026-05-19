@@ -23,6 +23,9 @@ export default function Settings() {
 
   const [silentStart, setSilentStart] = useState(profile?.silentStart ?? '22:00')
   const [silentEnd,   setSilentEnd]   = useState(profile?.silentEnd   ?? '07:00')
+  const [morningReminderTime, setMorningReminderTime] = useState(
+    profile?.morningReminderTime ?? profile?.silentEnd ?? '07:00'
+  )
   const [savingHours, setSavingHours] = useState(false)
   const [hoursSaved,  setHoursSaved]  = useState(false)
   const [savingShare, setSavingShare] = useState(false)
@@ -113,6 +116,7 @@ export default function Settings() {
       await updateDocBounded(doc(db, 'users', user.uid), {
         silentStart,
         silentEnd,
+        morningReminderTime,
       })
       setHoursSaved(true)
       setTimeout(() => setHoursSaved(false), 2000)
@@ -270,6 +274,26 @@ export default function Settings() {
             </div>
           </div>
 
+          {/* Heure du résumé matinal */}
+          <div className="mb-4 pt-3 border-t border-border/40">
+            <label className="block text-xs text-muted mb-1.5">
+              Résumé du matin envoyé à
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="time"
+                value={morningReminderTime}
+                onChange={e => setMorningReminderTime(e.target.value)}
+                className="w-32 px-3 py-2.5 rounded-xl border border-border bg-cream text-charcoal text-sm
+                           focus:outline-none focus:ring-2 focus:ring-forest transition-all"
+              />
+              <p className="text-[11px] text-muted leading-tight flex-1">
+                Notification push avec les tâches du jour à cette heure-là.
+                Par défaut : fin des heures silencieuses.
+              </p>
+            </div>
+          </div>
+
           <button
             onClick={saveHours}
             disabled={savingHours}
@@ -279,7 +303,7 @@ export default function Settings() {
                 : 'bg-forest/10 text-forest border border-forest/20'
               } disabled:opacity-40`}
           >
-            {hoursSaved ? '✓ Enregistré' : savingHours ? 'Enregistrement…' : 'Enregistrer les heures'}
+            {hoursSaved ? '✓ Enregistré' : savingHours ? 'Enregistrement…' : 'Enregistrer'}
           </button>
         </div>
 

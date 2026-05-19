@@ -13,6 +13,7 @@ import OfflineIndicator from './components/OfflineIndicator'
 import OnboardingModal from './components/OnboardingModal'
 import InstallPWAPrompt from './components/InstallPWAPrompt'
 import UpdatePrompt from './components/UpdatePrompt'
+import EveningRecapModal from './components/EveningRecapModal'
 
 const Login      = lazy(() => import('./pages/Login'))
 const Dashboard  = lazy(() => import('./pages/Dashboard'))
@@ -134,6 +135,13 @@ function InstallPromptLayer() {
   return <InstallPWAPrompt />
 }
 
+/* Bilan du soir auto à 18h+ — uniquement si connecté en compte régulier */
+function EveningRecapLayer() {
+  const { user, isTemp } = useAuth()
+  if (!user || isTemp) return null
+  return <EveningRecapModal />
+}
+
 function AppRoutes() {
   return (
     <ErrorBoundary>
@@ -146,6 +154,7 @@ function AppRoutes() {
       <FloatingBugButton />
       <OnboardingLayer />
       <InstallPromptLayer />
+      <EveningRecapLayer />
       <Suspense fallback={<LoadingScreen />}>
         <Routes>
           <Route path="/login" element={

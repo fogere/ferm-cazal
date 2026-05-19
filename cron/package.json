@@ -3,9 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "description": "Cron scanner pour les rappels FCM (eau, batteries, tâches récurrentes)",
-  "main": "notify-water.cjs",
+  "main": "notify.cjs",
   "scripts": {
-    "notify": "node notify-water.cjs"
+    "notify": "node notify.cjs"
   },
   "engines": { "node": ">=20" },
   "dependencies": {

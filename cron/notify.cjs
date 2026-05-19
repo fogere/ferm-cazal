@@ -2,20 +2,22 @@
 /**
  * Cron scanner FCM — exécuté toutes les 5 min par GitHub Actions.
  *
- * Scanne Firestore et envoie les notifications push manquantes :
- * 1. Points d'eau manuels  — rappel X heures avant `dueAt`
- * 2. Points d'eau manuels  — escalade à tous Y heures après dueAt non rempli
- * 3. Batteries de clôture  — rappel périodique selon `nextCheckAt`
+ * Couvre TOUS les types de notifications :
+ *   1. Points d'eau manuels  — rappel X heures avant `dueAt`
+ *   2. Points d'eau manuels  — escalade à tous Y heures après dueAt non rempli
+ *   3. Batteries de clôture  — rappel périodique selon `nextCheckAt`
+ *   4. Batteries de clôture  — alerte urgente si statut critical/down
+ *   5. Tâches récurrentes    — auto-créées (quotidien / hebdo) si flag `nextOccurrenceCreated` absent
+ *   6. Tâches en retard      — rappel à l'assigné si tâche non cochée la veille
  *
- * Le service account est lu depuis la variable d'env `FIREBASE_SERVICE_ACCOUNT`
- * (contenu JSON du fichier service account collé tel quel dans le secret GitHub).
+ * En plus, ré-synchronise le doc `/opti/state` pour optimiser les lectures
+ * Firestore côté clients (système opti).
  *
- * Le script est idempotent : il marque `reminderSent: true` et `lastEscalatedAt`
+ * Service account lu depuis la variable d'env `FIREBASE_SERVICE_ACCOUNT`.
+ * Idempotent : utilise `reminderSent`, `lastEscalatedAt`, `nextOccurrenceCreated`
  * pour ne pas re-notifier deux fois.
  *
- * Honore les heures silencieuses : si la cible est entre `silentStart` et
- * `silentEnd` (interprétés en Europe/Paris), le rappel non urgent est reporté.
- * Les escalades urgentes ignorent les heures silencieuses.
+ * Honore les heures silencieuses (Europe/Paris). Urgent ignore les heures silencieuses.
  */
 
 const admin = require('firebase-admin')
@@ -220,6 +222,127 @@ async function processBatteries() {
   }
 }
 
+/* ─── Scan : tâches récurrentes (création des prochaines occurrences) ─── */
+
+async function processRecurringTasks() {
+  const now = Date.now()
+  // Pas de where composite. On lit les tâches terminées puis on filtre côté JS.
+  const snap = await db.collection('tasks').where('completed', '==', true).get()
+
+  let createdCount = 0
+  for (const doc of snap.docs) {
+    const task = doc.data()
+    if (task.nextOccurrenceCreated) continue
+    if (task.recurrence === 'once' || !task.recurrence) {
+      await doc.ref.update({ nextOccurrenceCreated: true })
+      continue
+    }
+
+    let nextDueDate = task.dueDate
+    if (task.recurrence === 'daily')  nextDueDate += 24 * 3600_000
+    if (task.recurrence === 'weekly') nextDueDate += 7 * 24 * 3600_000
+
+    await db.collection('tasks').add({
+      title:        task.title,
+      zone:         task.zone ?? '',
+      assignedTo:   task.assignedTo,
+      recurrence:   task.recurrence,
+      priority:     task.priority ?? 'normal',
+      completed:    false,
+      completedAt:  null,
+      completedBy:  null,
+      createdAt:    now,
+      createdBy:    task.createdBy,
+      dueDate:      nextDueDate,
+      nextOccurrenceCreated: false,
+    })
+    await doc.ref.update({ nextOccurrenceCreated: true })
+    createdCount++
+  }
+  if (createdCount > 0) await bumpOpti('tasks')
+}
+
+/* ─── Scan : tâches en retard (rappel à l'assigné) ─── */
+
+async function processOverdueTasks() {
+  const now = Date.now()
+  const oneDayAgo = now - 24 * 3600_000
+
+  // Pas de where composite (évite la nécessité d'un index).
+  // On lit toutes les tâches en retard via leur dueDate puis on filtre côté JS.
+  const snap = await db.collection('tasks').where('dueDate', '<', now).get()
+
+  for (const doc of snap.docs) {
+    const task = doc.data()
+    if (task.completed) continue
+    if (task.lastOverdueReminderAt && task.lastOverdueReminderAt > oneDayAgo) continue
+    if (!task.assignedTo) continue
+
+    const user = await getUser(task.assignedTo)
+    if (!user) continue
+
+    await sendNotification(user, {
+      title: '📋 Tâche en retard',
+      body:  `${task.title} (${task.zone || 'sans zone'})`,
+      severity: 'warning',
+      data: { taskId: doc.id, kind: 'task_overdue' },
+    })
+    await doc.ref.update({ lastOverdueReminderAt: now })
+  }
+}
+
+/* ─── Système opti : bump et re-sync ─── */
+
+const optiRef = db.collection('opti').doc('state')
+
+async function bumpOpti(collectionName) {
+  try {
+    await optiRef.set({ [collectionName]: Date.now() }, { merge: true })
+  } catch (e) {
+    console.warn(`bumpOpti ${collectionName}:`, e.message)
+  }
+}
+
+// Filet de sécurité : si un client a oublié de bumper opti, on rattrape.
+// Lit 1 doc par collection (le plus récent) et compare à opti.
+async function syncOpti() {
+  const collections = [
+    { name: 'map_pins',             orderBy: 'updatedAt' },
+    { name: 'animals',              orderBy: 'addedAt' },
+    { name: 'tasks',                orderBy: 'createdAt' },
+    { name: 'alerts',               orderBy: 'createdAt' },
+    { name: 'animal_care',          orderBy: 'createdAt' },
+    { name: 'reserves',             orderBy: 'updatedAt' },
+    { name: 'enclosure_movements',  orderBy: 'movedAt' },
+    { name: 'pin_photos',           orderBy: 'uploadedAt' },
+  ]
+
+  const optiSnap = await optiRef.get()
+  const opti = optiSnap.exists ? optiSnap.data() : {}
+  const updates = {}
+
+  for (const c of collections) {
+    try {
+      const latest = await db.collection(c.name).orderBy(c.orderBy, 'desc').limit(1).get()
+      if (latest.empty) continue
+      const raw = latest.docs[0].data()[c.orderBy]
+      if (!raw) continue
+      const tsValue = typeof raw === 'number' ? raw
+                    : (raw && raw.toMillis ? raw.toMillis() : 0)
+      if (!opti[c.name] || opti[c.name] < tsValue) {
+        updates[c.name] = tsValue
+      }
+    } catch (e) {
+      console.warn(`syncOpti ${c.name}:`, e.message)
+    }
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await optiRef.set(updates, { merge: true })
+    console.log(`✓ opti rattrapé pour: ${Object.keys(updates).join(', ')}`)
+  }
+}
+
 /* ─── Main ─── */
 
 async function main() {
@@ -228,6 +351,9 @@ async function main() {
   try {
     await processWaterPoints()
     await processBatteries()
+    await processRecurringTasks()
+    await processOverdueTasks()
+    await syncOpti()
   } catch (e) {
     console.error('Erreur scan :', e)
     process.exit(1)

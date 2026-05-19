@@ -1,6 +1,8 @@
-name: notify-water
+name: notify
 
-# Scanner FCM toutes les 5 min pour envoyer les rappels d'eau / batteries.
+# Scanner FCM toutes les 5 min pour envoyer les rappels d'eau / batteries
+# / tâches récurrentes. Et re-synchronise le doc /opti/state pour minimiser
+# les lectures Firestore côté clients.
 # GitHub Actions cron est "best effort" — peut être retardé de 5-15 min sous charge.
 # Acceptable pour les rappels (préavis 3h+).
 on:
@@ -36,4 +38,4 @@ jobs:
         working-directory: cron
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-        run: node notify-water.cjs
+        run: node notify.cjs

@@ -126,6 +126,14 @@ service cloud.firestore {
       allow update, delete: if isRegularUser();
     }
 
+    // ── Optimisation des lectures (système opti) ──
+    // Un document unique /opti/state contenant un timestamp par collection.
+    // Bumpé après chaque écriture, sert aux clients à éviter de re-fetch
+    // une collection inchangée. Tous les authentifiés peuvent lire+écrire.
+    match /opti/{docId} {
+      allow read, write: if hasAccess();
+    }
+
     // ── Rapports de bugs (capture pendant la phase de test) ──
     // Toute personne authentifiée (y compris codes temporaires) peut créer un rapport.
     // Lecture libre pour tous les authentifiés afin de consulter l'historique.

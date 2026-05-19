@@ -1,10 +1,15 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './hooks/useAuth'
+import { ThemeProvider } from './hooks/useTheme'
 import { useMessaging } from './hooks/useMessaging'
 import { useLiveLocation } from './hooks/useLiveLocation'
+import { useBugReporter } from './hooks/useBugReporter'
 import Layout from './components/layout/Layout'
 import Toaster from './components/Toaster'
+import ErrorBoundary from './components/ErrorBoundary'
+import BugReportButton from './components/BugReportButton'
+import OfflineIndicator from './components/OfflineIndicator'
 
 const Login      = lazy(() => import('./pages/Login'))
 const Dashboard  = lazy(() => import('./pages/Dashboard'))
@@ -13,6 +18,7 @@ const MapPage    = lazy(() => import('./pages/Map'))
 const Alerts     = lazy(() => import('./pages/Alerts'))
 const SettingsPage = lazy(() => import('./pages/Settings'))
 const AdminPage    = lazy(() => import('./pages/Admin'))
+const BugsPage     = lazy(() => import('./pages/Bugs'))
 
 function LoadingScreen() {
   return (
@@ -64,11 +70,62 @@ function LocationLayer() {
   return null
 }
 
+/* Branche le bugReporter à l'auth + au router (nav tracking) */
+function BugReporterLayer() {
+  useBugReporter()
+  return null
+}
+
+/* Préfetch des chunks lazy dès qu'on est connecté.
+   Sans ça, chaque première navigation vers une page déclenche un Suspense fallback
+   (flash "🌿 …") le temps que Vite télécharge le chunk JS.
+   En préchargeant tout en arrière-plan après le login, les navigations
+   suivantes sont instantanées. */
+function ChunkPrefetcher() {
+  const { user } = useAuth()
+  useEffect(() => {
+    if (!user) return
+    // Importer chaque page = télécharge + parse le chunk, mais ne le rend pas.
+    // requestIdleCallback laisse passer le rendu prioritaire d'abord.
+    const idle = (cb: () => void) => {
+      if ('requestIdleCallback' in window) {
+        ;(window as Window & { requestIdleCallback?: (cb: () => void) => void })
+          .requestIdleCallback!(cb)
+      } else {
+        setTimeout(cb, 200)
+      }
+    }
+    idle(() => {
+      // On ne se soucie pas des erreurs : si un chunk plante, l'app
+      // affichera l'écran d'erreur classique au moment de la vraie navigation.
+      import('./pages/Dashboard').catch(() => {})
+      import('./pages/Tasks').catch(() => {})
+      import('./pages/Map').catch(() => {})
+      import('./pages/Alerts').catch(() => {})
+      import('./pages/Settings').catch(() => {})
+      import('./pages/Bugs').catch(() => {})
+      import('./pages/Admin').catch(() => {})
+    })
+  }, [user])
+  return null
+}
+
+/* Bouton 🐞 flottant — visible uniquement si connecté */
+function FloatingBugButton() {
+  const { user } = useAuth()
+  if (!user) return null
+  return <BugReportButton />
+}
+
 function AppRoutes() {
   return (
-    <>
+    <ErrorBoundary>
+      <OfflineIndicator />
       <MessagingLayer />
       <LocationLayer />
+      <BugReporterLayer />
+      <ChunkPrefetcher />
+      <FloatingBugButton />
       <Suspense fallback={<LoadingScreen />}>
         <Routes>
           <Route path="/login" element={
@@ -83,21 +140,24 @@ function AppRoutes() {
             <Route path="/map"       element={<MapPage />} />
             <Route path="/alerts"    element={<Alerts />} />
             <Route path="/settings"  element={<SettingsPage />} />
+            <Route path="/bugs"      element={<BugsPage />} />
             <Route path="/admin"     element={<AdminRoute><AdminPage /></AdminRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </Suspense>
-    </>
+    </ErrorBoundary>
   )
 }
 
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   )
 }

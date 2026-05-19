@@ -26,6 +26,14 @@ ui-debug.log
 serviceAccountKey.json
 firebase-adminsdk*.json
 
+# ── Backups locaux (config migrée) ──
+*.backup
+.firebaserc.*.backup
+
+# ── Scripts de migration ponctuels (peuvent contenir mots de passe) ──
+scripts/migrate-users.cjs
+scripts/migration-output.txt
+
 # ── Cloudflare Workers (wrangler cache contient account ID) ──
 .wrangler/
 .dev.vars

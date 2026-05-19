@@ -126,6 +126,17 @@ service cloud.firestore {
       allow update, delete: if isRegularUser();
     }
 
+    // ── Rapports de bugs (capture pendant la phase de test) ──
+    // Toute personne authentifiée (y compris codes temporaires) peut créer un rapport.
+    // Lecture libre pour tous les authentifiés afin de consulter l'historique.
+    // Suppression réservée aux utilisateurs réguliers (nettoyage).
+    match /bugReports/{reportId} {
+      allow read:   if hasAccess();
+      allow create: if hasAccess();
+      allow update: if false; // les rapports sont immuables
+      allow delete: if isRegularUser();
+    }
+
     // Tout le reste : refusé
     match /{document=**} {
       allow read, write: if false;

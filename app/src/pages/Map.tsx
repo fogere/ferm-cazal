@@ -30,6 +30,13 @@ const IGN_PLAN =
   '&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM' +
   '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image%2Fpng'
 
+// Overlay : parcelles cadastrales IGN (PNG transparent, ne montre que les contours)
+// Posé en transparence par-dessus l'aérien pour voir les limites de terrain
+const IGN_PARCELS =
+  'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
+  '&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=normal&TILEMATRIXSET=PM' +
+  '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image%2Fpng'
+
 // Fond de secours OpenStreetMap si IGN ne répond pas
 const OSM_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 
@@ -587,6 +594,16 @@ export default function MapPage() {
   const [users,        setUsers]        = useState<UserProfile[]>([])
   const [animalGroups, setAnimalGroups] = useState<{ name: string; count: number }[]>([])
   const [layer,        setLayer]        = useState<'aerial' | 'plan' | 'osm'>('aerial')
+  // Overlay parcelles cadastrales — persisté dans localStorage, utile pour voir
+  // les limites de terrain par-dessus la photo aérienne (demandé par Eugénie pour la PAC)
+  const [showParcels, setShowParcels] = useState<boolean>(() => {
+    try { return localStorage.getItem('fm_map_parcels') === '1' }
+    catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('fm_map_parcels', showParcels ? '1' : '0') }
+    catch { /* ignoré */ }
+  }, [showParcels])
   const [tileError,    setTileError]    = useState<string | null>(null)
   const [addMode,      setAddMode]      = useState(false)
   const [pendingPos,   setPendingPos]   = useState<{ lat: number; lng: number } | null>(null)
@@ -1461,6 +1478,20 @@ export default function MapPage() {
           }}
         />
 
+        {/* Overlay parcelles cadastrales IGN — affichage à la demande
+            (voir limites officielles de terrain par-dessus l'aérien). */}
+        {showParcels && (
+          <TileLayer
+            key="parcels-overlay"
+            url={IGN_PARCELS}
+            attribution=""
+            maxNativeZoom={20}
+            maxZoom={22}
+            opacity={0.7}
+            zIndex={400}
+          />
+        )}
+
         <MapClickCapture
           addActive={addMode}
           fenceActive={fenceMode && !fenceFormVisible}
@@ -1760,7 +1791,7 @@ export default function MapPage() {
         </div>
       )}
 
-      {/* ── Contrôles (couches + recentrage + recherche) ── */}
+      {/* ── Contrôles (couches + parcelles + recentrage + recherche) ── */}
       <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2">
         <button
           onClick={() => setLayer(l => l === 'aerial' ? 'plan' : l === 'plan' ? 'osm' : 'aerial')}
@@ -1768,6 +1799,21 @@ export default function MapPage() {
           className="bg-card/95 backdrop-blur-sm shadow-lg rounded-xl p-3 active:scale-95 transition-all"
         >
           <Layers size={20} className="text-forest" />
+        </button>
+        <button
+          onClick={() => setShowParcels(v => !v)}
+          title={showParcels ? 'Masquer les parcelles cadastrales' : 'Afficher les parcelles cadastrales IGN'}
+          aria-pressed={showParcels}
+          className={`backdrop-blur-sm shadow-lg rounded-xl p-3 active:scale-95 transition-all
+            ${showParcels ? 'bg-forest text-white' : 'bg-card/95 text-forest'}`}
+        >
+          {/* Picto "parcelles" : carré quadrillé. On utilise un SVG inline plutôt
+              qu'une icône Lucide pour rester compact et lisible. */}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
+          </svg>
         </button>
         <button
           onClick={() => setFlyTrigger(n => n + 1)}
@@ -1921,6 +1967,7 @@ export default function MapPage() {
         <div className="bg-card/90 backdrop-blur-sm rounded-xl px-3 py-1.5 shadow-md">
           <span className="text-xs font-semibold text-muted">
             {layer === 'aerial' ? '📷 Aérien IGN' : layer === 'plan' ? '🗺 Plan IGN' : '🌍 OSM'}
+            {showParcels && <span className="ml-1 text-forest">+ parcelles</span>}
           </span>
         </div>
       </div>

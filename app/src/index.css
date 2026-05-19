@@ -90,6 +90,29 @@ html.dark .text-pink-600   { color: #F472B6 !important; }
 html.dark .text-rose-600   { color: #FB7185 !important; }
 html.dark .text-earth      { color: #D4A574 !important; }
 
+/* Exception lisibilité : sur fond jaune (bg-sun / bg-sun/xx), text-earth devient
+   tan-clair sur jaune = confondu. On reforce un brun très foncé dans ce cas.
+   Couvre les badges "⚠ X non placé", compteurs, encadrés "Aucun enclos fermé".
+   IMPORTANT : on doit cibler à la fois descendant (espace) ET même élément (point collé)
+   car certains badges ont bg-sun et text-earth sur le MÊME <span>. */
+html.dark .bg-sun .text-earth,
+html.dark .bg-sun.text-earth,
+html.dark [class*="bg-sun/"] .text-earth,
+html.dark [class*="bg-sun/"].text-earth {
+  color: #2A1F0F !important;
+}
+
+/* "⚠ Non placé" / "text-sun" sur fond cream sombre : ressort déjà bien (#F59E0B sur #15191A),
+   mais sur les badges flottants au-dessus de la carte aérienne sombre, on l'éclaircit
+   légèrement pour le détacher des tuiles. */
+html.dark .leaflet-container .text-sun {
+  color: #FBBF24 !important;
+}
+html.dark .leaflet-container [class*="bg-sun/"] {
+  /* Renforce un peu l'opacité pour que le badge ressorte mieux du fond sombre */
+  background-color: rgba(245, 158, 11, 0.95) !important;
+}
+
 /* Borders trop claires deviennent gris foncé pour rester subtiles */
 html.dark .border-orange-400 { border-color: rgba(234, 88, 12, 0.55) !important; }
 

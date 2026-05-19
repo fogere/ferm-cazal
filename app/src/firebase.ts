@@ -1,6 +1,11 @@
 import { initializeApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
-import { initializeFirestore, memoryLocalCache } from 'firebase/firestore'
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  memoryLocalCache,
+} from 'firebase/firestore'
 import { getMessaging, isSupported } from 'firebase/messaging'
 
 const firebaseConfig = {
@@ -15,15 +20,36 @@ const firebaseConfig = {
 export const app = initializeApp(firebaseConfig)
 export const auth = getAuth(app)
 
-// Cache mémoire : pas de localStorage / IndexedDB → plus de QuotaExceededError.
-// Trade-off : la cache est perdue entre rechargements (les données sont refetched depuis le serveur),
-// mais ça évite la corruption quand le quota navigateur sature (photos base64, multi-tab coordination).
-export const db = initializeFirestore(app, {
-  localCache: memoryLocalCache(),
-})
+/**
+ * Cache persistant Firestore (IndexedDB) — REQUIS pour le mode hors-ligne :
+ * - les données restent accessibles en avion / sans réseau
+ * - les écritures faites hors ligne sont mises en file et synchronisées au retour réseau
+ * - survit aux rechargements de page
+ *
+ * Le tabManager `persistentMultipleTabManager` gère proprement les onglets multiples
+ * (élection d'un leader, partage de la cache).
+ *
+ * Fallback gracieux : si l'init persistant échoue (navigateur privé, IndexedDB
+ * inaccessible, quota saturé), on retombe sur la cache mémoire pour ne pas
+ * casser l'application.
+ */
+function initDb() {
+  try {
+    return initializeFirestore(app, {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
+    })
+  } catch (e) {
+    console.warn('[firebase] Cache persistant indisponible, fallback mémoire :', e)
+    return initializeFirestore(app, { localCache: memoryLocalCache() })
+  }
+}
 
-// Nettoyage best-effort des résidus de l'ancienne cache persistante qui ont déclenché QuotaExceededError.
-// Sans cela, le localStorage reste plein et peut affecter d'autres écritures futures.
+export const db = initDb()
+
+// Nettoyage best-effort des résidus de l'ancienne cache localStorage des
+// versions Firebase précédentes (avant migration vers IndexedDB).
 if (typeof window !== 'undefined') {
   try {
     const keys = Object.keys(window.localStorage)

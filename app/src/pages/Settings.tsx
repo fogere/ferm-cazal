@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, Check, User, Bell, Shield, ChevronRight, MapPin, Moon, Sun } from 'lucide-react'
-import { doc, updateDoc, deleteField } from 'firebase/firestore'
+import { LogOut, Check, User, Bell, Shield, ChevronRight, MapPin, Moon, Sun, Bug } from 'lucide-react'
+import { doc, deleteField } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import { useTheme } from '../hooks/useTheme'
+import { updateDocBounded, FirestoreWriteTimeoutError } from '../services/firestoreWrite'
 
 export default function Settings() {
   const { user, profile, logout } = useAuth()
@@ -19,14 +20,26 @@ export default function Settings() {
   const [savingHours, setSavingHours] = useState(false)
   const [hoursSaved,  setHoursSaved]  = useState(false)
   const [savingShare, setSavingShare] = useState(false)
+  const [writeError,  setWriteError]  = useState<string | null>(null)
   const { theme, toggleTheme } = useTheme()
+
+  function handleWriteFailure(e: unknown) {
+    if (e instanceof FirestoreWriteTimeoutError) {
+      setWriteError("Serveur Firebase saturé — modification mise en file d'attente.")
+    } else {
+      setWriteError("Échec de l'enregistrement. Réessayez dans un instant.")
+    }
+    setTimeout(() => setWriteError(null), 5000)
+  }
 
   async function saveName() {
     if (!user || !nameVal.trim()) return
     setSavingName(true)
     try {
-      await updateDoc(doc(db, 'users', user.uid), { displayName: nameVal.trim() })
+      await updateDocBounded(doc(db, 'users', user.uid), { displayName: nameVal.trim() })
       setEditName(false)
+    } catch (e) {
+      handleWriteFailure(e)
     } finally {
       setSavingName(false)
     }
@@ -36,12 +49,14 @@ export default function Settings() {
     if (!user) return
     setSavingHours(true)
     try {
-      await updateDoc(doc(db, 'users', user.uid), {
+      await updateDocBounded(doc(db, 'users', user.uid), {
         silentStart,
         silentEnd,
       })
       setHoursSaved(true)
       setTimeout(() => setHoursSaved(false), 2000)
+    } catch (e) {
+      handleWriteFailure(e)
     } finally {
       setSavingHours(false)
     }
@@ -71,7 +86,9 @@ export default function Settings() {
       const updates: Record<string, unknown> = { shareLocation: next }
       // Si on désactive, on efface aussi la dernière position connue
       if (!next) updates.liveLocation = deleteField()
-      await updateDoc(doc(db, 'users', user.uid), updates)
+      await updateDocBounded(doc(db, 'users', user.uid), updates)
+    } catch (e) {
+      handleWriteFailure(e)
     } finally {
       setSavingShare(false)
     }
@@ -98,6 +115,13 @@ export default function Settings() {
       </div>
 
       <div className="px-4 mt-4 space-y-4">
+
+        {/* Bandeau d'erreur d'écriture (timeout Firestore, quota dépassé…) */}
+        {writeError && (
+          <div className="bg-danger/10 border border-danger/30 rounded-2xl px-4 py-3 text-sm text-danger">
+            ⚠ {writeError}
+          </div>
+        )}
 
         {/* Profil */}
         <div className="bg-card rounded-2xl p-4 shadow-sm">
@@ -272,6 +296,16 @@ export default function Settings() {
             </div>
           </div>
         </div>
+
+        {/* Rapports de bugs */}
+        <button
+          onClick={() => navigate('/bugs')}
+          className="flex items-center gap-3 w-full px-4 py-4 rounded-2xl bg-card shadow-sm active:bg-cream transition-colors"
+        >
+          <Bug size={20} className="text-danger" />
+          <span className="flex-1 text-left text-charcoal font-semibold text-sm">Rapports de bugs</span>
+          <ChevronRight size={18} className="text-muted" />
+        </button>
 
         {/* Administration */}
         <button

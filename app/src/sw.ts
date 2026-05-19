@@ -21,13 +21,15 @@ self.addEventListener('message', (event) => {
 self.addEventListener('activate', (ev) => ev.waitUntil(self.clients.claim()))
 
 // ── Firebase Messaging (notifications en arrière-plan) ──
+// Config alignée sur projet le-cazal. Si tu changes de projet Firebase,
+// pense à mettre à jour ces valeurs (le SW ne lit pas .env via Vite).
 const _app = initializeApp({
-  apiKey:            'AIzaSyC7yHZsfWrmxl620l3YEjMzhZds-HcY-tw',
-  authDomain:        'farm-ed787.firebaseapp.com',
-  projectId:         'farm-ed787',
-  storageBucket:     'farm-ed787.firebasestorage.app',
-  messagingSenderId: '313036475766',
-  appId:             '1:313036475766:web:6023e1c5a82356b0e13e57',
+  apiKey:            'AIzaSyBCVfDmyh_KaZjw2r3sdHKHgbIj0WSgkcg',
+  authDomain:        'le-cazal.firebaseapp.com',
+  projectId:         'le-cazal',
+  storageBucket:     'le-cazal.firebasestorage.app',
+  messagingSenderId: '1050666737967',
+  appId:             '1:1050666737967:web:7e3e5fb99544e11c5a81da',
 })
 const messaging = getMessaging(_app)
 
@@ -73,6 +75,24 @@ registerRoute(
       new ExpirationPlugin({
         maxEntries: 200_000,
         maxAgeSeconds: 60 * 60 * 24 * 90, // 90 jours
+        purgeOnQuotaError: true,
+      }),
+    ],
+  })
+)
+
+// ── Tuiles OSM fallback (CacheFirst — utilisées si IGN tombe en panne) ──
+// On les met en cache aussi pour rester opérationnel en mode avion.
+registerRoute(
+  ({ url }) => url.hostname.endsWith('.tile.openstreetmap.org'),
+  new CacheFirst({
+    cacheName: 'osm-tiles-v1',
+    plugins: [
+      new CacheableResponsePlugin({ statuses: [0, 200] }),
+      tileQuotaPlugin,
+      new ExpirationPlugin({
+        maxEntries: 50_000,
+        maxAgeSeconds: 60 * 60 * 24 * 90,
         purgeOnQuotaError: true,
       }),
     ],

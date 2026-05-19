@@ -1,7 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, Check, User, Bell, Shield, ChevronRight, MapPin, Moon, Sun, Bug } from 'lucide-react'
+import {
+  LogOut, Check, User, Bell, Shield, ChevronRight, MapPin, Moon, Sun, Bug,
+  Lock, Eye, EyeOff,
+} from 'lucide-react'
 import { doc, deleteField } from 'firebase/firestore'
+import {
+  reauthenticateWithCredential, EmailAuthProvider, updatePassword,
+} from 'firebase/auth'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import { useTheme } from '../hooks/useTheme'
@@ -21,7 +27,62 @@ export default function Settings() {
   const [hoursSaved,  setHoursSaved]  = useState(false)
   const [savingShare, setSavingShare] = useState(false)
   const [writeError,  setWriteError]  = useState<string | null>(null)
+
+  /* ─── Changement de mot de passe ─── */
+  const [pwOpen,        setPwOpen]        = useState(false)
+  const [pwCurrent,     setPwCurrent]     = useState('')
+  const [pwNew,         setPwNew]         = useState('')
+  const [pwConfirm,     setPwConfirm]     = useState('')
+  const [pwShow,        setPwShow]        = useState(false)
+  const [pwSaving,      setPwSaving]      = useState(false)
+  const [pwError,       setPwError]       = useState<string | null>(null)
+  const [pwSuccess,     setPwSuccess]     = useState(false)
+
   const { theme, toggleTheme } = useTheme()
+
+  async function changePassword() {
+    if (!user || !user.email) return
+    setPwError(null)
+    if (pwNew.length < 6) {
+      setPwError('Le nouveau mot de passe doit faire au moins 6 caractères.')
+      return
+    }
+    if (pwNew !== pwConfirm) {
+      setPwError('La confirmation ne correspond pas.')
+      return
+    }
+    if (pwNew === pwCurrent) {
+      setPwError('Le nouveau mot de passe doit être différent de l\'ancien.')
+      return
+    }
+    setPwSaving(true)
+    try {
+      const cred = EmailAuthProvider.credential(user.email, pwCurrent)
+      await reauthenticateWithCredential(user, cred)
+      await updatePassword(user, pwNew)
+      setPwSuccess(true)
+      setPwCurrent(''); setPwNew(''); setPwConfirm('')
+      setTimeout(() => {
+        setPwOpen(false)
+        setPwSuccess(false)
+      }, 1800)
+    } catch (e) {
+      const code = (e as { code?: string }).code ?? ''
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+        setPwError('Mot de passe actuel incorrect.')
+      } else if (code === 'auth/weak-password') {
+        setPwError('Le nouveau mot de passe est trop faible.')
+      } else if (code === 'auth/too-many-requests') {
+        setPwError('Trop de tentatives. Réessaye dans quelques minutes.')
+      } else if (code === 'auth/network-request-failed') {
+        setPwError('Pas de connexion réseau.')
+      } else {
+        setPwError('Échec du changement de mot de passe.')
+      }
+    } finally {
+      setPwSaving(false)
+    }
+  }
 
   function handleWriteFailure(e: unknown) {
     if (e instanceof FirestoreWriteTimeoutError) {
@@ -249,6 +310,101 @@ export default function Settings() {
                 : 'Activer le partage'}
           </button>
         </div>
+
+        {/* Sécurité — changement de mot de passe (utilisateurs réguliers uniquement) */}
+        {!isTemp && user?.email && (
+          <div className="bg-card rounded-2xl p-4 shadow-sm">
+            <div className="flex items-center gap-2 mb-1">
+              <Lock size={16} className="text-muted" />
+              <p className="text-xs font-semibold text-muted uppercase tracking-wider">Sécurité</p>
+            </div>
+            {!pwOpen ? (
+              <button
+                onClick={() => { setPwOpen(true); setPwError(null); setPwSuccess(false) }}
+                className="w-full py-3 rounded-xl text-sm font-semibold bg-cream text-charcoal
+                           border border-border active:bg-meadow/5 transition-all flex items-center justify-center gap-2"
+              >
+                <Lock size={14} /> Modifier mon mot de passe
+              </button>
+            ) : (
+              <div className="space-y-2 mt-2">
+                <div className="relative">
+                  <input
+                    type={pwShow ? 'text' : 'password'}
+                    value={pwCurrent}
+                    onChange={e => setPwCurrent(e.target.value)}
+                    placeholder="Mot de passe actuel"
+                    autoComplete="current-password"
+                    disabled={pwSaving || pwSuccess}
+                    className="w-full pl-3 pr-10 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
+                               focus:outline-none focus:ring-2 focus:ring-forest transition-all disabled:opacity-60"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setPwShow(v => !v)}
+                    aria-label={pwShow ? 'Masquer' : 'Afficher'}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted p-1"
+                  >
+                    {pwShow ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+                <input
+                  type={pwShow ? 'text' : 'password'}
+                  value={pwNew}
+                  onChange={e => setPwNew(e.target.value)}
+                  placeholder="Nouveau mot de passe (6 caractères min)"
+                  autoComplete="new-password"
+                  disabled={pwSaving || pwSuccess}
+                  className="w-full px-3 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
+                             focus:outline-none focus:ring-2 focus:ring-forest transition-all disabled:opacity-60"
+                />
+                <input
+                  type={pwShow ? 'text' : 'password'}
+                  value={pwConfirm}
+                  onChange={e => setPwConfirm(e.target.value)}
+                  placeholder="Confirmer le nouveau mot de passe"
+                  autoComplete="new-password"
+                  disabled={pwSaving || pwSuccess}
+                  className="w-full px-3 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
+                             focus:outline-none focus:ring-2 focus:ring-forest transition-all disabled:opacity-60"
+                />
+
+                {pwError && (
+                  <div className="bg-danger/10 border border-danger/30 rounded-xl px-3 py-2 text-xs text-danger font-semibold">
+                    {pwError}
+                  </div>
+                )}
+                {pwSuccess && (
+                  <div className="bg-meadow/10 border border-meadow/30 rounded-xl px-3 py-2 text-xs text-meadow font-semibold">
+                    ✓ Mot de passe changé
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={() => {
+                      setPwOpen(false); setPwError(null)
+                      setPwCurrent(''); setPwNew(''); setPwConfirm('')
+                    }}
+                    disabled={pwSaving}
+                    className="flex-1 py-3 rounded-xl border border-border text-muted text-sm font-semibold
+                               active:bg-cream transition-colors disabled:opacity-40"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    onClick={changePassword}
+                    disabled={pwSaving || pwSuccess || !pwCurrent || !pwNew || !pwConfirm}
+                    className="flex-1 py-3 rounded-xl bg-forest text-white text-sm font-bold
+                               active:scale-95 transition-all disabled:opacity-40"
+                  >
+                    {pwSaving ? '…' : pwSuccess ? '✓' : 'Valider'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Apparence (mode sombre) */}
         <div className="bg-card rounded-2xl p-4 shadow-sm">

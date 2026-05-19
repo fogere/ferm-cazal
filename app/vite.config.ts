@@ -22,8 +22,14 @@ export default defineConfig({
         display: 'standalone',
         orientation: 'portrait',
         start_url: '/',
+        // Icônes PNG requises par Chrome Android pour activer "Installer l'app".
+        // Sans PNG 192 + 512, l'event beforeinstallprompt ne se déclenche pas.
         icons: [
-          { src: 'icons/farm-icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
+          { src: 'icons/farm-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'icons/farm-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: 'icons/farm-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: 'icons/farm-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: 'icons/farm-icon.svg',     sizes: 'any',     type: 'image/svg+xml' },
         ],
       },
       injectManifest: {

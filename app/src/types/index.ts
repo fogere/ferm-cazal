@@ -14,14 +14,24 @@ export interface UserProfile {
   liveLocation?: { lat: number; lng: number; accuracy: number; updatedAt: number }
   // Pointeur temps réel (curseur partagé sur la carte)
   livePointer?:  { lat: number; lng: number; updatedAt: number }
+  // Heure à laquelle le user veut recevoir le résumé du matin (HH:MM Europe/Paris).
+  // Défaut implicite : valeur de silentEnd, sinon 07:00.
+  morningReminderTime?: string
 }
 
 export interface Task {
   id: string
   title: string
   zone: string
-  assignedTo: string
-  recurrence: 'once' | 'daily' | 'weekly'
+  // Pool model : si null, personne ne s'en occupe (tâche libre).
+  // Quand quelqu'un clique "Je m'en occupe", on met son uid.
+  // Conservé en string pour la rétrocompat (anciennes tâches "auto" / uid).
+  assignedTo: string | null
+  // Quand a-t-elle été prise (timestamp ms). Permet d'afficher "depuis 2h".
+  claimedAt?: number | null
+  recurrence: 'once' | 'daily' | 'weekly' | 'every_n_days'
+  // Pour 'every_n_days' : intervalle en jours (1-30 par convention).
+  intervalDays?: number
   priority: 'normal' | 'urgent'
   completed: boolean
   completedAt?: number | null
@@ -30,6 +40,11 @@ export interface Task {
   createdBy: string
   dueDate: number
   nextOccurrenceCreated?: boolean
+  // Quand quelqu'un libère en urgence ("je peux plus"), le cron ping tous.
+  urgentReleaseAt?: number | null
+  urgentReleaseBy?: string | null
+  urgentReleaseReason?: string
+  urgentNotified?: boolean // flag cron : push déjà envoyé
 }
 
 export type WaterPointType = 'natural' | 'manual'

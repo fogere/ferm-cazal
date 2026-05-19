@@ -223,10 +223,19 @@ async function processBatteries() {
 }
 
 /* ─── Scan : tâches récurrentes (création des prochaines occurrences) ─── */
-
+/*
+ * Filet de sécurité : normalement, le client crée la prochaine occurrence dès
+ * qu'il coche la tâche faite (Tasks.tsx::toggleDone). Mais si le client a échoué
+ * (offline, race) le flag nextOccurrenceCreated reste à false. Le cron rattrape.
+ *
+ * Récurrence "depuis la dernière fois" : on compte à partir de completedAt.
+ *   - daily         : +1 jour
+ *   - weekly        : +7 jours
+ *   - every_n_days  : +intervalDays
+ * La nouvelle occurrence est créée NON ASSIGNÉE (pool commun).
+ */
 async function processRecurringTasks() {
   const now = Date.now()
-  // Pas de where composite. On lit les tâches terminées puis on filtre côté JS.
   const snap = await db.collection('tasks').where('completed', '==', true).get()
 
   let createdCount = 0
@@ -238,15 +247,22 @@ async function processRecurringTasks() {
       continue
     }
 
-    let nextDueDate = task.dueDate
-    if (task.recurrence === 'daily')  nextDueDate += 24 * 3600_000
-    if (task.recurrence === 'weekly') nextDueDate += 7 * 24 * 3600_000
+    // Base = completedAt si disponible, sinon dueDate (cas legacy).
+    const base = task.completedAt || task.dueDate || now
+    let nextDueDate = base
+    if (task.recurrence === 'daily')         nextDueDate = base + 24 * 3600_000
+    else if (task.recurrence === 'weekly')   nextDueDate = base + 7 * 24 * 3600_000
+    else if (task.recurrence === 'every_n_days') {
+      const days = Math.max(1, Math.min(30, parseInt(task.intervalDays) || 1))
+      nextDueDate = base + days * 24 * 3600_000
+    }
 
     await db.collection('tasks').add({
       title:        task.title,
       zone:         task.zone ?? '',
-      assignedTo:   task.assignedTo,
+      assignedTo:   null,  // pool : personne assignée par défaut
       recurrence:   task.recurrence,
+      intervalDays: task.intervalDays ?? null,
       priority:     task.priority ?? 'normal',
       completed:    false,
       completedAt:  null,
@@ -262,21 +278,65 @@ async function processRecurringTasks() {
   if (createdCount > 0) await bumpOpti('tasks')
 }
 
-/* ─── Scan : tâches en retard (rappel à l'assigné) ─── */
+/* ─── Scan : tâches libérées en urgence ("je peux plus") ─── */
+/*
+ * Quand quelqu'un clique "Je peux plus" sur une tâche prise :
+ *   - assignedTo → null (libérée pour le pool)
+ *   - urgentReleaseAt = Date.now()
+ *   - urgentNotified  = false
+ *
+ * Le cron envoie un push URGENT à TOUS les utilisateurs réguliers,
+ * IGNORE les heures silencieuses (severity 'urgent'), puis flag
+ * urgentNotified=true pour ne pas re-pinger.
+ */
+async function processUrgentReleases() {
+  // Pas de where composite : on lit toutes les tâches non-complétées et on filtre.
+  const snap = await db.collection('tasks').where('completed', '==', false).get()
 
+  for (const doc of snap.docs) {
+    const task = doc.data()
+    if (!task.urgentReleaseAt) continue
+    if (task.urgentNotified) continue
+
+    const releaser = task.urgentReleaseBy ? await getUser(task.urgentReleaseBy) : null
+    const releaserName = releaser?.displayName ?? 'Quelqu\'un'
+    const reason = task.urgentReleaseReason ? ` (${task.urgentReleaseReason})` : ''
+
+    const allUsers = await getAllRegularUsers()
+    for (const u of allUsers) {
+      // On évite de notifier la personne qui vient de libérer.
+      if (u.uid === task.urgentReleaseBy) continue
+      await sendNotification(u, {
+        title: '🚨 Tâche urgente libérée',
+        body:  `${releaserName} ne peut plus s'occuper de "${task.title}"${reason}`,
+        severity: 'urgent',
+        data: { taskId: doc.id, kind: 'task_urgent_release' },
+      })
+    }
+    await doc.ref.update({ urgentNotified: true })
+  }
+}
+
+/* ─── Scan : tâches en retard ─── */
+/*
+ * - Si la tâche EST prise par quelqu'un : ping cette personne (rappel personnel).
+ * - Si la tâche est LIBRE (assignedTo null/'auto') : pas de push individuel.
+ *   La personne verra la tâche en retard sur le dashboard / au matin.
+ *   On évite de spammer les 4 utilisateurs à chaque tâche libre en retard.
+ * Rate-limit : 1× max par 24 h par tâche.
+ */
 async function processOverdueTasks() {
   const now = Date.now()
   const oneDayAgo = now - 24 * 3600_000
 
-  // Pas de where composite (évite la nécessité d'un index).
-  // On lit toutes les tâches en retard via leur dueDate puis on filtre côté JS.
   const snap = await db.collection('tasks').where('dueDate', '<', now).get()
 
   for (const doc of snap.docs) {
     const task = doc.data()
     if (task.completed) continue
     if (task.lastOverdueReminderAt && task.lastOverdueReminderAt > oneDayAgo) continue
-    if (!task.assignedTo) continue
+    // Pool model : seules les tâches assignées (claimed) déclenchent un push.
+    if (!task.assignedTo || task.assignedTo === 'auto') continue
 
     const user = await getUser(task.assignedTo)
     if (!user) continue
@@ -353,6 +413,7 @@ async function main() {
     await processBatteries()
     await processRecurringTasks()
     await processOverdueTasks()
+    await processUrgentReleases()
     await syncOpti()
   } catch (e) {
     console.error('Erreur scan :', e)

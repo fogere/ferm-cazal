@@ -12,6 +12,7 @@ import BugReportButton from './components/BugReportButton'
 import OfflineIndicator from './components/OfflineIndicator'
 import OnboardingModal from './components/OnboardingModal'
 import InstallPWAPrompt from './components/InstallPWAPrompt'
+import UpdatePrompt from './components/UpdatePrompt'
 
 const Login      = lazy(() => import('./pages/Login'))
 const Dashboard  = lazy(() => import('./pages/Dashboard'))
@@ -136,6 +137,7 @@ function InstallPromptLayer() {
 function AppRoutes() {
   return (
     <ErrorBoundary>
+      <UpdatePrompt />
       <OfflineIndicator />
       <MessagingLayer />
       <LocationLayer />

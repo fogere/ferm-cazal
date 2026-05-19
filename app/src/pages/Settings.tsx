@@ -330,7 +330,7 @@ export default function Settings() {
         </button>
 
         <p className="text-center text-xs text-muted/50 pt-2">
-          Ferme Nilslamber · v0.1
+          Ferme Stinglhamber · v0.1
         </p>
       </div>
     </div>

@@ -1,10 +1,10 @@
-# 🌿 Ferme Nilslamber
+# 🌿 Ferme Stinglhamber
 
-PWA de gestion pour la **Ferme Nilslamber** (Roquefixade, Ariège, France) — 24 ânes + 13 chevaux, 3 utilisateurs réguliers + aides occasionnelles.
+PWA de gestion pour la **Ferme Stinglhamber** (Roquefixade, Ariège, France) — 24 ânes + 13 chevaux, 3 utilisateurs réguliers + aides occasionnelles.
 
 Conçue pour fonctionner **0€/mois** : Firebase tier gratuit + IGN tuiles publiques + Open-Meteo.
 
-App en ligne : <https://farm-ed787.web.app>
+App en ligne : <https://le-cazal.web.app>
 
 ## Pile technique
 
@@ -85,4 +85,4 @@ Voir [`projet.md`](./projet.md) pour la documentation détaillée.
 
 ## License
 
-Privée — usage réservé à la Ferme Nilslamber.
+Privée — usage réservé à la Ferme Stinglhamber.

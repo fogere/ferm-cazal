@@ -47,7 +47,7 @@ export function useMessaging() {
       // Notifications reçues quand l'app est en avant-plan
       cleanup = onMessage(messaging, (payload) => {
         const id       = ++_nextId
-        const title    = payload.notification?.title ?? 'Ferme Nilslamber'
+        const title    = payload.notification?.title ?? 'Ferme Stinglhamber'
         const body     = payload.notification?.body  ?? ''
         const severity = (payload.data?.severity as string) ?? 'info'
         addToast({ id, title, body, severity })

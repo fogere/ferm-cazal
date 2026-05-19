@@ -14,9 +14,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icons/*.svg', 'icons/*.png'],
       manifest: {
-        name: 'Ferme Nilslamber',
+        name: 'Ferme Stinglhamber',
         short_name: 'Ferme',
-        description: 'Gestion de la ferme Nilslamber',
+        description: 'Gestion de la ferme Stinglhamber',
         theme_color: '#1A4731',
         background_color: '#F8F4EE',
         display: 'standalone',

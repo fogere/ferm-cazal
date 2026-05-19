@@ -35,7 +35,7 @@ const messaging = getMessaging(_app)
 
 onBackgroundMessage(messaging, (payload) => {
   const { title, body, icon } = payload.notification ?? {}
-  self.registration.showNotification(title ?? 'Ferme Nilslamber', {
+  self.registration.showNotification(title ?? 'Ferme Stinglhamber', {
     body:  body ?? '',
     icon:  icon ?? '/icons/farm-icon.svg',
     badge: '/icons/farm-icon.svg',

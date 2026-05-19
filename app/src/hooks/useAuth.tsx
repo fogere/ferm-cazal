@@ -7,7 +7,7 @@ import {
   type User,
 } from 'firebase/auth'
 import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore'
-import { auth, db } from '../firebase'
+import { auth, db, nameToEmail } from '../firebase'
 import type { UserProfile, Availability } from '../types'
 
 const USER_COLORS = ['#1A4731', '#0EA5E9', '#EA580C']
@@ -200,8 +200,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  async function login(email: string, password: string) {
-    await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password)
+  // Accepte soit un prénom seul ("mathieu") soit une adresse email complète.
+  // Les utilisateurs ne connaissent que leur prénom — la conversion se fait ici.
+  async function login(input: string, password: string) {
+    const trimmed = input.trim()
+    const email = trimmed.includes('@') ? trimmed.toLowerCase() : nameToEmail(trimmed)
+    await signInWithEmailAndPassword(auth, email, password)
   }
 
   async function loginWithCode(code: string): Promise<void> {

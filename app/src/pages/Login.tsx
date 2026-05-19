@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Eye, EyeOff, Lock, Mail, KeyRound, ChevronDown } from 'lucide-react'
+import { Eye, EyeOff, Lock, User, KeyRound, ChevronDown } from 'lucide-react'
 import { useAuth, normalizeCode, formatCode } from '../hooks/useAuth'
 
 const ERRORS: Record<string, string> = {
@@ -103,7 +103,7 @@ export default function Login() {
       <div className="text-center mb-8 fade-in">
         <div className="text-7xl mb-4 select-none" role="img" aria-label="Ferme">🌿</div>
         <h1 className="text-3xl font-bold text-white tracking-tight m-0">
-          Ferme Nilslamber
+          Ferme Stinglhamber
         </h1>
         <p className="text-white/60 text-sm mt-1">
           Gestion de la ferme
@@ -120,23 +120,23 @@ export default function Login() {
             Connexion
           </h2>
 
-          {/* Email */}
+          {/* Prénom */}
           <div className="mb-4">
             <label htmlFor="email" className="block text-sm font-medium text-muted mb-1.5">
-              Adresse email
+              Prénom
             </label>
             <div className="relative">
-              <Mail size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
+              <User size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
               <input
                 id="email"
-                type="email"
-                autoComplete="email"
+                type="text"
+                autoComplete="username"
                 autoCapitalize="none"
                 autoCorrect="off"
-                inputMode="email"
+                inputMode="text"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                placeholder="votre@email.fr"
+                placeholder="mathieu, nils, eugenie, benoit…"
                 className="w-full pl-10 pr-4 py-3.5 rounded-xl border border-border bg-cream
                            text-charcoal text-base placeholder:text-muted/50
                            focus:outline-none focus:ring-2 focus:ring-forest focus:border-transparent
@@ -227,7 +227,7 @@ export default function Login() {
         {tempOpen && (
           <div className="mt-2 bg-card rounded-2xl shadow-xl p-5">
             <p className="text-muted text-xs mb-4 leading-relaxed">
-              Entrez le code fourni par un membre de la famille Nilslamber.
+              Entrez le code fourni par un membre de la famille Stinglhamber.
               Le code est au format <span className="font-mono font-semibold">XXXX-XXXX-XXXX</span>.
             </p>
 
@@ -294,7 +294,7 @@ export default function Login() {
       </div>
 
       <p className="text-white/30 text-xs mt-8 text-center">
-        Accès réservé — Ferme Nilslamber
+        Accès réservé — Ferme Stinglhamber
       </p>
     </div>
   )

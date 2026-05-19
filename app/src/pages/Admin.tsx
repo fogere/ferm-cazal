@@ -642,7 +642,7 @@ export default function Admin() {
           <ArrowLeft size={16} /> Paramètres
         </button>
         <h1 className="text-white text-2xl font-bold m-0">Administration</h1>
-        <p className="text-meadow-light text-sm mt-1">Ferme Nilslamber · Roquefixade</p>
+        <p className="text-meadow-light text-sm mt-1">Ferme Stinglhamber · Roquefixade</p>
       </div>
 
       <div className="px-4 space-y-4 mt-2">

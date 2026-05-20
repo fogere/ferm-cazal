@@ -351,6 +351,76 @@ async function processOverdueTasks() {
   }
 }
 
+/* ─── Scan : tâches à heure précise (hasDueTime) ─── */
+/*
+ * Quand un super-admin crée une tâche avec `hasDueTime: true`, le cron
+ * envoie une notif au moment où dueDate est atteint.
+ *
+ * Deux modes :
+ *   - broadcast: true  → notif à TOUS les users avec fcmToken
+ *                        (anti-doublon : broadcastNotifiedAt)
+ *   - sinon assignedTo → notif uniquement à l'assigné
+ *                        (anti-doublon : reminderSentAt)
+ *
+ * Garde-fou : si la tâche est en retard de plus de 6 h, on marque comme
+ * notifiée sans envoyer (évite de spammer si quelqu'un a backfillé une
+ * vieille tâche).
+ */
+async function processTimedTasks() {
+  const now = Date.now()
+  const snap = await db.collection('tasks').where('hasDueTime', '==', true).get()
+
+  for (const doc of snap.docs) {
+    const task = doc.data()
+    if (task.completed) continue
+    if ((task.dueDate ?? 0) > now) continue  // pas encore dû
+
+    // Garde-fou : > 6h après échéance, on marque comme notifié sans envoyer
+    if (now - (task.dueDate ?? 0) > 6 * 3600_000) {
+      if (!task.reminderSentAt && !task.broadcastNotifiedAt) {
+        await doc.ref.update({ reminderSentAt: now, broadcastNotifiedAt: now })
+      }
+      continue
+    }
+
+    const dt = new Date(task.dueDate)
+    const hh = String(dt.getHours()).padStart(2, '0')
+    const mm = String(dt.getMinutes()).padStart(2, '0')
+    const severity = task.priority === 'urgent' ? 'urgent' : 'info'
+
+    // Mode broadcast : notif à TOUS les users ayant un fcmToken
+    if (task.broadcast) {
+      if (task.broadcastNotifiedAt) continue
+      const allUsers = await getAllRegularUsers()
+      for (const u of allUsers) {
+        await sendNotification(u, {
+          title: '📣 Tâche du jour (équipe)',
+          body:  `"${task.title}" — prévue à ${hh}:${mm}${task.zone ? ` · ${task.zone}` : ''}`,
+          severity,
+          data: { taskId: doc.id, kind: 'task_broadcast' },
+        })
+      }
+      await doc.ref.update({ broadcastNotifiedAt: now })
+      continue
+    }
+
+    // Mode classique : notif à la personne assignée
+    if (!task.assignedTo || task.assignedTo === 'auto') continue
+    if (task.reminderSentAt) continue
+
+    const user = await getUser(task.assignedTo)
+    if (!user) continue
+
+    await sendNotification(user, {
+      title: '🔔 Tâche du jour',
+      body:  `"${task.title}" — prévue à ${hh}:${mm}${task.zone ? ` · ${task.zone}` : ''}`,
+      severity,
+      data: { taskId: doc.id, kind: 'task_due' },
+    })
+    await doc.ref.update({ reminderSentAt: now })
+  }
+}
+
 /* ─── Push résumé du matin (par user, à leur morningReminderTime) ─── */
 /*
  * Chaque user a son propre horaire de résumé matinal (champ
@@ -518,6 +588,7 @@ async function main() {
     await processRecurringTasks()
     await processOverdueTasks()
     await processUrgentReleases()
+    await processTimedTasks()
     await processMorningSummary()
     await processEveningPush()
     await syncOpti()

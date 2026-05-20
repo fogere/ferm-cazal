@@ -3,6 +3,7 @@ import { Bell, MapPin, Check, ChevronRight, Loader2 } from 'lucide-react'
 import { doc, updateDoc } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
+import { registerFcmTokenManually } from '../hooks/useMessaging'
 
 /**
  * Modal d'onboarding affichée au 1er login pour demander explicitement :
@@ -73,7 +74,13 @@ export default function OnboardingModal() {
     setState(s => ({ ...s, notif: 'requesting' }))
     try {
       const result = await Notification.requestPermission()
-      setState(s => ({ ...s, notif: result === 'granted' ? 'granted' : 'denied' }))
+      const granted = result === 'granted'
+      setState(s => ({ ...s, notif: granted ? 'granted' : 'denied' }))
+      // Demande tout de suite un token FCM pendant qu'on est encore dans
+      // le geste utilisateur (certaines plateformes l'exigent).
+      if (granted && user) {
+        registerFcmTokenManually(user.uid).catch(() => {})
+      }
     } catch {
       setState(s => ({ ...s, notif: 'denied' }))
     }

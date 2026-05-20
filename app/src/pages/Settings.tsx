@@ -11,6 +11,7 @@ import {
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import { useTheme } from '../hooks/useTheme'
+import { registerFcmTokenManually } from '../hooks/useMessaging'
 import { updateDocBounded, FirestoreWriteTimeoutError } from '../services/firestoreWrite'
 
 export default function Settings() {
@@ -30,6 +31,32 @@ export default function Settings() {
   const [hoursSaved,  setHoursSaved]  = useState(false)
   const [savingShare, setSavingShare] = useState(false)
   const [writeError,  setWriteError]  = useState<string | null>(null)
+
+  /* ─── Réactivation des notifications (au cas où FCM aurait échoué une fois) ─── */
+  const [fcmBusy, setFcmBusy] = useState(false)
+  const [fcmStatus, setFcmStatus] = useState<'idle' | 'ok' | 'denied' | 'error'>('idle')
+  async function reactivateNotifications() {
+    if (!user) return
+    setFcmBusy(true)
+    setFcmStatus('idle')
+    try {
+      if (typeof Notification === 'undefined') {
+        setFcmStatus('error'); return
+      }
+      let perm = Notification.permission
+      if (perm === 'default') {
+        perm = await Notification.requestPermission()
+      }
+      if (perm !== 'granted') {
+        setFcmStatus('denied'); return
+      }
+      const ok = await registerFcmTokenManually(user.uid)
+      setFcmStatus(ok ? 'ok' : 'error')
+    } finally {
+      setFcmBusy(false)
+      setTimeout(() => setFcmStatus('idle'), 4000)
+    }
+  }
 
   /* ─── Changement de mot de passe ─── */
   const [pwOpen,        setPwOpen]        = useState(false)
@@ -305,6 +332,30 @@ export default function Settings() {
           >
             {hoursSaved ? '✓ Enregistré' : savingHours ? 'Enregistrement…' : 'Enregistrer'}
           </button>
+
+          {/* Réactivation manuelle des notifications — utile quand FCM
+              a échoué à l'enregistrement automatique (push service error). */}
+          <div className="mt-3 pt-3 border-t border-border/40">
+            <button
+              onClick={reactivateNotifications}
+              disabled={fcmBusy}
+              className="w-full py-2.5 rounded-xl text-xs font-semibold bg-cream text-charcoal
+                         border border-border active:bg-meadow/5 transition-all disabled:opacity-40"
+            >
+              {fcmBusy
+                ? 'Activation…'
+                : fcmStatus === 'ok'
+                  ? '✓ Notifications réactivées'
+                  : fcmStatus === 'denied'
+                    ? 'Permission refusée — vérifie ton navigateur'
+                    : fcmStatus === 'error'
+                      ? '⚠ Échec — réessaye dans un instant'
+                      : '🔔 Réactiver les notifications push'}
+            </button>
+            <p className="text-[10px] text-muted mt-1.5 leading-tight">
+              Si tu ne reçois pas les notifications de tâches ou d'urgences, clique ici pour réenregistrer ce téléphone.
+            </p>
+          </div>
         </div>
 
         {/* Partage de position GPS */}

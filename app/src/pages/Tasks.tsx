@@ -53,9 +53,28 @@ function todayInputValue() {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
-function dateInputToTs(s: string): number {
-  const [y, m, day] = s.split('-').map(Number)
-  return new Date(y, m - 1, day, 12, 0, 0).getTime()
+// Combine une date YYYY-MM-DD avec une heure optionnelle HH:MM. Si time est vide,
+// on tombe à 12:00 (mi-journée — convention historique des tâches).
+function dateTimeToTs(date: string, time: string): number {
+  const [y, m, d] = date.split('-').map(Number)
+  if (!time) return new Date(y, m - 1, d, 12, 0, 0).getTime()
+  const [hh, mm] = time.split(':').map(Number)
+  return new Date(y, m - 1, d, hh || 0, mm || 0, 0).getTime()
+}
+
+// Super-administrateurs : peuvent assigner une tâche à un membre spécifique
+// (au lieu de la mettre dans le pool commun) et fixer une heure précise.
+// Identifiés par leur displayName (en minuscules, sans accents).
+// Eugénie + Benoît uniquement — Mathieu reste utilisateur régulier sans pouvoir d'assignation.
+const SUPER_ADMIN_NAMES = ['eugenie', 'eugénie', 'benoit', 'benoît']
+
+function normalizeName(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+}
+
+function isSuperAdmin(profile: { displayName?: string } | null | undefined): boolean {
+  if (!profile?.displayName) return false
+  return SUPER_ADMIN_NAMES.includes(normalizeName(profile.displayName))
 }
 
 /* ─── form state ─── */
@@ -66,9 +85,12 @@ interface FormState {
   title: string
   zone: string
   dueDate: string
+  dueTime: string           // HH:MM optionnel — déclenche notif au lieu de pool ouvert
   recurrence: FormRecurrence
   intervalDays: number      // utilisé uniquement quand recurrence === 'every_n_days'
   priority: Task['priority']
+  mode: 'pool' | 'assigned' | 'broadcast'  // 3 modes possibles
+  assignedTo: string        // uid spécifique (super admin) ou '' (pool)
 }
 
 function blankForm(): FormState {
@@ -76,16 +98,20 @@ function blankForm(): FormState {
     title:        '',
     zone:         '',
     dueDate:      todayInputValue(),
+    dueTime:      '',
     recurrence:   'once',
     intervalDays: 3,
     priority:     'normal',
+    mode:         'pool',
+    assignedTo:   '',
   }
 }
 
 /* ─── component ─── */
 
 export default function Tasks() {
-  const { user, isTemp } = useAuth()
+  const { user, profile, isTemp } = useAuth()
+  const superAdmin = isSuperAdmin(profile)
 
   const [allTasks, setAllTasks]   = useState<Task[]>([])
   const [users, setUsers]         = useState<UserProfile[]>([])
@@ -132,7 +158,17 @@ export default function Tasks() {
   /* Derived */
 
   const pendingAll = useMemo(
-    () => allTasks.filter(t => !t.completed).sort((a, b) => a.dueDate - b.dueDate),
+    () => allTasks
+      .filter(t => {
+        if (!t.completed) return true
+        // Les broadcast complétés restent visibles 24 h pour informer les autres
+        // que c'est traité, et qui s'en est occupé.
+        if (t.broadcast && t.completedAt && (Date.now() - t.completedAt) < 24 * 3600 * 1000) {
+          return true
+        }
+        return false
+      })
+      .sort((a, b) => a.dueDate - b.dueDate),
     [allTasks],
   )
 
@@ -256,10 +292,17 @@ export default function Tasks() {
     if (!form.title.trim() || !user) return
     setSaving(true)
     try {
+      // 3 modes :
+      //   - 'pool'      : assignedTo=null, n'importe qui prend (comportement par défaut)
+      //   - 'assigned'  : assignedTo=uid choisi, notif individuelle au cron à l'heure due
+      //   - 'broadcast' : assignedTo=null + broadcast:true, notif à TOUS au cron à l'heure due
+      const isAssigned  = superAdmin && form.mode === 'assigned' && !!form.assignedTo
+      const isBroadcast = superAdmin && form.mode === 'broadcast'
       await addDoc(collection(db, 'tasks'), {
         title:        form.title.trim(),
         zone:         form.zone.trim(),
-        assignedTo:   null,  // pool : personne par défaut
+        assignedTo:   isAssigned ? form.assignedTo : null,
+        claimedAt:    isAssigned ? Date.now() : null,
         recurrence:   form.recurrence,
         intervalDays: form.recurrence === 'every_n_days' ? form.intervalDays : null,
         priority:     form.priority,
@@ -268,8 +311,12 @@ export default function Tasks() {
         completedBy:  null,
         createdAt:    Date.now(),
         createdBy:    user.uid,
-        dueDate:      dateInputToTs(form.dueDate),
+        dueDate:      dateTimeToTs(form.dueDate, form.dueTime),
+        hasDueTime:   !!form.dueTime,
+        reminderSentAt: null,
         nextOccurrenceCreated: false,
+        broadcast:    isBroadcast,
+        broadcastNotifiedAt: null,
       })
       setShowForm(false)
     } finally {
@@ -347,8 +394,18 @@ export default function Tasks() {
                     <BellRing size={10} /> URGENT — libérée
                   </span>
                 )}
-                {/* Statut claim */}
-                {!task.completed && (
+                {/* Statut claim / broadcast */}
+                {task.broadcast ? (
+                  task.completed ? (
+                    <span className="text-xs font-semibold text-meadow bg-meadow/10 px-2 py-0.5 rounded-full border border-meadow/30 inline-flex items-center gap-1">
+                      ✓ Fait par {userById(task.completedBy)?.displayName ?? '?'}
+                    </span>
+                  ) : (
+                    <span className="text-xs font-semibold text-sky bg-sky/10 px-2 py-0.5 rounded-full border border-sky/30 inline-flex items-center gap-1">
+                      📣 Tout le monde
+                    </span>
+                  )
+                ) : !task.completed && (
                   free ? (
                     <span className="text-xs font-semibold text-meadow bg-meadow/10 px-2 py-0.5 rounded-full border border-meadow/30">
                       Libre
@@ -368,7 +425,15 @@ export default function Tasks() {
               {/* Action buttons (jamais en mode completed) */}
               {!task.completed && !isTemp && (
                 <div className="flex gap-1.5 mt-2 flex-wrap">
-                  {free && (
+                  {task.broadcast ? (
+                    <button
+                      onClick={() => toggleDone(task)}
+                      className="text-xs font-bold text-white bg-meadow px-2.5 py-1.5 rounded-lg
+                                 active:scale-95 transition-all flex items-center gap-1"
+                    >
+                      <CheckCircle2 size={11} /> ✓ Fait
+                    </button>
+                  ) : free && (
                     <button
                       onClick={() => claimTask(task)}
                       className="text-xs font-bold text-white bg-forest px-2.5 py-1.5 rounded-lg
@@ -377,7 +442,7 @@ export default function Tasks() {
                       <Hand size={11} /> Je m'en occupe
                     </button>
                   )}
-                  {mine && (
+                  {!task.broadcast && mine && (
                     <>
                       <button
                         onClick={() => releaseTask(task)}
@@ -395,7 +460,7 @@ export default function Tasks() {
                       </button>
                     </>
                   )}
-                  {!free && !mine && (
+                  {!task.broadcast && !free && !mine && (
                     <button
                       onClick={() => claimTask(task)}
                       className="text-xs font-semibold text-forest border border-forest/30 bg-forest/5
@@ -599,11 +664,26 @@ export default function Tasks() {
               </button>
             </div>
 
-            <p className="text-xs text-muted mb-5 leading-relaxed bg-cream rounded-xl p-3 border border-border">
-              <Bell size={12} className="inline mr-1" />
-              La tâche sera ajoutée au pool commun. <strong>Personne ne lui est assigné</strong> —
-              chacun pourra cliquer "Je m'en occupe" quand il veut la prendre.
-            </p>
+            {form.mode === 'broadcast' ? (
+              <p className="text-xs text-sky mb-5 leading-relaxed bg-sky/10 rounded-xl p-3 border border-sky/30">
+                <BellRing size={12} className="inline mr-1" />
+                📣 <strong>Mode broadcast</strong> — tout le monde recevra une notification
+                {form.dueTime && <> à <strong>{form.dueTime}</strong></>}.
+                N'importe qui pourra cliquer "Fait" et les autres verront qui s'en est occupé.
+              </p>
+            ) : form.mode === 'assigned' && form.assignedTo ? (
+              <p className="text-xs text-meadow mb-5 leading-relaxed bg-meadow/10 rounded-xl p-3 border border-meadow/30">
+                <BellRing size={12} className="inline mr-1" />
+                Tâche assignée directement à <strong>{users.find(u => u.uid === form.assignedTo)?.displayName ?? '?'}</strong>.
+                {form.dueTime && <> Une notification lui sera envoyée à <strong>{form.dueTime}</strong>.</>}
+              </p>
+            ) : (
+              <p className="text-xs text-muted mb-5 leading-relaxed bg-cream rounded-xl p-3 border border-border">
+                <Bell size={12} className="inline mr-1" />
+                La tâche sera ajoutée au pool commun. <strong>Personne ne lui est assigné</strong> —
+                chacun pourra cliquer "Je m'en occupe" quand il veut la prendre.
+              </p>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-5">
               {/* Titre */}
@@ -636,18 +716,79 @@ export default function Tasks() {
                 />
               </div>
 
-              {/* Date */}
+              {/* Date + heure */}
               <div>
-                <label className="block text-xs font-semibold text-muted uppercase tracking-wider mb-2">Date</label>
-                <input
-                  type="date"
-                  value={form.dueDate}
-                  onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))}
-                  disabled={saving}
-                  className="w-full px-4 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
-                             focus:outline-none focus:ring-2 focus:ring-forest transition-all"
-                />
+                <label className="block text-xs font-semibold text-muted uppercase tracking-wider mb-2">Date {superAdmin && '· heure'}</label>
+                <div className="flex gap-2">
+                  <input
+                    type="date"
+                    value={form.dueDate}
+                    onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))}
+                    disabled={saving}
+                    className="flex-1 px-4 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
+                               focus:outline-none focus:ring-2 focus:ring-forest transition-all"
+                  />
+                  {superAdmin && (
+                    <input
+                      type="time"
+                      value={form.dueTime}
+                      onChange={e => setForm(f => ({ ...f, dueTime: e.target.value }))}
+                      disabled={saving}
+                      className="w-28 px-3 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
+                                 focus:outline-none focus:ring-2 focus:ring-forest transition-all"
+                    />
+                  )}
+                </div>
+                {superAdmin && (
+                  <p className="text-[10px] text-muted/70 mt-1 leading-tight">
+                    Si une heure est précisée, une notification partira automatiquement
+                    à la personne assignée (cron toutes les 5 min).
+                  </p>
+                )}
               </div>
+
+              {/* Mode d'assignation (super admin uniquement) */}
+              {superAdmin && (
+                <div>
+                  <label className="block text-xs font-semibold text-muted uppercase tracking-wider mb-2">
+                    Mode <span className="font-normal text-[10px] normal-case">(super admin)</span>
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5 mb-2">
+                    {([
+                      ['pool',      '🏊 Pool',     'Personne assignée, premier qui prend'],
+                      ['assigned',  '👤 Assignée', "À une personne précise, notif à elle"],
+                      ['broadcast', '📣 Broadcast', "Notif à tout le monde, n'importe qui peut faire"],
+                    ] as const).map(([k, label, hint]) => (
+                      <button key={k}
+                              type="button"
+                              onClick={() => setForm(f => ({ ...f, mode: k }))}
+                              disabled={saving}
+                              title={hint}
+                              className={`py-2 rounded-lg border text-[11px] font-bold transition-all ${
+                                form.mode === k
+                                  ? 'border-forest bg-forest text-white'
+                                  : 'border-border bg-cream text-muted'
+                              }`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {form.mode === 'assigned' && (
+                    <select
+                      value={form.assignedTo}
+                      onChange={e => setForm(f => ({ ...f, assignedTo: e.target.value }))}
+                      disabled={saving}
+                      className="w-full px-4 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
+                                 focus:outline-none focus:ring-2 focus:ring-forest transition-all"
+                    >
+                      <option value="">— Choisir une personne —</option>
+                      {users.map(u => (
+                        <option key={u.uid} value={u.uid}>{u.displayName}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
 
               {/* Récurrence */}
               <div>

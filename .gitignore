@@ -35,6 +35,10 @@ backups/
 le-cazal-service-account.json
 scripts/le-cazal-service-account.json
 
+# ── Exports bug reports (artefacts de debug, pas du code) ──
+bug.json
+ferme-bugs-*.json
+
 # ── Scripts de migration ponctuels (peuvent contenir mots de passe) ──
 scripts/migrate-users.cjs
 scripts/migration-output.txt

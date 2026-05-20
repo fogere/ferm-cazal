@@ -88,8 +88,16 @@ service cloud.firestore {
 
     // ── Animaux individuels ──
     match /animals/{animalId} {
-      allow read:  if hasAccess();
-      allow write: if isRegularUser();
+      allow read:   if hasAccess();
+      // Création / suppression / modification générale : réguliers uniquement
+      allow create, delete: if isRegularUser();
+      allow update: if isRegularUser()
+                       // Les aides (codes temporaires) peuvent UNIQUEMENT cocher
+                       // "vu en bonne santé" sur les animaux — ces 2 champs et
+                       // rien d'autre. Permet le suivi terrain par tout le monde.
+                       || (isTempUser() &&
+                           request.resource.data.diff(resource.data).affectedKeys()
+                             .hasOnly(['lastCheckedHealthy', 'lastCheckedHealthyBy']));
     }
 
     // ── Photos attachées aux épingles ──
@@ -105,6 +113,30 @@ service cloud.firestore {
     // ── Carnet de soins des animaux ──
     // Lecture libre pour tout utilisateur ayant accès ; écriture réservée aux réguliers
     match /animal_care/{careId} {
+      allow read:  if hasAccess();
+      allow write: if isRegularUser();
+    }
+
+    // ── Photos de suivi des animaux (galerie d'évolution) ──
+    // Lecture pour tout utilisateur ayant accès. Création par tout utilisateur authentifié
+    // (les aides peuvent aussi documenter l'évolution d'un problème). Suppression réservée
+    // à l'auteur ou aux réguliers.
+    // Update : les tags peuvent être édités par les réguliers (filtrage / catégorisation
+    // ultérieure des photos — ex: marquer "pelage_hiver" après coup). Le reste reste immuable.
+    match /animal_photos/{photoId} {
+      allow read:   if hasAccess();
+      allow create: if hasAccess() && request.resource.data.uploadedBy == request.auth.uid;
+      allow delete: if isRegularUser() ||
+                       (hasAccess() && resource.data.uploadedBy == request.auth.uid);
+      allow update: if isRegularUser()
+                       && request.resource.data.diff(resource.data).affectedKeys()
+                            .hasOnly(['tags', 'note']);
+    }
+
+    // ── Mesures de croissance (poids, taille, ECS…) ──
+    // Lecture libre pour tout utilisateur ayant accès, écriture pour les réguliers
+    // (saisie chiffrée — pas pour les aides temporaires).
+    match /animal_measurements/{mid} {
       allow read:  if hasAccess();
       allow write: if isRegularUser();
     }

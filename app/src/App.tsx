@@ -3,8 +3,9 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './hooks/useAuth'
 import { ThemeProvider } from './hooks/useTheme'
 import { useMessaging } from './hooks/useMessaging'
-import { useLiveLocation } from './hooks/useLiveLocation'
 import { useBugReporter } from './hooks/useBugReporter'
+import { useOnDemandLocationPublish } from './hooks/useOnDemandLocationPublish'
+import { useGeofenceAlert } from './hooks/useGeofenceAlert'
 import Layout from './components/layout/Layout'
 import Toaster from './components/Toaster'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -23,6 +24,8 @@ const Alerts     = lazy(() => import('./pages/Alerts'))
 const SettingsPage = lazy(() => import('./pages/Settings'))
 const AdminPage    = lazy(() => import('./pages/Admin'))
 const BugsPage     = lazy(() => import('./pages/Bugs'))
+const AnimalDetailPage = lazy(() => import('./pages/AnimalDetail'))
+const GrazingPage       = lazy(() => import('./pages/Grazing'))
 
 function LoadingScreen() {
   return (
@@ -68,15 +71,25 @@ function MessagingLayer() {
   return <Toaster toasts={toasts} dismiss={dismiss} />
 }
 
-/* Géolocalisation : tracker la position pendant que connecté (opt-in) */
-function LocationLayer() {
-  useLiveLocation()
-  return null
-}
-
 /* Branche le bugReporter à l'auth + au router (nav tracking) */
 function BugReporterLayer() {
   useBugReporter()
+  return null
+}
+
+/* Publication GPS pull-on-demand : publie ma position quand UN AUTRE
+   utilisateur regarde la carte. Branché globalement (pas que sur /map)
+   pour répondre au besoin "demander 1 seule fois la position des autres
+   quand quelqu'un ouvre la carte". */
+function OnDemandLocationLayer() {
+  useOnDemandLocationPublish()
+  return null
+}
+
+/* Geofence : notif locale "tu es dans un enclos avec X animaux à vérifier".
+   Actif globalement tant que l'utilisateur partage sa position. */
+function GeofenceLayer() {
+  useGeofenceAlert()
   return null
 }
 
@@ -109,6 +122,7 @@ function ChunkPrefetcher() {
       import('./pages/Settings').catch(() => {})
       import('./pages/Bugs').catch(() => {})
       import('./pages/Admin').catch(() => {})
+      import('./pages/Grazing').catch(() => {})
     })
   }, [user])
   return null
@@ -148,8 +162,9 @@ function AppRoutes() {
       <UpdatePrompt />
       <OfflineIndicator />
       <MessagingLayer />
-      <LocationLayer />
       <BugReporterLayer />
+      <OnDemandLocationLayer />
+      <GeofenceLayer />
       <ChunkPrefetcher />
       <FloatingBugButton />
       <OnboardingLayer />
@@ -170,6 +185,8 @@ function AppRoutes() {
             <Route path="/alerts"    element={<Alerts />} />
             <Route path="/settings"  element={<SettingsPage />} />
             <Route path="/bugs"      element={<BugsPage />} />
+            <Route path="/animal/:id" element={<AnimalDetailPage />} />
+            <Route path="/grazing"   element={<GrazingPage />} />
             <Route path="/admin"     element={<AdminRoute><AdminPage /></AdminRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

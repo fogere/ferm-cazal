@@ -5,21 +5,13 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
+import { timeAgo } from '../services/map/time'
 import type { FermeAlert, AlertSeverity } from '../types'
 
 const SEV: Record<AlertSeverity, { border: string; icon: string; bg: string; label: string; order: number }> = {
   urgent:  { border: 'border-l-danger', icon: 'text-danger', bg: 'bg-danger/5',  label: 'Urgent',    order: 0 },
   warning: { border: 'border-l-sun',    icon: 'text-sun',    bg: 'bg-sun/5',     label: 'Attention', order: 1 },
   info:    { border: 'border-l-sky',    icon: 'text-sky',    bg: 'bg-sky/5',     label: 'Info',      order: 2 },
-}
-
-function timeAgo(ts: number): string {
-  const mins = Math.floor((Date.now() - ts) / 60000)
-  if (mins < 1)  return "À l'instant"
-  if (mins < 60) return `Il y a ${mins} min`
-  const h = Math.floor(mins / 60)
-  if (h < 24)    return `Il y a ${h}h`
-  return `Il y a ${Math.floor(h / 24)}j`
 }
 
 export default function Alerts() {

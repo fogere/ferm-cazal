@@ -4,12 +4,15 @@ import { db } from '../firebase'
 import { useAuth } from './useAuth'
 
 // Anti-spam Firestore : ~1 écriture / 90 s ET déplacement > 15 m.
-// Sur 3 utilisateurs partageant en continu, on plafonne ainsi à
-// 3 × 40 écritures/h × 24 h ≈ 2 900 écritures/jour pour la géoloc.
+// Le hook ne tourne plus globalement : il est monté uniquement par MapPage,
+// donc on n'écrit qu'aux moments où la position est réellement utile
+// (quelqu'un regarde la carte). Pour 3 utilisateurs ouvrant la carte
+// ~20 min/jour cumulées, ça revient à quelques dizaines d'écritures/jour
+// au lieu de milliers.
 const MIN_INTERVAL_MS = 90_000
 const MIN_DISTANCE_M  = 15
-// Le partage s'auto-désactive après 2 h sans interaction utilisateur,
-// pour éviter de consommer le quota en arrière-plan toute la journée.
+// Filet de sécurité : si la page reste ouverte (onglet en arrière-plan),
+// on coupe au bout de 2 h sans toucher Firestore.
 const AUTO_STOP_MS    = 2 * 60 * 60 * 1000
 
 function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {

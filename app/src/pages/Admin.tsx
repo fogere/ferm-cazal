@@ -12,7 +12,13 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth, formatCode } from '../hooks/useAuth'
-import type { TempUser, TempAccessCode, Animal, AnimalSpecies, AnimalCareEntry, AnimalCareType, Reserve } from '../types'
+import { useCustomSpecies } from '../hooks/useCustomSpecies'
+import { getSpeciesInfo, listAllSpecies, slugifySpecies } from '../services/species'
+import { dateInputToTs, tsToDateInput } from '../services/map/time'
+import type { TempUser, TempAccessCode, Animal, AnimalSpecies, AnimalCareEntry, AnimalCareType, AnimalGender, AnimalCondition, AnimalPhoto, CustomSpecies, Reserve } from '../types'
+
+// Alias local pour ne pas avoir à renommer les ~30 appels existants
+const todayInputValue = tsToDateInput
 
 /* ─── Carnet de soins : config ─── */
 
@@ -24,14 +30,13 @@ const CARE_CFG: Record<AnimalCareType, { icon: string; label: string; color: str
   medication: { icon: '🧪', label: 'Soin',       color: 'text-orange-600' },
   breeding:   { icon: '💕', label: 'Saillie',    color: 'text-pink-600' },
   birth:      { icon: '🐣', label: 'Mise bas',   color: 'text-meadow' },
+  food:       { icon: '🥣', label: 'Croquettes', color: 'text-orange-600' },
+  grooming:   { icon: '✂️', label: 'Toilettage', color: 'text-sky' },
   other:      { icon: '📝', label: 'Autre',      color: 'text-muted' },
 }
 
-// Durée de gestation par espèce (en jours)
-const GESTATION_DAYS: Record<AnimalSpecies, number> = {
-  horse:  340,
-  donkey: 365,
-}
+// Note : les durées de gestation sont maintenant lues via getSpeciesInfo()
+// (races par défaut + races custom). Voir services/species.ts.
 
 function dateLabelFR(ts: number): string {
   const d = new Date(ts)
@@ -54,15 +59,6 @@ function relTimeFR(ts: number): string {
   return diff > 0 ? `dans ${y} an${y > 1 ? 's' : ''}` : `il y a ${y} an${y > 1 ? 's' : ''}`
 }
 
-function todayInputValue(ts: number = Date.now()): string {
-  const d = new Date(ts)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-function dateInputToTs(s: string): number {
-  const [y, m, d] = s.split('-').map(Number)
-  return new Date(y, m - 1, d, 12, 0, 0).getTime()
-}
 
 interface AnimalGroup {
   name: string
@@ -165,6 +161,31 @@ export default function Admin() {
   const [animalSearch,    setAnimalSearch]    = useState('')
   const [animalFilter,    setAnimalFilter]    = useState<'all' | 'overdue' | 'unplaced'>('all')
 
+  /* Races personnalisées */
+  const customSpecies = useCustomSpecies()
+  const allSpeciesOptions = useMemo(() => listAllSpecies(customSpecies), [customSpecies])
+  const [newRaceOpen,     setNewRaceOpen]     = useState(false)
+  const [newRaceName,     setNewRaceName]     = useState('')
+  const [newRaceEmoji,    setNewRaceEmoji]    = useState('🐱')
+  const [newRaceGestation, setNewRaceGestation] = useState('')
+  const [newRaceSaving,   setNewRaceSaving]   = useState(false)
+  const [newRaceError,    setNewRaceError]    = useState<string | null>(null)
+
+  /* Fiche détaillée animal */
+  // Section actuellement développée dans le panneau d'expansion : 'care' (défaut), 'details', 'conditions', 'photos'
+  const [animalTab, setAnimalTab] = useState<Record<string, 'care' | 'details' | 'conditions' | 'photos'>>({})
+  // Galerie photos d'évolution
+  const [animalPhotos, setAnimalPhotos] = useState<AnimalPhoto[]>([])
+  const [photoUploadAnimalId, setPhotoUploadAnimalId] = useState<string | null>(null)
+  const [photoGalleryViewer, setPhotoGalleryViewer] = useState<AnimalPhoto | null>(null)
+  // Formulaire nouvelle condition
+  const [newCondAnimalId, setNewCondAnimalId] = useState<string | null>(null)
+  const [newCondLabel,    setNewCondLabel]    = useState('')
+  const [newCondDesc,     setNewCondDesc]     = useState('')
+  const [newCondGenetic,  setNewCondGenetic]  = useState(false)
+  const [newCondContag,   setNewCondContag]   = useState(false)
+  const [newCondPerm,     setNewCondPerm]     = useState(true)
+
   /* Carnet de soins */
   const [careEntries,      setCareEntries]      = useState<AnimalCareEntry[]>([])
   const [expandedAnimal,   setExpandedAnimal]   = useState<string | null>(null)
@@ -236,7 +257,7 @@ export default function Admin() {
     const unsub = onSnapshot(collection(db, 'animals'), snap => {
       const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Animal))
       items.sort((a, b) => {
-        if (a.species !== b.species) return a.species === 'horse' ? -1 : 1
+        if (a.species !== b.species) return a.species.localeCompare(b.species, 'fr')
         return a.name.localeCompare(b.name, 'fr')
       })
       setAnimals(items)
@@ -246,13 +267,42 @@ export default function Admin() {
 
   /* Chargement carnet de soins (toutes les entrées) */
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'animal_care'), snap => {
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as AnimalCareEntry))
-      items.sort((a, b) => b.date - a.date)
-      setCareEntries(items)
-    })
+    const unsub = onSnapshot(
+      collection(db, 'animal_care'),
+      snap => {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as AnimalCareEntry))
+        items.sort((a, b) => b.date - a.date)
+        setCareEntries(items)
+      },
+      err => console.warn('[Admin] animal_care:', err?.code ?? err),
+    )
     return unsub
   }, [])
+
+  /* Chargement photos d'évolution */
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, 'animal_photos'),
+      snap => {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as AnimalPhoto))
+        items.sort((a, b) => b.takenAt - a.takenAt)
+        setAnimalPhotos(items)
+      },
+      err => console.warn('[Admin] animal_photos:', err?.code ?? err),
+    )
+    return unsub
+  }, [])
+
+  // Index photos par animal pour requête O(1) dans le rendu
+  const photosByAnimal = useMemo(() => {
+    const m = new Map<string, AnimalPhoto[]>()
+    for (const p of animalPhotos) {
+      const arr = m.get(p.animalId) ?? []
+      arr.push(p)
+      m.set(p.animalId, arr)
+    }
+    return m
+  }, [animalPhotos])
 
   /* Chargement réserves */
   useEffect(() => {
@@ -334,7 +384,9 @@ export default function Admin() {
       if (careFormType === 'breeding' && !careFormNextDue) {
         const animal = animals.find(a => a.id === animalId)
         if (animal) {
-          const gestDays = GESTATION_DAYS[animal.species]
+          // Durée de gestation : récupérée depuis l'espèce (par défaut ou custom).
+          // Fallback 340 j si l'espèce n'a pas de durée définie (ex: race custom sans gestation).
+          const gestDays = getSpeciesInfo(animal.species, customSpecies).gestationDays ?? 340
           entry.nextDueAt = dateInputToTs(careFormDate) + gestDays * 86_400_000
         }
       } else if (careFormNextDue) {
@@ -464,6 +516,141 @@ export default function Admin() {
     const next = [...groups]
     next[i] = updated
     saveGroups(next)
+  }
+
+  /* Actions races personnalisées */
+
+  async function addCustomRace() {
+    setNewRaceError(null)
+    const name = newRaceName.trim()
+    const emoji = newRaceEmoji.trim()
+    if (!name)  { setNewRaceError('Donne un nom à la race.'); return }
+    if (!emoji) { setNewRaceError('Choisis un emoji.'); return }
+    const id = slugifySpecies(name)
+    if (!id) { setNewRaceError('Nom invalide.'); return }
+    // Conflit avec une race existante (défaut ou custom)
+    if (id === 'horse' || id === 'donkey' || customSpecies.some(c => c.id === id)) {
+      setNewRaceError('Cette race existe déjà.')
+      return
+    }
+    setNewRaceSaving(true)
+    try {
+      const newRace: CustomSpecies = { id, name, emoji }
+      const g = Number(newRaceGestation)
+      if (newRaceGestation && Number.isFinite(g) && g > 0 && g < 1000) {
+        newRace.gestationDays = Math.round(g)
+      }
+      const next = [...customSpecies, newRace]
+      await setDoc(doc(db, 'config', 'farm'), { customSpecies: next }, { merge: true })
+      setNewRaceName(''); setNewRaceEmoji('🐱'); setNewRaceGestation('')
+      setNewRaceOpen(false)
+      setNewAnimalSpecies(id)  // pré-sélectionne la nouvelle race pour la création en cours
+    } catch (e) {
+      console.error('[addCustomRace]', e)
+      setNewRaceError('Échec enregistrement.')
+    } finally {
+      setNewRaceSaving(false)
+    }
+  }
+
+  async function removeCustomRace(id: string) {
+    const inUse = animals.some(a => a.species === id)
+    if (inUse) {
+      alert("Impossible de supprimer : des animaux utilisent encore cette race.")
+      return
+    }
+    if (!window.confirm('Supprimer cette race ? Les races par défaut (cheval, âne) restent toujours disponibles.')) return
+    const next = customSpecies.filter(c => c.id !== id)
+    await setDoc(doc(db, 'config', 'farm'), { customSpecies: next }, { merge: true })
+    if (newAnimalSpecies === id) setNewAnimalSpecies('horse')
+  }
+
+  /* Fiche détaillée animal : mise à jour générique partielle */
+  async function updateAnimalDetails(animalId: string, patch: Partial<Animal>) {
+    try {
+      await updateDoc(doc(db, 'animals', animalId), patch as never)
+    } catch (e) {
+      console.error('[updateAnimalDetails]', e)
+      alert("Échec enregistrement. Réessaye dans un instant.")
+    }
+  }
+
+  async function addAnimalCondition(animalId: string) {
+    const label = newCondLabel.trim()
+    if (!label || !user) return
+    const animal = animals.find(a => a.id === animalId)
+    if (!animal) return
+    const newCondition: AnimalCondition = {
+      id:           `cond_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      label,
+      description:  newCondDesc.trim(),
+      isGenetic:    newCondGenetic,
+      isContagious: newCondContag,
+      permanent:    newCondPerm,
+      addedAt:      Date.now(),
+      addedBy:      user.uid,
+    }
+    const next = [...(animal.conditions ?? []), newCondition]
+    await updateAnimalDetails(animalId, { conditions: next })
+    setNewCondAnimalId(null)
+    setNewCondLabel(''); setNewCondDesc('')
+    setNewCondGenetic(false); setNewCondContag(false); setNewCondPerm(true)
+  }
+
+  async function resolveAnimalCondition(animalId: string, conditionId: string) {
+    const animal = animals.find(a => a.id === animalId)
+    if (!animal?.conditions) return
+    const next = animal.conditions.map(c =>
+      c.id === conditionId ? { ...c, resolvedAt: Date.now() } : c
+    )
+    await updateAnimalDetails(animalId, { conditions: next })
+  }
+
+  async function removeAnimalCondition(animalId: string, conditionId: string) {
+    if (!window.confirm('Supprimer définitivement cette condition du dossier ?')) return
+    const animal = animals.find(a => a.id === animalId)
+    if (!animal?.conditions) return
+    const next = animal.conditions.filter(c => c.id !== conditionId)
+    await updateAnimalDetails(animalId, { conditions: next })
+  }
+
+  /* Photos d'évolution (collection animal_photos — séparée de la photo d'identité). */
+  async function uploadAnimalEvolutionPhoto(animalId: string, file: File, note: string = '', conditionId?: string) {
+    if (!user) return
+    setPhotoUploadAnimalId(animalId)
+    try {
+      const dataUrl = await compressImage(file, 1280, 0.75)
+      if (dataUrl.length > 900_000) {
+        alert('Photo trop lourde après compression. Réessaye avec une photo plus petite.')
+        return
+      }
+      const photo: Omit<AnimalPhoto, 'id'> = {
+        animalId,
+        uploadedBy: user.uid,
+        uploadedAt: Date.now(),
+        takenAt:    Date.now(),
+        dataUrl,
+        note:       note.trim() || undefined,
+        category:   conditionId ? 'condition' : 'general',
+        conditionId,
+      }
+      await addDoc(collection(db, 'animal_photos'), photo)
+    } catch (err) {
+      console.error('[uploadAnimalPhoto]', err)
+      alert("Échec de l'envoi de la photo.")
+    } finally {
+      setPhotoUploadAnimalId(null)
+    }
+  }
+
+  async function deleteAnimalPhotoEntry(photoId: string) {
+    if (!window.confirm('Supprimer cette photo ?')) return
+    try {
+      await deleteDoc(doc(db, 'animal_photos', photoId))
+      if (photoGalleryViewer?.id === photoId) setPhotoGalleryViewer(null)
+    } catch (e) {
+      console.error('[deleteAnimalPhoto]', e)
+    }
   }
 
   function deleteGroup(i: number) {
@@ -831,30 +1018,102 @@ export default function Admin() {
                 autoFocus
                 className="w-full border border-border rounded-xl px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-forest"
               />
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setNewAnimalSpecies('horse')}
-                  className={`flex-1 py-2 rounded-xl border text-sm font-semibold transition-all ${
-                    newAnimalSpecies === 'horse'
-                      ? 'border-forest text-forest bg-forest/10'
-                      : 'border-border text-muted bg-white'
-                  }`}
-                >
-                  🐎 Cheval
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNewAnimalSpecies('donkey')}
-                  className={`flex-1 py-2 rounded-xl border text-sm font-semibold transition-all ${
-                    newAnimalSpecies === 'donkey'
-                      ? 'border-earth text-earth bg-earth/10'
-                      : 'border-border text-muted bg-white'
-                  }`}
-                >
-                  🐴 Âne
-                </button>
+              <div>
+                <p className="text-[11px] font-semibold text-muted uppercase tracking-wider mb-1.5">Race</p>
+                <div className="flex flex-wrap gap-2">
+                  {allSpeciesOptions.map(opt => {
+                    const selected = newAnimalSpecies === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setNewAnimalSpecies(opt.id)}
+                        className={`py-2 px-3 rounded-xl border text-sm font-semibold transition-all flex items-center gap-1.5 ${
+                          selected
+                            ? 'border-forest text-forest bg-forest/10'
+                            : 'border-border text-muted bg-white'
+                        }`}
+                      >
+                        <span>{opt.emoji}</span> {opt.label}
+                      </button>
+                    )
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => { setNewRaceOpen(true); setNewRaceError(null) }}
+                    className="py-2 px-3 rounded-xl border border-dashed border-forest text-forest text-xs font-bold
+                               active:bg-forest/10 transition-colors flex items-center gap-1"
+                  >
+                    <Plus size={12} /> Nouvelle race
+                  </button>
+                </div>
               </div>
+
+              {/* Modale création race custom */}
+              {newRaceOpen && (
+                <div className="bg-card border border-forest/30 rounded-xl p-3 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-bold text-forest">+ Nouvelle race</p>
+                    <button onClick={() => setNewRaceOpen(false)} className="p-1 text-muted active:text-charcoal">
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      value={newRaceEmoji}
+                      onChange={e => setNewRaceEmoji(e.target.value)}
+                      placeholder="🐱"
+                      maxLength={4}
+                      className="w-16 text-center text-2xl border border-border rounded-xl py-2 bg-white focus:outline-none focus:border-forest"
+                    />
+                    <input
+                      value={newRaceName}
+                      onChange={e => setNewRaceName(e.target.value)}
+                      placeholder="Nom (ex : Chat, Mouton, Poule)"
+                      className="flex-1 border border-border rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-forest"
+                    />
+                  </div>
+                  <input
+                    value={newRaceGestation}
+                    onChange={e => setNewRaceGestation(e.target.value)}
+                    placeholder="Durée gestation en jours (optionnel)"
+                    inputMode="numeric"
+                    className="w-full border border-border rounded-xl px-3 py-2 text-xs bg-white focus:outline-none focus:border-forest"
+                  />
+                  {newRaceError && (
+                    <p className="text-xs text-danger font-semibold">{newRaceError}</p>
+                  )}
+                  <button
+                    onClick={addCustomRace}
+                    disabled={newRaceSaving || !newRaceName.trim() || !newRaceEmoji.trim()}
+                    className="w-full py-2 bg-forest text-white rounded-xl text-sm font-bold active:opacity-80 disabled:opacity-40"
+                  >
+                    {newRaceSaving ? '…' : 'Enregistrer la race'}
+                  </button>
+                </div>
+              )}
+
+              {/* Liste des races personnalisées (pour suppression) */}
+              {customSpecies.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold text-muted/70 uppercase tracking-wider">Races perso</p>
+                  {customSpecies.map(c => (
+                    <div key={c.id} className="flex items-center justify-between bg-cream/50 border border-border rounded-lg px-2.5 py-1.5">
+                      <span className="text-xs text-charcoal">
+                        {c.emoji} {c.name}
+                        {c.gestationDays && <span className="text-muted ml-1">· {c.gestationDays} j</span>}
+                      </span>
+                      <button
+                        onClick={() => removeCustomRace(c.id)}
+                        className="text-muted active:text-danger p-1"
+                        aria-label={`Supprimer la race ${c.name}`}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="flex gap-2">
                 <button
                   onClick={addAnimal}
@@ -925,7 +1184,7 @@ export default function Admin() {
                   const wa = sa.overdue > 0 ? 0 : sa.dueSoon > 0 ? 1 : 2
                   const wb = sb.overdue > 0 ? 0 : sb.dueSoon > 0 ? 1 : 2
                   if (wa !== wb) return wa - wb
-                  if (a.species !== b.species) return a.species === 'horse' ? -1 : 1
+                  if (a.species !== b.species) return a.species.localeCompare(b.species, 'fr')
                   return a.name.localeCompare(b.name, 'fr')
                 })
                 .map(a => {
@@ -948,7 +1207,7 @@ export default function Admin() {
                           </span>
                         ) : (
                           <span className="w-9 h-9 rounded-full bg-cream border border-border/60 flex items-center justify-center text-lg flex-shrink-0">
-                            {a.species === 'horse' ? '🐎' : '🐴'}
+                            {getSpeciesInfo(a.species, customSpecies).emoji}
                           </span>
                         )}
                         <div className="flex-1 min-w-0">
@@ -977,10 +1236,358 @@ export default function Admin() {
                       </button>
                     </div>
 
-                    {/* ── Panneau carnet de soins ── */}
-                    {expanded && (
+                    {/* ── Panneau fiche animal (onglets) ── */}
+                    {expanded && (() => {
+                      const tab = animalTab[a.id] ?? 'care'
+                      const setTab = (t: 'care' | 'details' | 'conditions' | 'photos') =>
+                        setAnimalTab(prev => ({ ...prev, [a.id]: t }))
+                      const photos = photosByAnimal.get(a.id) ?? []
+                      const generalPhotos = photos.filter(p => p.category !== 'condition')
+                      const conditions = a.conditions ?? []
+                      const activeConditions = conditions.filter(c => !c.resolvedAt)
+                      return (
                       <div className="bg-cream rounded-xl p-3 mb-2 space-y-3 border border-border/30">
-                        {/* Formulaire ajout */}
+                        {/* Onglets */}
+                        <div className="flex gap-1 -mx-1">
+                          {([
+                            ['care',       '💉 Soins'],
+                            ['details',    '📋 Identité'],
+                            ['conditions', `🩺 Santé${activeConditions.length > 0 ? ` (${activeConditions.length})` : ''}`],
+                            ['photos',     `📸 Photos${generalPhotos.length > 0 ? ` (${generalPhotos.length})` : ''}`],
+                          ] as const).map(([k, label]) => (
+                            <button
+                              key={k}
+                              onClick={() => setTab(k)}
+                              className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                                tab === k
+                                  ? 'bg-forest text-white'
+                                  : 'bg-white text-muted border border-border'
+                              }`}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+
+                        {tab === 'details' && (
+                          <div className="bg-card rounded-xl p-3 space-y-3 border border-forest/20">
+                            <div>
+                              <label className="block text-[11px] font-bold text-muted uppercase tracking-wider mb-1">Date de naissance</label>
+                              <div className="flex gap-2 items-center">
+                                <input
+                                  type="date"
+                                  value={a.birthDate ? todayInputValue(a.birthDate) : ''}
+                                  onChange={e => updateAnimalDetails(a.id, {
+                                    birthDate: e.target.value ? dateInputToTs(e.target.value) : undefined,
+                                  })}
+                                  className="flex-1 px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
+                                />
+                                <label className="text-[11px] text-muted flex items-center gap-1">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!a.birthEstimated}
+                                    onChange={e => updateAnimalDetails(a.id, { birthEstimated: e.target.checked })}
+                                  />
+                                  estimée
+                                </label>
+                              </div>
+                              {a.birthDate && (
+                                <p className="text-[10px] text-muted mt-1">
+                                  Âge : {Math.floor((Date.now() - a.birthDate) / (365 * 86_400_000))} an(s)
+                                  {a.birthEstimated && ' (estimé)'}
+                                </p>
+                              )}
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-bold text-muted uppercase tracking-wider mb-1">Sexe</label>
+                              <div className="grid grid-cols-3 gap-1">
+                                {([
+                                  ['male',    '♂ Mâle'],
+                                  ['female',  '♀ Femelle'],
+                                  ['gelding', 'Hongre'],
+                                  ['mare',    'Jument'],
+                                  ['unknown', '? Inconnu'],
+                                ] as [AnimalGender, string][]).map(([k, label]) => (
+                                  <button
+                                    key={k}
+                                    onClick={() => updateAnimalDetails(a.id, { gender: k })}
+                                    className={`py-1.5 rounded-lg text-[11px] font-semibold border transition-all ${
+                                      a.gender === k
+                                        ? 'border-forest bg-forest/10 text-forest'
+                                        : 'border-border bg-white text-muted'
+                                    }`}
+                                  >
+                                    {label}
+                                  </button>
+                                ))}
+                              </div>
+                              <label className="text-[11px] text-muted flex items-center gap-1 mt-2">
+                                <input
+                                  type="checkbox"
+                                  checked={!!a.neutered}
+                                  onChange={e => updateAnimalDetails(a.id, { neutered: e.target.checked })}
+                                />
+                                Castré / stérilisé
+                              </label>
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-bold text-muted uppercase tracking-wider mb-1">Parents</label>
+                              <div className="space-y-1.5">
+                                <select
+                                  value={a.sireId ?? ''}
+                                  onChange={e => updateAnimalDetails(a.id, { sireId: e.target.value || undefined })}
+                                  className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
+                                >
+                                  <option value="">Père : (inconnu)</option>
+                                  {animals.filter(p => p.id !== a.id).map(p => (
+                                    <option key={p.id} value={p.id}>♂ {p.name}</option>
+                                  ))}
+                                </select>
+                                <select
+                                  value={a.damId ?? ''}
+                                  onChange={e => updateAnimalDetails(a.id, { damId: e.target.value || undefined })}
+                                  className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
+                                >
+                                  <option value="">Mère : (inconnue)</option>
+                                  {animals.filter(p => p.id !== a.id).map(p => (
+                                    <option key={p.id} value={p.id}>♀ {p.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-bold text-muted uppercase tracking-wider mb-1">Notes libres</label>
+                              <textarea
+                                defaultValue={a.notes ?? ''}
+                                onBlur={e => {
+                                  const v = e.target.value.trim()
+                                  if (v !== (a.notes ?? '')) updateAnimalDetails(a.id, { notes: v || undefined })
+                                }}
+                                placeholder="Caractère, allergies, particularités…"
+                                rows={3}
+                                className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs resize-none"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {tab === 'conditions' && (
+                          <div className="bg-card rounded-xl p-3 space-y-2 border border-forest/20">
+                            {/* Formulaire nouvelle condition */}
+                            {newCondAnimalId === a.id ? (
+                              <div className="space-y-2 border border-forest/30 bg-forest/5 rounded-lg p-2.5">
+                                <input
+                                  value={newCondLabel}
+                                  onChange={e => setNewCondLabel(e.target.value)}
+                                  placeholder="Nom (ex : Boiterie chronique, Asthme)"
+                                  className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
+                                  autoFocus
+                                />
+                                <textarea
+                                  value={newCondDesc}
+                                  onChange={e => setNewCondDesc(e.target.value)}
+                                  placeholder="Description (cause, symptômes, traitement…)"
+                                  rows={2}
+                                  className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs resize-none"
+                                />
+                                <div className="flex flex-wrap gap-2 text-[11px]">
+                                  <label className="flex items-center gap-1 text-charcoal">
+                                    <input type="checkbox" checked={newCondPerm}
+                                           onChange={e => setNewCondPerm(e.target.checked)} />
+                                    À vie
+                                  </label>
+                                  <label className="flex items-center gap-1 text-charcoal">
+                                    <input type="checkbox" checked={newCondGenetic}
+                                           onChange={e => setNewCondGenetic(e.target.checked)} />
+                                    Génétique (héréditaire)
+                                  </label>
+                                  <label className="flex items-center gap-1 text-charcoal">
+                                    <input type="checkbox" checked={newCondContag}
+                                           onChange={e => setNewCondContag(e.target.checked)} />
+                                    Contagieux entre animaux
+                                  </label>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => addAnimalCondition(a.id)}
+                                    disabled={!newCondLabel.trim()}
+                                    className="flex-1 py-1.5 bg-forest text-white rounded-lg text-xs font-bold disabled:opacity-40"
+                                  >
+                                    Enregistrer
+                                  </button>
+                                  <button
+                                    onClick={() => { setNewCondAnimalId(null); setNewCondLabel(''); setNewCondDesc('') }}
+                                    className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted"
+                                  >
+                                    Annuler
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setNewCondAnimalId(a.id)}
+                                className="w-full py-2 rounded-lg border border-dashed border-forest text-forest text-xs font-bold
+                                           active:bg-forest/10 flex items-center justify-center gap-1"
+                              >
+                                <Plus size={12} /> Ajouter un problème de santé
+                              </button>
+                            )}
+
+                            {conditions.length === 0 ? (
+                              <p className="text-xs text-muted text-center italic py-3">
+                                Aucun problème de santé enregistré.
+                              </p>
+                            ) : (
+                              <ul className="space-y-1.5">
+                                {conditions.map(c => {
+                                  const resolved = !!c.resolvedAt
+                                  // Photos liées spécifiquement à cette condition (suivi évolution).
+                                  const condPhotos = photos.filter(p => p.conditionId === c.id)
+                                  return (
+                                    <li key={c.id}
+                                        className={`bg-white rounded-lg p-2 border ${
+                                          resolved ? 'border-meadow/30 opacity-70'
+                                            : c.permanent ? 'border-danger/30' : 'border-sun/30'
+                                        }`}>
+                                      <div className="flex items-start justify-between gap-2">
+                                        <div className="flex-1 min-w-0">
+                                          <p className={`text-xs font-bold ${
+                                            resolved ? 'text-meadow line-through'
+                                              : c.permanent ? 'text-danger' : 'text-sun'
+                                          }`}>
+                                            {c.permanent ? '🔴' : '🟡'} {c.label}
+                                            {resolved && ' ✓ résolu'}
+                                          </p>
+                                          {c.description && (
+                                            <p className="text-[11px] text-charcoal mt-0.5 leading-snug">{c.description}</p>
+                                          )}
+                                          <div className="flex flex-wrap gap-1 mt-1">
+                                            {c.isGenetic && (
+                                              <span className="text-[9px] bg-pink-100 text-pink-700 px-1.5 py-0.5 rounded font-bold">
+                                                🧬 Héréditaire
+                                              </span>
+                                            )}
+                                            {c.isContagious && (
+                                              <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-bold">
+                                                ☣ Contagieux
+                                              </span>
+                                            )}
+                                            <span className="text-[9px] text-muted">
+                                              · ajouté {dateLabelFR(c.addedAt)}
+                                            </span>
+                                          </div>
+
+                                          {/* Galerie de photos de suivi de CETTE condition */}
+                                          {condPhotos.length > 0 && (
+                                            <div className="mt-2 grid grid-cols-4 gap-1">
+                                              {condPhotos.map(p => (
+                                                <button
+                                                  key={p.id}
+                                                  onClick={() => setPhotoGalleryViewer(p)}
+                                                  className="aspect-square rounded overflow-hidden bg-cream border border-border/40
+                                                             active:opacity-80 transition-opacity relative"
+                                                >
+                                                  <img src={p.dataUrl} alt="" className="w-full h-full object-cover" />
+                                                  <div className="absolute bottom-0 inset-x-0 bg-charcoal/70 text-white text-[8px] py-0.5 text-center">
+                                                    {dateLabelFR(p.takenAt)}
+                                                  </div>
+                                                </button>
+                                              ))}
+                                            </div>
+                                          )}
+
+                                          {/* Bouton : ajouter une photo de suivi DE CETTE condition */}
+                                          {!resolved && (
+                                            <label className="mt-2 flex items-center justify-center gap-1 py-1.5 rounded-lg border border-dashed border-forest/40 text-forest text-[10px] font-bold cursor-pointer active:bg-forest/10">
+                                              <Camera size={11} />
+                                              {photoUploadAnimalId === a.id ? 'Envoi…' : 'Ajouter une photo de suivi de ce problème'}
+                                              <input
+                                                type="file"
+                                                accept="image/*"
+                                                className="hidden"
+                                                disabled={photoUploadAnimalId === a.id}
+                                                onChange={e => {
+                                                  const f = e.target.files?.[0]
+                                                  if (f) uploadAnimalEvolutionPhoto(a.id, f, '', c.id)
+                                                  e.target.value = ''
+                                                }}
+                                              />
+                                            </label>
+                                          )}
+                                        </div>
+                                        <div className="flex gap-1 flex-shrink-0">
+                                          {!resolved && !c.permanent && (
+                                            <button
+                                              onClick={() => resolveAnimalCondition(a.id, c.id)}
+                                              className="text-meadow active:opacity-60 p-1"
+                                              title="Marquer comme résolu"
+                                            >
+                                              <Check size={12} />
+                                            </button>
+                                          )}
+                                          <button
+                                            onClick={() => removeAnimalCondition(a.id, c.id)}
+                                            className="text-danger/40 active:text-danger p-1"
+                                          >
+                                            <X size={12} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </li>
+                                  )
+                                })}
+                              </ul>
+                            )}
+                          </div>
+                        )}
+
+                        {tab === 'photos' && (
+                          <div className="bg-card rounded-xl p-3 space-y-3 border border-forest/20">
+                            <label className="flex items-center justify-center gap-1 w-full py-2 rounded-lg border border-dashed border-forest text-forest text-xs font-bold cursor-pointer active:bg-forest/10">
+                              <Camera size={13} />
+                              {photoUploadAnimalId === a.id ? 'Envoi…' : '+ Ajouter une photo de suivi'}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                disabled={photoUploadAnimalId === a.id}
+                                onChange={e => {
+                                  const f = e.target.files?.[0]
+                                  if (f) uploadAnimalEvolutionPhoto(a.id, f)
+                                  e.target.value = ''
+                                }}
+                              />
+                            </label>
+                            {generalPhotos.length === 0 ? (
+                              <p className="text-xs text-muted text-center italic py-3">
+                                Aucune photo de suivi pour {a.name}.
+                                Ajoutez-en régulièrement pour voir l'évolution.
+                              </p>
+                            ) : (
+                              <div className="grid grid-cols-3 gap-1.5">
+                                {generalPhotos.map(p => (
+                                  <button
+                                    key={p.id}
+                                    onClick={() => setPhotoGalleryViewer(p)}
+                                    className="aspect-square rounded-lg overflow-hidden bg-cream border border-border/40
+                                               active:opacity-80 transition-opacity relative"
+                                  >
+                                    <img src={p.dataUrl} alt="" className="w-full h-full object-cover" />
+                                    <div className="absolute bottom-0 inset-x-0 bg-charcoal/70 text-white text-[9px] py-0.5 text-center">
+                                      {dateLabelFR(p.takenAt)}
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {tab === 'care' && (
+                        <>
                         <div className="bg-card rounded-xl p-3 space-y-2 border border-forest/20">
                           <div className="flex items-center gap-1.5 mb-1">
                             <Stethoscope size={13} className="text-forest" />
@@ -1132,8 +1739,11 @@ export default function Admin() {
                             })}
                           </ul>
                         )}
+                        </>
+                        )}
                       </div>
-                    )}
+                      )
+                    })()}
                   </li>
                 )
               })}
@@ -1473,6 +2083,47 @@ export default function Admin() {
           </div>
         </div>
       )}
+
+      {/* ── Viewer fullscreen pour une photo d'évolution (galerie) ── */}
+      {photoGalleryViewer && (() => {
+        const animal = animals.find(a => a.id === photoGalleryViewer.animalId)
+        return (
+          <div className="fixed inset-0 z-[3000] bg-black/95 flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 text-white">
+              <div>
+                <p className="text-sm font-semibold">{animal?.name ?? 'Animal'}</p>
+                <p className="text-[11px] text-white/70">
+                  {dateLabelFR(photoGalleryViewer.takenAt)}
+                </p>
+              </div>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => deleteAnimalPhotoEntry(photoGalleryViewer.id)}
+                  className="p-2 rounded-xl text-white/80 active:bg-white/15"
+                  title="Supprimer cette photo"
+                >
+                  <Trash2 size={18} />
+                </button>
+                <button
+                  onClick={() => setPhotoGalleryViewer(null)}
+                  className="p-2 rounded-xl text-white/80 active:bg-white/15"
+                >
+                  <X size={22} />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 flex items-center justify-center px-2 pb-4" onClick={() => setPhotoGalleryViewer(null)}>
+              <img src={photoGalleryViewer.dataUrl} alt="" className="max-w-full max-h-full object-contain"
+                   onClick={e => e.stopPropagation()} />
+            </div>
+            {photoGalleryViewer.note && (
+              <div className="px-4 py-3 bg-charcoal/60 text-white/90 text-xs">
+                {photoGalleryViewer.note}
+              </div>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }

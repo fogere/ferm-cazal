@@ -17,6 +17,14 @@ export interface UserProfile {
   // Heure à laquelle le user veut recevoir le résumé du matin (HH:MM Europe/Paris).
   // Défaut implicite : valeur de silentEnd, sinon 07:00.
   morningReminderTime?: string
+  // Timestamp de l'ouverture de la carte (heartbeat 60 s). Sert au modèle
+  // pull-on-demand : tant qu'un user a `mapOpenAt` récent, les autres
+  // publient leur position 1× pour qu'il les voie ; sinon, plus aucune
+  // écriture liveLocation côté Firestore. Effacé proprement au unmount.
+  mapOpenAt?:    number
+  // Anti-spam geofence : timestamp de la dernière notification "tu es dans
+  // l'enclos X" envoyée à cet utilisateur, par id d'enclos.
+  geofenceNotified?: Record<string, number>
 }
 
 export interface Task {
@@ -45,6 +53,15 @@ export interface Task {
   urgentReleaseBy?: string | null
   urgentReleaseReason?: string
   urgentNotified?: boolean // flag cron : push déjà envoyé
+  // Mode broadcast : tâche notifiée à TOUT LE MONDE à l'heure due (et pas à un
+  // seul assigné). N'importe qui peut la marquer "fait" ; reste visible 24 h
+  // après pour informer les autres que c'est traité.
+  broadcast?: boolean
+  // Flag cron : broadcast déjà émis pour cette occurrence (anti-doublon).
+  broadcastNotifiedAt?: number | null
+  // Si broadcast=true, ces champs gardent qui a coché et quand, pour l'UI 24 h.
+  // (Différent de completedBy/At pour les tâches récurrentes : sur une broadcast
+  // récurrente on garde l'info de la dernière complétion.)
 }
 
 export type WaterPointType = 'natural' | 'manual'
@@ -215,7 +232,36 @@ export interface PinPhoto {
   note?: string
 }
 
-export type AnimalSpecies = 'horse' | 'donkey'
+// Identifiant d'espèce : "horse" / "donkey" pour les races par défaut, ou un id
+// libre (slug) pour une race personnalisée définie dans config/farm.customSpecies.
+export type AnimalSpecies = string
+
+// Race personnalisée (chat, chien, mouton…) avec son emoji et son nom d'affichage.
+// Stockée dans config/farm.customSpecies, gérée depuis Admin.
+export interface CustomSpecies {
+  id:    string  // slug unique, ex: "cat" / "sheep" / "dog"
+  name:  string  // libellé affiché, ex: "Chat" / "Mouton"
+  emoji: string  // emoji unique, ex: "🐱" / "🐑"
+  gestationDays?: number  // pour calcul de mise bas si applicable
+}
+
+// Sexe + statut reproductif d'un animal. "gelding" = hongre (mâle castré),
+// "mare" = jument. Pour les autres espèces : male/female + flag neutered.
+export type AnimalGender = 'male' | 'female' | 'gelding' | 'mare' | 'unknown'
+
+// Condition de santé enregistrée sur un animal : peut être héréditaire (génétique)
+// ou contagieuse entre animaux vivants ensemble. La description précise le contexte.
+export interface AnimalCondition {
+  id:          string   // uuid local
+  label:       string   // ex: "Boiterie chronique", "Asthme équin"
+  description: string   // contexte détaillé
+  isGenetic:   boolean  // transmissible à la descendance
+  isContagious: boolean // transmissible aux autres animaux vivants
+  permanent:   boolean  // true = problème à vie, false = problème temporaire en cours
+  addedAt:     number
+  addedBy:     string
+  resolvedAt?: number   // si permanent=false et résolu, timestamp de fin
+}
 
 export interface Animal {
   id: string
@@ -225,6 +271,68 @@ export interface Animal {
   addedAt: number
   addedBy: string
   photoUrl?: string           // photo d'identité (data URL JPEG compressée)
+  // Dernière fois que quelqu'un a vu l'animal en bonne santé (depuis la carte
+  // ou un check sur le terrain). Permet d'afficher en un coup d'œil les bêtes
+  // qu'on n'a pas vues depuis longtemps. Mis à jour par tout utilisateur (rules
+  // assouplies pour ces 2 champs uniquement).
+  lastCheckedHealthy?:    number
+  lastCheckedHealthyBy?:  string
+
+  /* ── Fiche détaillée (étendue) ── */
+  birthDate?:  number       // timestamp de naissance (jour précis ou estimation)
+  birthEstimated?: boolean  // true si la date est approximative
+  gender?:     AnimalGender
+  neutered?:   boolean      // castré / stérilisé (pour espèces où "gelding" ne s'applique pas)
+  sireId?:     string       // id du père (animal du même cheptel) — optionnel
+  damId?:      string       // id de la mère — optionnel
+  notes?:      string       // note libre (caractère, allergies, particularités…)
+  conditions?: AnimalCondition[]
+
+  /* ── Identification administrative (équidés) ── */
+  // Numéro SIRE (IFCE) — 8 caractères alphanumériques. Obligatoire pour les équidés
+  // français, sert aux contrôles et au passeport.
+  sireNumber?: string
+  // Numéro de transpondeur (puce électronique sous-cutanée) — 15 chiffres ISO 11784.
+  // Obligatoire en France depuis 2008 pour tout équidé identifié.
+  transponderId?: string
+}
+
+// Photo de suivi d'un animal (évolution dans le temps, blessure qui cicatrise,
+// pelage saisonnier, prise de poids, etc.). Une photo = un instant T. La galerie
+// permet de comparer dans le temps. Stockage : data URL JPEG compressée (1 MiB max).
+export interface AnimalPhoto {
+  id:         string
+  animalId:   string
+  uploadedBy: string
+  uploadedAt: number
+  takenAt:    number   // date à laquelle la photo a été prise (peut différer de uploadedAt)
+  dataUrl:    string
+  note?:      string
+  // Catégorie pour filtrer la galerie : suivi général, ou suivi d'une condition spécifique.
+  category?:  'general' | 'condition'
+  conditionId?: string  // si category='condition', lie à AnimalCondition.id
+  // Tags libres (ex: 'pelage_hiver', 'apres_tonte', 'boiterie') pour filtrer la galerie
+  // et le slideshow comparatif.
+  tags?:      string[]
+}
+
+// Mesure ponctuelle d'un animal (poids, taille, ECS…). Une saisie = un point sur
+// la courbe d'évolution. Permet le vrai "suivi de croissance" demandé par les
+// utilisatrices : voir évoluer une jument enceinte, suivre la prise de poids
+// d'un poulain, surveiller un chat qui perd du poids.
+export interface AnimalMeasurement {
+  id:          string
+  animalId:    string
+  date:        number     // timestamp de la mesure
+  weightKg?:   number     // poids (kg)
+  withersCm?:  number     // taille au garrot (cm) — pour chevaux/ânes
+  girthCm?:    number     // tour de poitrail (cm)
+  ecs?:        number     // Body Condition Score (1-5 ou 1-9 selon convention)
+  ecsScale?:   '1-5' | '1-9'   // échelle utilisée (défaut '1-5')
+  note?:       string
+  photoUrl?:   string     // photo optionnelle attachée à cette mesure
+  recordedBy:  string
+  createdAt:   number
 }
 
 export type AnimalCareType =
@@ -235,6 +343,8 @@ export type AnimalCareType =
   | 'medication'   // traitement / soin
   | 'breeding'     // saillie (auto-calcule date prévue de mise bas : +340 j)
   | 'birth'        // mise bas / poulinage
+  | 'food'         // croquettes / nourriture (animaux domestiques : chat, chien…)
+  | 'grooming'     // toilettage (tonte, brossage, taille des griffes…)
   | 'other'        // autre
 
 export interface AnimalCareEntry {
@@ -246,6 +356,11 @@ export interface AnimalCareEntry {
   performedBy: string // uid de la personne qui a saisi
   createdAt: number
   nextDueAt?: number  // optionnel : prochaine échéance (rappel à venir)
+  // Récurrence automatique : si défini, intervalle en jours entre 2 occurrences.
+  // Quand un soin avec recurrenceDays est créé, nextDueAt est auto-calculé à
+  // date + recurrenceDays ; et quand l'utilisateur "marque fait" la prochaine
+  // échéance (= crée la nouvelle entrée), la récurrence est chaînée.
+  recurrenceDays?: number
 }
 
 export interface Reserve {
@@ -268,8 +383,16 @@ export interface EnclosureMovement {
   fromEnclosureName: string | null
   toEnclosureId: string | null
   toEnclosureName: string | null
+  // Date RÉELLE du déplacement (peut être saisie rétroactivement pour reconstituer
+  // un calendrier de pâturage PAC). Pour les anciens mouvements sans
+  // `recordedAt`, c'est la date de saisie qui était stockée ici.
   movedAt: number
   movedBy: string  // uid
+  // Date de saisie dans l'app (immutable). Permet de distinguer une saisie
+  // rétroactive d'un mouvement temps réel.
+  recordedAt?: number
+  // Note libre (ex: "rotation pré 1 → pré 2 pour pousse herbe", "transhumance")
+  note?: string
 }
 
 export interface WeatherData {

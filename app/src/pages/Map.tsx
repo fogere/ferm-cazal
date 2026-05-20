@@ -1,16 +1,29 @@
 import 'leaflet/dist/leaflet.css'
 import { useEffect, useState, useRef } from 'react'
-import { MapContainer, TileLayer, Marker, Polyline, Polygon, useMapEvents, useMap } from 'react-leaflet'
+import { useNavigate } from 'react-router-dom'
+import { MapContainer, TileLayer, Marker, Polyline, Polygon, Circle, useMapEvents, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Zap, Check, Pencil, Undo2, Scissors, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search } from 'lucide-react'
 import { compressImage } from '../services/image'
 import type { PinPhoto, EnclosureMovement } from '../types'
 import {
   collection, query, where, onSnapshot, addDoc, deleteDoc, getDocs,
-  doc, updateDoc, getDoc, setDoc, writeBatch,
+  doc, updateDoc, getDoc, setDoc, writeBatch, deleteField,
 } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
+import { useLiveLocation } from '../hooks/useLiveLocation'
+import { useCustomSpecies } from '../hooks/useCustomSpecies'
+import { getSpeciesInfo } from '../services/species'
+import {
+  pointInPolygon, insidePolygonCentroid, distToSegmentPx, isFenceClosed,
+} from '../services/map/geometry'
+import {
+  dateInputToTs as dateInputToTsLocal,
+  tsToDateInput as tsToDateInputLocal,
+  formatAgo, timeAgo, timeUntil,
+} from '../services/map/time'
+import { healthFreshness, healthDotClass } from '../services/map/health'
 import type { MapPin, PinType, UserProfile, FencePreset, Animal } from '../types'
 
 /* ─── ferme ─── */
@@ -85,10 +98,45 @@ const AVAIL_MODE_CFG = {
 
 const MONTHS_FR = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc']
 
+// Tri alphabétique des animaux par prénom (locale FR pour gérer accents/casse correctement)
+function sortAnimalsByName<T extends { name: string }>(list: T[]): T[] {
+  return [...list].sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }))
+}
+
 /* ─── icônes Leaflet ─── */
 
-function makeDivIcon(type: PinType, overdue = false, hasPhotos = false): L.DivIcon {
-  const { emoji, color } = PIN_CFG[type]
+// Surcharge visuelle des points d'eau naturelle selon leur état.
+// Fonctionnel = bleu (couleur de base), asséché = orange, problème = rouge, gelé = noir + glaçon.
+// L'emoji goutte reste pour rester reconnaissable, sauf gelé (glaçon).
+const WATER_STATUS_VISUAL: Record<
+  NonNullable<MapPin['waterStatus']>,
+  { bg: string; emoji?: string; badge?: string }
+> = {
+  functional: { bg: '#0EA5E9' },                       // bleu (PIN_CFG par défaut)
+  dry:        { bg: '#EA580C' },                       // orange
+  problem:    { bg: '#DC2626' },                       // rouge
+  frozen:     { bg: '#111827', emoji: '💧', badge: '🧊' }, // fond noir, goutte + petit glaçon
+}
+
+function makeDivIcon(
+  type: PinType,
+  overdue = false,
+  hasPhotos = false,
+  waterStatus?: MapPin['waterStatus'],
+): L.DivIcon {
+  let { emoji, color } = PIN_CFG[type]
+  let statusBadge = ''
+  if (type === 'water_natural' && waterStatus) {
+    const v = WATER_STATUS_VISUAL[waterStatus]
+    color = v.bg
+    if (v.emoji) emoji = v.emoji
+    if (v.badge) {
+      // Petit badge en bas à droite (le slot top-right est pris par 📷)
+      statusBadge = `<div style="position:absolute;bottom:-3px;right:-3px;width:18px;height:18px;border-radius:50%;
+        background:white;border:2px solid #111827;display:flex;align-items:center;justify-content:center;
+        font-size:10px;line-height:1;box-shadow:0 1px 3px rgba(0,0,0,0.4);">${v.badge}</div>`
+    }
+  }
   const border = overdue ? '3px solid #DC2626' : '2.5px solid white'
   const photoBadge = hasPhotos
     ? `<div style="position:absolute;top:-3px;right:-3px;width:16px;height:16px;border-radius:50%;
@@ -101,6 +149,7 @@ function makeDivIcon(type: PinType, overdue = false, hasPhotos = false): L.DivIc
         display:flex;align-items:center;justify-content:center;font-size:20px;
         box-shadow:0 2px 8px rgba(0,0,0,0.35);border:${border};">${emoji}</div>
       ${photoBadge}
+      ${statusBadge}
     </div>`,
     className: '',
     iconSize: [38, 38],
@@ -206,22 +255,29 @@ function makeSnapIcon(isClose: boolean): L.DivIcon {
 
 const LABEL_ZOOM = 17
 
-function makeEnclosureLabelIcon(enclosureAnimals: Animal[], zoom: number): L.DivIcon {
+function makeEnclosureLabelIcon(
+  enclosureAnimals: Animal[],
+  zoom: number,
+  customSpecies: import('../types').CustomSpecies[] = [],
+): L.DivIcon {
   // Couleurs depuis CSS vars → s'adaptent automatiquement light/dark
   let inner: string
   if (enclosureAnimals.length === 0) {
     inner = '<em style="color:var(--color-muted);font-size:10px">Vide</em>'
   } else if (zoom >= LABEL_ZOOM) {
     inner = enclosureAnimals.map(a => {
-      const ico = a.species === 'horse' ? '🐎' : '🐴'
-      return `<div style="font-size:10px;font-weight:600;white-space:nowrap;line-height:1.6;color:var(--color-charcoal)">${ico} ${a.name}</div>`
+      const { emoji } = getSpeciesInfo(a.species, customSpecies)
+      return `<div style="font-size:10px;font-weight:600;white-space:nowrap;line-height:1.6;color:var(--color-charcoal)">${emoji} ${a.name}</div>`
     }).join('')
   } else {
-    const horses  = enclosureAnimals.filter(a => a.species === 'horse').length
-    const donkeys = enclosureAnimals.filter(a => a.species === 'donkey').length
+    // Regroupement par espèce pour le mode zoom-out
+    const counts = new Map<string, number>()
+    for (const a of enclosureAnimals) counts.set(a.species, (counts.get(a.species) ?? 0) + 1)
     const parts: string[] = []
-    if (horses > 0)  parts.push(`${horses} 🐎`)
-    if (donkeys > 0) parts.push(`${donkeys} 🐴`)
+    for (const [sp, n] of counts) {
+      const { emoji } = getSpeciesInfo(sp, customSpecies)
+      parts.push(`${n} ${emoji}`)
+    }
     inner = `<strong style="font-size:13px;white-space:nowrap;color:var(--color-charcoal)">${parts.join(' · ')}</strong>`
   }
   return L.divIcon({
@@ -234,46 +290,6 @@ function makeEnclosureLabelIcon(enclosureAnimals: Animal[], zoom: number): L.Div
   })
 }
 
-function isFenceClosed(pin: MapPin): boolean {
-  if (pin.closed) return true
-  const pts = pin.points
-  if (!pts || pts.length < 4) return false
-  return pts[0].lat === pts[pts.length - 1].lat && pts[0].lng === pts[pts.length - 1].lng
-}
-
-/* ─── helpers ─── */
-
-function timeAgo(ts: number): string {
-  const mins = Math.floor((Date.now() - ts) / 60000)
-  if (mins < 1)  return "À l'instant"
-  if (mins < 60) return `Il y a ${mins} min`
-  const h = Math.floor(mins / 60)
-  if (h < 24)    return `Il y a ${h}h`
-  return `Il y a ${Math.floor(h / 24)}j`
-}
-
-function timeUntil(ts: number): string {
-  const diff = ts - Date.now()
-  if (diff <= 0) return 'Maintenant !'
-  const mins = Math.floor(diff / 60000)
-  if (mins < 60) return `Dans ${mins} min`
-  const h = Math.floor(mins / 60)
-  if (h < 24)    return `Dans ${h}h`
-  return `Dans ${Math.floor(h / 24)}j`
-}
-
-// Distance en pixels d'un point P au segment [A, B] — utilisé pour la sélection par proximité
-function distToSegmentPx(
-  px: number, py: number,
-  ax: number, ay: number,
-  bx: number, by: number,
-): number {
-  const dx = bx - ax, dy = by - ay
-  if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay)
-  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
-  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy))
-}
-
 function isWaterOverdue(pin: MapPin): boolean {
   if (pin.type !== 'water_manual') return false
   const deadline = pin.dueAt ?? pin.nextReminderAt
@@ -283,60 +299,6 @@ function isWaterOverdue(pin: MapPin): boolean {
 function isBatteryDue(pin: MapPin): boolean {
   if (pin.type !== 'battery') return false
   return !!(pin.nextCheckAt && pin.nextCheckAt <= Date.now())
-}
-
-// Point à l'intérieur d'un polygone — ray casting
-function pointInPolygon(lat: number, lng: number, pts: { lat: number; lng: number }[]): boolean {
-  let inside = false
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    const xi = pts[i].lng, yi = pts[i].lat
-    const xj = pts[j].lng, yj = pts[j].lat
-    if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi)
-      inside = !inside
-  }
-  return inside
-}
-
-// Polylabel simplifié : trouve un point GARANTI à l'intérieur du polygone, même concave.
-// Pour polygones convexes la moyenne arithmétique suffit. Pour les L/U-shaped, on fait un
-// grid search et on retient le point intérieur avec la plus grande distance à toute arête.
-function insidePolygonCentroid(pts: { lat: number; lng: number }[]): { lat: number; lng: number } {
-  if (pts.length < 3) return pts[0] ?? { lat: 0, lng: 0 }
-  // Moyenne arithmétique
-  const meanLat = pts.reduce((s, p) => s + p.lat, 0) / pts.length
-  const meanLng = pts.reduce((s, p) => s + p.lng, 0) / pts.length
-  // Si à l'intérieur, on garde (cas convexe — 99% des enclos)
-  if (pointInPolygon(meanLat, meanLng, pts)) return { lat: meanLat, lng: meanLng }
-  // Concave : grid search dans la bbox
-  let minLat = Infinity, minLng = Infinity, maxLat = -Infinity, maxLng = -Infinity
-  for (const p of pts) {
-    if (p.lat < minLat) minLat = p.lat
-    if (p.lat > maxLat) maxLat = p.lat
-    if (p.lng < minLng) minLng = p.lng
-    if (p.lng > maxLng) maxLng = p.lng
-  }
-  const N = 24
-  const stepLat = (maxLat - minLat) / N
-  const stepLng = (maxLng - minLng) / N
-  let bestLat = meanLat, bestLng = meanLng, bestDist = -Infinity
-  for (let i = 1; i < N; i++) {
-    for (let j = 1; j < N; j++) {
-      const lat = minLat + i * stepLat
-      const lng = minLng + j * stepLng
-      if (!pointInPolygon(lat, lng, pts)) continue
-      let minD = Infinity
-      for (let k = 0, prev = pts.length - 1; k < pts.length; prev = k++) {
-        const a = pts[prev], b = pts[k]
-        const dx = b.lng - a.lng, dy = b.lat - a.lat
-        const len2 = dx*dx + dy*dy
-        const t = len2 > 0 ? Math.max(0, Math.min(1, ((lng - a.lng)*dx + (lat - a.lat)*dy) / len2)) : 0
-        const d = Math.hypot(lng - (a.lng + t*dx), lat - (a.lat + t*dy))
-        if (d < minD) minD = d
-      }
-      if (minD > bestDist) { bestDist = minD; bestLat = lat; bestLng = lng }
-    }
-  }
-  return { lat: bestLat, lng: bestLng }
 }
 
 /* ─── sous-composants Leaflet ─── */
@@ -588,7 +550,32 @@ function blankForm(defaultUid: string): FormState {
 /* ─── page ─── */
 
 export default function MapPage() {
-  const { user, isTemp } = useAuth()
+  const navigate = useNavigate()
+  const { user, profile, isTemp } = useAuth()
+  // Géoloc partagée : ne s'active QUE pendant que cette page est montée.
+  // Évite de pinger Firestore en arrière-plan toute la journée — la position
+  // n'est utile qu'aux utilisateurs qui ont la carte ouverte.
+  useLiveLocation()
+
+  /* Signal "carte ouverte" : pose `mapOpenAt` + heartbeat 60 s tant que
+     cette page est montée. Sert aux autres clients pour décider de publier
+     leur position en pull-on-demand (cf. useOnDemandLocationPublish dans App). */
+  useEffect(() => {
+    if (!user) return
+    const ref = doc(db, 'users', user.uid)
+    updateDoc(ref, { mapOpenAt: Date.now() }).catch(() => {})
+    const beat = setInterval(() => {
+      updateDoc(ref, { mapOpenAt: Date.now() }).catch(() => {})
+    }, 60_000)
+    return () => {
+      clearInterval(beat)
+      // Nettoie le flag : on n'est plus sur la map.
+      updateDoc(ref, { mapOpenAt: deleteField() }).catch(() => {})
+    }
+  }, [user?.uid])
+
+  // Races personnalisées (chat, mouton…) ajoutées par un admin dans Admin → Animaux.
+  const customSpecies = useCustomSpecies()
 
   const [pins,         setPins]         = useState<MapPin[]>([])
   const [users,        setUsers]        = useState<UserProfile[]>([])
@@ -611,6 +598,7 @@ export default function MapPage() {
   const [form,         setForm]         = useState<FormState>(() => blankForm(user?.uid ?? ''))
   const [saving,       setSaving]       = useState(false)
   const [actionBusy,   setActionBusy]   = useState(false)
+  const [savingHealth, setSavingHealth] = useState(false)
   const [flyTrigger,   setFlyTrigger]   = useState(0)
   const [editOccupants, setEditOccupants] = useState(false)
   const [pendingOccupants, setPendingOccupants] = useState<string[]>([])
@@ -621,6 +609,32 @@ export default function MapPage() {
   const [fenceFormVisible, setFenceFormVisible] = useState(false)
   const [fenceName,        setFenceName]        = useState('')
   const [fenceNote,        setFenceNote]        = useState('')
+
+  /* Édition d'une clôture existante : drag des poteaux pour corriger le tracé.
+     fenceEditPin = pin en cours d'édition (null = hors mode).
+     fenceEditPoints = copie de travail des points (commit Firestore au "Valider"). */
+  const [fenceEditPin,    setFenceEditPin]    = useState<MapPin | null>(null)
+  const [fenceEditPoints, setFenceEditPoints] = useState<{ lat: number; lng: number }[]>([])
+  const [fenceEditSaving, setFenceEditSaving] = useState(false)
+
+  // Mode auto (placement poteau-par-poteau via GPS haute précision).
+  // 'idle'       : en attente d'un clic "Capturer"
+  // 'capturing'  : sampling GPS en cours (avec cercle d'incertitude live)
+  // 'adjust'     : capture terminée, l'utilisateur peut affiner par drag sur la photo aérienne
+  // 'snap-prompt': demande de lier à un poteau d'une autre clôture
+  // 'close-prompt': proposer la fermeture du parc (retour au 1ᵉʳ poteau)
+  const [fenceMethod,    setFenceMethod]    = useState<'manual' | 'auto'>('manual')
+  const [autoState,      setAutoState]      = useState<'idle' | 'capturing' | 'adjust' | 'snap-prompt' | 'close-prompt'>('idle')
+  const [autoSecondsLeft, setAutoSecondsLeft] = useState(0)
+  const [autoBestAccuracy, setAutoBestAccuracy] = useState<number | null>(null)
+  const [autoSampleCount, setAutoSampleCount] = useState(0)
+  const [autoPendingPoint, setAutoPendingPoint] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
+  // Position live (médiane glissante) pendant le sampling — utilisée pour le cercle d'incertitude.
+  const [autoLiveCenter, setAutoLiveCenter] = useState<{ lat: number; lng: number } | null>(null)
+  // En mode 'adjust', point modifiable par drag du marqueur sur la carte.
+  const [autoAdjustPoint, setAutoAdjustPoint] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
+  // Si le poteau capturé tombe sur un poteau d'une autre clôture, on stocke la cible et on demande à l'utilisateur
+  const [autoSnapCandidate, setAutoSnapCandidate] = useState<{ lat: number; lng: number; sourceName: string } | null>(null)
 
   // États mode ciseau
   const [scissorMode,         setScissorMode]         = useState(false)
@@ -648,6 +662,9 @@ export default function MapPage() {
   const [fenceSnapTarget,         setFenceSnapTarget]         = useState<{ lat: number; lng: number; isClose: boolean } | null>(null)
   const [editEnclosureAnimals,    setEditEnclosureAnimals]    = useState(false)
   const [pendingEnclosureAnimals, setPendingEnclosureAnimals] = useState<string[]>([])
+  // Date + note du mouvement (saisie rétroactive pour calendrier PAC)
+  const [pendingMoveDate,         setPendingMoveDate]         = useState<string>('')
+  const [pendingMoveNote,         setPendingMoveNote]         = useState<string>('')
 
   // Suppression preset avec délai
   const [deletingPreset,   setDeletingPreset]   = useState<FencePreset | null>(null)
@@ -667,6 +684,9 @@ export default function MapPage() {
 
   // Pointeur temps réel partagé
   const [pointerMode, setPointerMode] = useState(false)
+  // Pointeur local immédiat de l'expéditeur (sans round-trip Firestore).
+  const [localPointer, setLocalPointer] = useState<{ lat: number; lng: number; at: number } | null>(null)
+  const [pointerToast, setPointerToast] = useState(false)
 
   // Photos attachées aux épingles
   const [pinPhotos,      setPinPhotos]      = useState<PinPhoto[]>([])
@@ -689,7 +709,7 @@ export default function MapPage() {
   useEffect(() => {
     const fresh: Record<string, number> = {}
     for (const u of users) {
-      if (u.uid !== user?.uid && u.livePointer && (Date.now() - u.livePointer.updatedAt) < 30_000) {
+      if (u.uid !== user?.uid && u.livePointer && (Date.now() - u.livePointer.updatedAt) < 60_000) {
         fresh[u.uid] = u.livePointer.updatedAt
       }
     }
@@ -740,7 +760,7 @@ export default function MapPage() {
       if (snap.exists() && Array.isArray(snap.data().animalGroups)) {
         setAnimalGroups(snap.data().animalGroups)
       }
-    })
+    }).catch(err => console.warn('[Map] config/farm load:', err?.code ?? err))
     getDoc(doc(db, 'config', 'fencePresets')).then(snap => {
       const saved = snap.exists() && Array.isArray(snap.data().presets)
         ? (snap.data().presets as FencePreset[])
@@ -755,13 +775,19 @@ export default function MapPage() {
           { id: 'preset_plain',    name: 'Fil lisse',        color: '#9CA3AF', description: 'Fil galvanisé simple',     wireStyle: 'plain',    createdBy: 'system', createdAt: 0 },
         ]
         setFencePresets(defaults)
-        setDoc(doc(db, 'config', 'fencePresets'), { presets: defaults }).catch(() => {})
+        // Init des presets : réservé aux réguliers. Les rules refuseront sinon.
+        if (!isTemp) {
+          setDoc(doc(db, 'config', 'fencePresets'), { presets: defaults }).catch(() => {})
+        }
       }
-    })
-    const u3 = onSnapshot(query(collection(db, 'animals')), snap =>
-      setAnimals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Animal)))
+    }).catch(err => console.warn('[Map] config/fencePresets load:', err?.code ?? err))
+    const u3 = onSnapshot(
+      query(collection(db, 'animals')),
+      snap => setAnimals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Animal))),
+      err => console.error('[Map] animals subscription error:', err.code, err.message)
     )
     return () => { u1(); u2(); u3() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Sync selected pin avec Firestore temps réel
@@ -790,14 +816,22 @@ export default function MapPage() {
       where('fromEnclosureId', '==', selected.id)
     )
     const merged = new Map<string, EnclosureMovement>()
-    const u1 = onSnapshot(q, snap => {
-      snap.docs.forEach(d => merged.set(d.id, { id: d.id, ...d.data() } as EnclosureMovement))
-      setEnclosureHistory(Array.from(merged.values()).sort((a, b) => b.movedAt - a.movedAt))
-    })
-    const u2 = onSnapshot(q2, snap => {
-      snap.docs.forEach(d => merged.set(d.id, { id: d.id, ...d.data() } as EnclosureMovement))
-      setEnclosureHistory(Array.from(merged.values()).sort((a, b) => b.movedAt - a.movedAt))
-    })
+    const u1 = onSnapshot(
+      q,
+      snap => {
+        snap.docs.forEach(d => merged.set(d.id, { id: d.id, ...d.data() } as EnclosureMovement))
+        setEnclosureHistory(Array.from(merged.values()).sort((a, b) => b.movedAt - a.movedAt))
+      },
+      err => console.warn('[Map] enclosure_movements(to):', err.code)
+    )
+    const u2 = onSnapshot(
+      q2,
+      snap => {
+        snap.docs.forEach(d => merged.set(d.id, { id: d.id, ...d.data() } as EnclosureMovement))
+        setEnclosureHistory(Array.from(merged.values()).sort((a, b) => b.movedAt - a.movedAt))
+      },
+      err => console.warn('[Map] enclosure_movements(from):', err.code)
+    )
     return () => { u1(); u2() }
   }, [selected?.id, historyVisible])
 
@@ -805,11 +839,15 @@ export default function MapPage() {
   useEffect(() => {
     if (!selected) { setPinPhotos([]); return }
     const q = query(collection(db, 'pin_photos'), where('pinId', '==', selected.id))
-    const unsub = onSnapshot(q, snap => {
-      const photos = snap.docs.map(d => ({ id: d.id, ...d.data() } as PinPhoto))
-      photos.sort((a, b) => b.uploadedAt - a.uploadedAt)
-      setPinPhotos(photos)
-    })
+    const unsub = onSnapshot(
+      q,
+      snap => {
+        const photos = snap.docs.map(d => ({ id: d.id, ...d.data() } as PinPhoto))
+        photos.sort((a, b) => b.uploadedAt - a.uploadedAt)
+        setPinPhotos(photos)
+      },
+      err => console.warn('[Map] pin_photos subscription:', err.code)
+    )
     return unsub
   }, [selected?.id])
 
@@ -879,6 +917,8 @@ export default function MapPage() {
   }
 
   function cancelFence() {
+    // Stop tout watcher GPS auto en cours
+    autoCancelCapture()
     setFenceMode(false)
     setFencePoints([])
     setFenceFormVisible(false)
@@ -887,7 +927,365 @@ export default function MapPage() {
     setSelectedPreset(null)
     setFenceIsClosed(false)
     setFenceSnapTarget(null)
+    setFenceMethod('manual')
+    setAutoState('idle')
+    setAutoPendingPoint(null)
+    setAutoSnapCandidate(null)
+    setAutoAdjustPoint(null)
+    setAutoLiveCenter(null)
   }
+
+  /* ─── Édition d'une clôture existante (déplacement des poteaux) ─── */
+
+  function startEditFence(pin: MapPin) {
+    if (!pin.points || pin.points.length < 2) return
+    if (isTemp) {
+      alert("L'édition de clôture est réservée aux utilisateurs réguliers.")
+      return
+    }
+    setFenceEditPin(pin)
+    setFenceEditPoints(pin.points.map(p => ({ ...p })))
+    // Ferme les autres panneaux pour libérer la carte
+    setSelected(null)
+    setEditOccupants(false)
+    setEditEnclosureAnimals(false)
+  }
+
+  function cancelEditFence() {
+    setFenceEditPin(null)
+    setFenceEditPoints([])
+  }
+
+  // Déplace le point #idx vers (lat, lng). Si le polygone est fermé
+  // (dernier === premier), on synchronise les 2 pour garder la fermeture.
+  function dragEditPoint(idx: number, lat: number, lng: number) {
+    setFenceEditPoints(prev => {
+      const next = prev.map((p, i) => i === idx ? { lat, lng } : p)
+      // Maintien de la fermeture : si le pin est un enclos fermé, le dernier
+      // point doit rester égal au premier après n'importe quel drag.
+      if (fenceEditPin && isFenceClosed(fenceEditPin) && next.length >= 2) {
+        if (idx === 0) next[next.length - 1] = { lat, lng }
+        else if (idx === next.length - 1) next[0] = { lat, lng }
+      }
+      return next
+    })
+  }
+
+  // Supprime le point #idx. Refuse si ça casse la géométrie (< 2 pts ouvert, < 3 pts polygone).
+  function removeEditPoint(idx: number) {
+    if (!fenceEditPin) return
+    const closed = isFenceClosed(fenceEditPin)
+    setFenceEditPoints(prev => {
+      const minPts = closed ? 4 : 2  // polygone fermé doit garder 3 sommets distincts + retour
+      if (prev.length <= minPts) {
+        alert(closed
+          ? "Un enclos fermé doit garder au moins 3 poteaux."
+          : "Une clôture doit garder au moins 2 poteaux.")
+        return prev
+      }
+      // Si on supprime le 1ᵉʳ et que le polygone est fermé, le nouveau 1ᵉʳ doit devenir le dernier
+      let next = prev.filter((_, i) => i !== idx)
+      if (closed && idx === 0 && next.length >= 1) {
+        next = [...next, { ...next[0] }]
+        next.splice(prev.length - 1, 1) // retire l'ancien dernier
+      }
+      return next
+    })
+  }
+
+  async function saveEditFence() {
+    if (!fenceEditPin || !user) return
+    setFenceEditSaving(true)
+    try {
+      // Recalcule lat/lng du pin = centroïde des points (utile pour la sélection clic)
+      const centerLat = fenceEditPoints.reduce((s, p) => s + p.lat, 0) / fenceEditPoints.length
+      const centerLng = fenceEditPoints.reduce((s, p) => s + p.lng, 0) / fenceEditPoints.length
+      await updateDoc(doc(db, 'map_pins', fenceEditPin.id), {
+        points:    fenceEditPoints,
+        lat:       centerLat,
+        lng:       centerLng,
+        updatedAt: Date.now(),
+        updatedBy: user.uid,
+      })
+      setFenceEditPin(null)
+      setFenceEditPoints([])
+    } catch (err) {
+      console.error('[saveEditFence]', err)
+      alert("Échec enregistrement. Réessaye dans un instant.")
+    } finally {
+      setFenceEditSaving(false)
+    }
+  }
+
+  /* ─── mode auto : capture poteau via GPS haute précision ─── */
+
+  // Refs pour le watcher GPS — pas dans le state pour éviter de re-render à chaque sample
+  const autoWatchIdRef = useRef<number | null>(null)
+  const autoSamplesRef = useRef<{ lat: number; lng: number; acc: number }[]>([])
+  const autoTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Distances : seuil de snap sur un poteau existant et seuil de fermeture du parc.
+  // 8 m couvre l'imprécision GPS typique en pleine nature (jusqu'à 10-15 m).
+  const AUTO_SNAP_M  = 8
+  const AUTO_CLOSE_M = 8
+  // Durée du sampling pour un poteau (s). Le GPS d'un smartphone met 10-30 s
+  // à converger : passer de 5 à 20 s améliore drastiquement la précision réelle.
+  const AUTO_SAMPLE_SECONDS = 20
+  // On jette les N premières mesures : elles viennent du cache (dernière position
+  // connue, souvent obsolète d'avant la marche) avant que le GPS reverrouille.
+  const AUTO_WARMUP_SAMPLES = 3
+  // Seuil de rejet des outliers en multiples de MAD (median absolute deviation).
+  // 2.5 est le standard statistique pour "fortement aberrant".
+  const AUTO_MAD_THRESHOLD = 2.5
+
+  function autoCancelCapture() {
+    if (autoWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(autoWatchIdRef.current)
+      autoWatchIdRef.current = null
+    }
+    if (autoTimerRef.current !== null) {
+      clearInterval(autoTimerRef.current)
+      autoTimerRef.current = null
+    }
+    autoSamplesRef.current = []
+    setAutoState('idle')
+    setAutoSecondsLeft(0)
+    setAutoBestAccuracy(null)
+    setAutoSampleCount(0)
+    setAutoLiveCenter(null)
+  }
+
+  // Médiane robuste sur un tableau de nombres (modifie une copie).
+  function median(values: number[]): number {
+    const sorted = [...values].sort((a, b) => a - b)
+    const n = sorted.length
+    if (n === 0) return 0
+    return n % 2 === 0 ? (sorted[n / 2 - 1] + sorted[n / 2]) / 2 : sorted[(n - 1) / 2]
+  }
+
+  function distMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+    const R = 6_371_000
+    const toRad = (d: number) => (d * Math.PI) / 180
+    const dLat = toRad(b.lat - a.lat)
+    const dLng = toRad(b.lng - a.lng)
+    const lat1 = toRad(a.lat), lat2 = toRad(b.lat)
+    const x = Math.sin(dLat / 2) ** 2 + Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2)
+    return 2 * R * Math.asin(Math.sqrt(x))
+  }
+
+  // Cherche un poteau existant (sur n'importe quelle clôture ENREGISTRÉE) à moins
+  // de AUTO_SNAP_M de la position. Retourne le premier match avec nom de la clôture parente.
+  function findNearbyExistingPost(p: { lat: number; lng: number }): { lat: number; lng: number; sourceName: string } | null {
+    for (const pin of pins) {
+      if (pin.type !== 'fence' || !pin.points) continue
+      for (const pt of pin.points) {
+        if (distMeters(pt, p) <= AUTO_SNAP_M) {
+          return { lat: pt.lat, lng: pt.lng, sourceName: pin.name }
+        }
+      }
+    }
+    return null
+  }
+
+  function autoStartCapture() {
+    if (!('geolocation' in navigator)) {
+      alert('Géolocalisation non disponible sur cet appareil.')
+      return
+    }
+    autoSamplesRef.current = []
+    setAutoState('capturing')
+    setAutoSecondsLeft(AUTO_SAMPLE_SECONDS)
+    setAutoBestAccuracy(null)
+    setAutoSampleCount(0)
+    setAutoLiveCenter(null)
+
+    const startedAt = Date.now()
+
+    // watchPosition pour collecter plusieurs samples pendant N secondes
+    autoWatchIdRef.current = navigator.geolocation.watchPosition(
+      pos => {
+        const acc = pos.coords.accuracy
+        autoSamplesRef.current.push({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          acc,
+        })
+        const n = autoSamplesRef.current.length
+        setAutoSampleCount(n)
+        setAutoBestAccuracy(prev => prev === null || acc < prev ? acc : prev)
+        // Cercle d'incertitude live : médiane des samples utiles (= après warm-up).
+        // Avant que le warm-up soit complet, on affiche la position courante brute
+        // pour donner un repère, mais c'est marqué "en cours de calage" dans l'UI.
+        const usable = n > AUTO_WARMUP_SAMPLES
+          ? autoSamplesRef.current.slice(AUTO_WARMUP_SAMPLES)
+          : autoSamplesRef.current
+        setAutoLiveCenter({
+          lat: median(usable.map(s => s.lat)),
+          lng: median(usable.map(s => s.lng)),
+        })
+      },
+      err => {
+        console.warn('[autoFence]', err.message)
+        autoCancelCapture()
+        alert(`GPS indisponible : ${err.message}`)
+      },
+      // maximumAge: 0 force une nouvelle fix (pas de cache). Plus lent au début
+      // mais évite la position "fantôme" d'avant que tu marches.
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 25_000 },
+    )
+
+    // Compteur visuel + arrêt automatique après N secondes
+    autoTimerRef.current = setInterval(() => {
+      const elapsed = (Date.now() - startedAt) / 1000
+      const left = Math.max(0, AUTO_SAMPLE_SECONDS - elapsed)
+      setAutoSecondsLeft(left)
+      if (elapsed >= AUTO_SAMPLE_SECONDS) {
+        if (autoTimerRef.current) clearInterval(autoTimerRef.current)
+        autoTimerRef.current = null
+        if (autoWatchIdRef.current !== null) navigator.geolocation.clearWatch(autoWatchIdRef.current)
+        autoWatchIdRef.current = null
+        autoFinalizeCapture()
+      }
+    }, 200)
+  }
+
+  // Termine immédiatement (l'utilisateur trouve la précision déjà bonne)
+  function autoFinishEarly() {
+    if (autoTimerRef.current) { clearInterval(autoTimerRef.current); autoTimerRef.current = null }
+    if (autoWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(autoWatchIdRef.current)
+      autoWatchIdRef.current = null
+    }
+    autoFinalizeCapture()
+  }
+
+  /* Calcule la position finale via :
+     1. Warm-up : on jette les N premières mesures (cache GPS, valeurs obsolètes).
+     2. Médiane robuste lat/lng sur les samples restants.
+     3. Outlier rejection MAD : on rejette tout sample dont la distance à la médiane
+        dépasse 2.5× la déviation absolue médiane (en mètres).
+     4. Médiane finale sur le pool nettoyé → position du poteau.
+     Beaucoup plus robuste qu'une moyenne pondérée : un seul GPS-jump à 50 m ne
+     biaisera plus le résultat. */
+  function autoFinalizeCapture() {
+    setAutoLiveCenter(null)
+    const all = autoSamplesRef.current
+    if (all.length === 0) {
+      setAutoState('idle')
+      alert('Aucun signal GPS reçu. Vérifie : a) Localisation Android = "Précise", b) tu es à découvert (pas sous arbres), c) tiens le téléphone à 1,5 m au-dessus du poteau (pas en contact si poteau métallique → multipath).')
+      return
+    }
+    // 1. Warm-up : on jette les N premières mesures
+    let pool = all.length > AUTO_WARMUP_SAMPLES ? all.slice(AUTO_WARMUP_SAMPLES) : all
+    // 2. Médiane provisoire
+    let medLat = median(pool.map(s => s.lat))
+    let medLng = median(pool.map(s => s.lng))
+    // 3. MAD (en mètres) + rejet outliers
+    const dists = pool.map(s => distMeters({ lat: medLat, lng: medLng }, s))
+    const mad = median(dists)
+    // Si MAD = 0 (tous samples identiques, rare), on garde tout
+    const threshold = mad > 0 ? AUTO_MAD_THRESHOLD * mad : Infinity
+    const cleaned = pool.filter((_s, i) => dists[i] <= threshold)
+    const finalPool = cleaned.length >= 3 ? cleaned : pool   // garde-fou : minimum 3 samples
+    // 4. Médiane finale sur le pool nettoyé
+    const finalLat = median(finalPool.map(s => s.lat))
+    const finalLng = median(finalPool.map(s => s.lng))
+    // Précision = médiane des accuracy des samples gardés
+    const finalAcc = Math.round(median(finalPool.map(s => s.acc)))
+    const rejected = pool.length - cleaned.length
+
+    console.log('[autoFence] samples=%d warmup=%d kept=%d rejected=%d acc=%dm mad=%.1fm',
+      all.length, AUTO_WARMUP_SAMPLES, finalPool.length, rejected, finalAcc, mad)
+
+    const point = { lat: finalLat, lng: finalLng, accuracy: finalAcc }
+    setAutoPendingPoint(point)
+    setAutoAdjustPoint(point)
+    // Étape 1 : on bascule en mode "ajuster" — l'utilisateur peut affiner le point
+    // sur la photo aérienne (drag du marqueur) avant validation. Ça compense le
+    // décalage éventuel de l'orthophoto IGN (jusqu'à 5-10 m en zone rurale).
+    setAutoState('adjust')
+  }
+
+  // Mise à jour du point quand l'utilisateur drag le marqueur "adjust"
+  function autoOnAdjustDrag(lat: number, lng: number) {
+    setAutoAdjustPoint(prev => prev ? { ...prev, lat, lng } : prev)
+  }
+
+  // Valide le point ajusté → on déclenche ensuite les prompts snap/close si besoin
+  function autoValidateAdjusted() {
+    const point = autoAdjustPoint
+    if (!point) return
+    setAutoPendingPoint(point)
+
+    // 1. Retour près du PREMIER poteau → proposer fermeture
+    if (fencePoints.length >= 3) {
+      const first = fencePoints[0]
+      if (distMeters(first, point) <= AUTO_CLOSE_M) {
+        setAutoAdjustPoint(null)
+        setAutoState('close-prompt')
+        return
+      }
+    }
+    // 2. Sur un poteau existant d'une AUTRE clôture
+    const nearby = findNearbyExistingPost(point)
+    if (nearby) {
+      setAutoSnapCandidate(nearby)
+      setAutoAdjustPoint(null)
+      setAutoState('snap-prompt')
+      return
+    }
+    // 3. Cas standard
+    handleFencePoint(point.lat, point.lng)
+    setAutoAdjustPoint(null)
+    setAutoPendingPoint(null)
+    setAutoState('idle')
+  }
+
+  // Annule le poteau en cours d'ajustement
+  function autoCancelAdjust() {
+    setAutoAdjustPoint(null)
+    setAutoPendingPoint(null)
+    setAutoState('idle')
+  }
+
+  // L'utilisateur accepte de lier au poteau existant : on utilise la position exacte du poteau partagé
+  function autoLinkToExisting() {
+    if (!autoSnapCandidate) return
+    handleFencePoint(autoSnapCandidate.lat, autoSnapCandidate.lng)
+    setAutoSnapCandidate(null)
+    setAutoPendingPoint(null)
+    setAutoState('idle')
+  }
+
+  // L'utilisateur préfère un poteau indépendant : on garde la position GPS captée
+  function autoCreateIndependentPost() {
+    if (!autoPendingPoint) return
+    handleFencePoint(autoPendingPoint.lat, autoPendingPoint.lng)
+    setAutoSnapCandidate(null)
+    setAutoPendingPoint(null)
+    setAutoState('idle')
+  }
+
+  // Confirme la fermeture du parc (retour au premier poteau)
+  function autoConfirmClose() {
+    handleFenceClose()
+    setAutoPendingPoint(null)
+    setAutoState('idle')
+  }
+
+  // L'utilisateur dit que ce n'est pas la fermeture → on ajoute quand même le point comme nouveau poteau
+  function autoDeclineClose() {
+    if (!autoPendingPoint) return
+    handleFencePoint(autoPendingPoint.lat, autoPendingPoint.lng)
+    setAutoPendingPoint(null)
+    setAutoState('idle')
+  }
+
+  // Cleanup forcé au démontage du composant pour éviter un watchPosition orphelin
+  useEffect(() => {
+    return () => { autoCancelCapture() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function handleFenceClose() {
     setFencePoints(pts => {
@@ -924,11 +1322,13 @@ export default function MapPage() {
     }
   }
 
-  function startFenceWithPreset(preset: FencePreset) {
+  function startFenceWithPreset(preset: FencePreset, method: 'manual' | 'auto' = 'manual') {
     setSelectedPreset(preset)
     setPresetSelectorVisible(false)
     setNewPresetForm(false)
+    setFenceMethod(method)
     setFenceMode(true)
+    setAutoState('idle')
   }
 
   function askDeletePreset(preset: FencePreset) {
@@ -1283,16 +1683,70 @@ export default function MapPage() {
     } finally { setActionBusy(false) }
   }
 
-  // Envoie un pointeur partagé sur la position cliquée (visible 30s aux autres)
+  // Envoie un pointeur partagé. L'expéditeur voit IMMÉDIATEMENT son pointeur en
+  // local (state séparé) sans attendre Firestore : ainsi même si le réseau est
+  // lent ou si le snapshot de /users prend du temps à propager, on a un retour
+  // visuel instantané et la fonctionnalité reste utilisable.
+  // Le Firestore write part en parallèle pour propager aux autres membres.
   async function sendPointer(lat: number, lng: number) {
     if (!user) return
     setPointerMode(false)
-    await updateDoc(doc(db, 'users', user.uid), {
-      livePointer: { lat, lng, updatedAt: Date.now() },
-    })
+    const at = Date.now()
+    // 1) Affichage local immédiat (ne dépend pas du round-trip Firestore)
+    setLocalPointer({ lat, lng, at })
+    setPointerToast(true)
+    setTimeout(() => setPointerToast(false), 2000)
+    // 2) Propagation aux autres clients via Firestore (fire-and-forget)
+    try {
+      console.log('[sendPointer] write', { lat, lng, uid: user.uid })
+      await updateDoc(doc(db, 'users', user.uid), {
+        livePointer: { lat, lng, updatedAt: at },
+      })
+      console.log('[sendPointer] write OK')
+    } catch (err) {
+      console.warn('[sendPointer] write FAILED', err)
+      const code = (err as { code?: string })?.code
+      if (code === 'permission-denied') {
+        alert("Pointer envoyé localement, mais ta session a expiré côté serveur. Reconnecte-toi pour que les autres le voient.")
+      }
+    }
+  }
+
+  /* Marque tous les animaux passés en argument comme "vus en bonne santé" maintenant.
+     Un seul writeBatch = 1 round-trip réseau. Les rules autorisent les aides à
+     mettre à jour ces 2 champs spécifiques (lastCheckedHealthy / lastCheckedHealthyBy). */
+  async function markAllHealthy(list: Animal[]) {
+    if (!user || list.length === 0) return
+    setSavingHealth(true)
+    const now = Date.now()
+    const batch = writeBatch(db)
+    for (const a of list) {
+      batch.update(doc(db, 'animals', a.id), {
+        lastCheckedHealthy:   now,
+        lastCheckedHealthyBy: user.uid,
+      })
+    }
+    try {
+      await batch.commit()
+    } catch (err) {
+      console.error('[markAllHealthy]', err)
+      const code = (err as { code?: string })?.code
+      alert(code === 'permission-denied'
+        ? 'Permissions insuffisantes : ta session a peut-être expiré.'
+        : 'Impossible d\'enregistrer le check. Réessayez.')
+    } finally {
+      setSavingHealth(false)
+    }
   }
 
   async function deletePin(pinId: string) {
+    // Gardefou : les utilisateurs temporaires n'ont pas le droit (rules Firestore).
+    // On bloque ici aussi pour éviter de lancer un batch qui échouera et générera
+    // une erreur "Missing or insufficient permissions" remontée à l'utilisateur.
+    if (isTemp) {
+      alert("Suppression réservée aux utilisateurs réguliers.")
+      return
+    }
     // 1. Fermer immédiatement le panneau (UX : pas d'attente perçue)
     setSelected(null)
     setConfirmDeletePin(false)
@@ -1317,7 +1771,12 @@ export default function MapPage() {
       await batch.commit()
     } catch (err) {
       console.error('[delete pin]', err)
-      alert('Erreur lors de la suppression. Réessayez quand la connexion est meilleure.')
+      const code = (err as { code?: string })?.code
+      if (code === 'permission-denied') {
+        alert("Permissions insuffisantes : ta session a peut-être expiré. Reconnecte-toi.")
+      } else {
+        alert('Erreur lors de la suppression. Réessayez quand la connexion est meilleure.')
+      }
     }
   }
 
@@ -1348,6 +1807,10 @@ export default function MapPage() {
     const batch = writeBatch(db)
     let hasChanges = false
 
+    // Date du déplacement : par défaut maintenant, mais l'utilisateur peut
+    // l'avoir saisie via le sélecteur "date du mouvement" (rétroactif).
+    const movedAtTs = pendingMoveDate ? dateInputToTsLocal(pendingMoveDate) : now
+
     for (const a of animals) {
       const shouldBe = pendingEnclosureAnimals.includes(a.id)
       const isCurrent = a.enclosureId === fenceId
@@ -1359,7 +1822,9 @@ export default function MapPage() {
           animalId: a.id, animalName: a.name, species: a.species,
           fromEnclosureId: a.enclosureId, fromEnclosureName: fromEnc?.name ?? null,
           toEnclosureId: fenceId,         toEnclosureName: targetEnclosure?.name ?? null,
-          movedAt: now, movedBy: user.uid,
+          movedAt: movedAtTs, movedBy: user.uid,
+          recordedAt: now,
+          ...(pendingMoveNote.trim() && { note: pendingMoveNote.trim() }),
         })
         hasChanges = true
       }
@@ -1370,7 +1835,9 @@ export default function MapPage() {
           animalId: a.id, animalName: a.name, species: a.species,
           fromEnclosureId: fenceId, fromEnclosureName: targetEnclosure?.name ?? null,
           toEnclosureId: null,      toEnclosureName: null,
-          movedAt: now, movedBy: user.uid,
+          movedAt: movedAtTs, movedBy: user.uid,
+          recordedAt: now,
+          ...(pendingMoveNote.trim() && { note: pendingMoveNote.trim() }),
         })
         hasChanges = true
       }
@@ -1494,7 +1961,9 @@ export default function MapPage() {
 
         <MapClickCapture
           addActive={addMode}
-          fenceActive={fenceMode && !fenceFormVisible}
+          // En mode auto, on désactive le tap-pour-ajouter : les points viennent du GPS,
+          // pas du toucher. Le toolbar bascule en bouton "Capturer ce poteau".
+          fenceActive={fenceMode && fenceMethod === 'manual' && !fenceFormVisible}
           scissorActive={scissorMode && !scissorFormVisible}
           scissorFenceId={scissorFenceId}
           scissorOverridePoints={scissorPoints}
@@ -1508,7 +1977,7 @@ export default function MapPage() {
           onSnapHover={setFenceSnapTarget}
           fencePins={fencePins}
           allPins={pins}
-          fenceFirstPoint={fenceMode && fencePoints.length >= 2 ? fencePoints[0] : null}
+          fenceFirstPoint={fenceMode && fenceMethod === 'manual' && fencePoints.length >= 2 ? fencePoints[0] : null}
         />
         <FlyHome trigger={flyTrigger} />
         <FlyToTarget target={flyTarget} />
@@ -1558,13 +2027,13 @@ export default function MapPage() {
         {fencePins
           .filter(pin => isFenceClosed(pin) && !(scissorMode && pin.id === scissorFenceId))
           .map(pin => {
-            const enc = animals.filter(a => a.enclosureId === pin.id)
+            const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
             const labelPos = pin.points ? insidePolygonCentroid(pin.points) : { lat: pin.lat, lng: pin.lng }
             return (
               <Marker
                 key={`label-${pin.id}`}
                 position={[labelPos.lat, labelPos.lng]}
-                icon={makeEnclosureLabelIcon(enc, mapZoom)}
+                icon={makeEnclosureLabelIcon(enc, mapZoom, customSpecies)}
                 interactive={false}
               />
             )
@@ -1643,6 +2112,57 @@ export default function MapPage() {
           </>
         )}
 
+        {/* ── Édition d'une clôture existante : aperçu live + markers draggables ── */}
+        {fenceEditPin && fenceEditPoints.length > 0 && (
+          <>
+            {isFenceClosed(fenceEditPin) ? (
+              <Polygon
+                positions={fenceEditPoints.map(p => [p.lat, p.lng] as [number, number])}
+                pathOptions={{
+                  color: fenceEditPin.presetColor ?? '#EA580C',
+                  weight: 3,
+                  dashArray: '6 4',
+                  opacity: 0.9,
+                  fillColor: fenceEditPin.presetColor ?? '#EA580C',
+                  fillOpacity: 0.1,
+                }}
+                interactive={false}
+              />
+            ) : (
+              <Polyline
+                positions={fenceEditPoints.map(p => [p.lat, p.lng] as [number, number])}
+                pathOptions={{
+                  color: fenceEditPin.presetColor ?? '#EA580C',
+                  weight: 3,
+                  dashArray: '6 4',
+                  opacity: 0.9,
+                }}
+                interactive={false}
+              />
+            )}
+            {fenceEditPoints.map((p, i) => {
+              // Si fermé : on cache le doublon final (qui colle au 1er)
+              const closed = isFenceClosed(fenceEditPin)
+              if (closed && i === fenceEditPoints.length - 1) return null
+              return (
+                <Marker
+                  key={`edit-${i}`}
+                  position={[p.lat, p.lng]}
+                  icon={i === 0 ? FENCE_FIRST_DOT_ICON : FENCE_DOT_ICON}
+                  draggable={true}
+                  eventHandlers={{
+                    dragend: (e) => {
+                      const ll = e.target.getLatLng()
+                      dragEditPoint(i, ll.lat, ll.lng)
+                    },
+                    dblclick: () => removeEditPoint(i),
+                  }}
+                />
+              )
+            })}
+          </>
+        )}
+
         {/* Indicateur snap (point magnétique) */}
         {fenceMode && fenceSnapTarget && (
           <Marker
@@ -1652,12 +2172,58 @@ export default function MapPage() {
           />
         )}
 
+        {/* Cercle d'incertitude pendant la capture GPS auto */}
+        {fenceMode && fenceMethod === 'auto' && autoState === 'capturing' && autoLiveCenter && (
+          <>
+            <Circle
+              center={[autoLiveCenter.lat, autoLiveCenter.lng]}
+              radius={Math.max(2, autoBestAccuracy ?? 15)}
+              pathOptions={{
+                color: '#1A4731', weight: 2, opacity: 0.7,
+                fillColor: '#1A4731', fillOpacity: 0.10,
+              }}
+              interactive={false}
+            />
+            <Marker
+              position={[autoLiveCenter.lat, autoLiveCenter.lng]}
+              icon={FENCE_DOT_ICON}
+              interactive={false}
+            />
+          </>
+        )}
+
+        {/* Marqueur draggable pendant la phase d'ajustement post-capture */}
+        {fenceMode && fenceMethod === 'auto' && autoState === 'adjust' && autoAdjustPoint && (
+          <>
+            <Circle
+              center={[autoAdjustPoint.lat, autoAdjustPoint.lng]}
+              radius={Math.max(2, autoAdjustPoint.accuracy)}
+              pathOptions={{
+                color: '#EA580C', weight: 2, opacity: 0.6, dashArray: '5 4',
+                fillColor: '#EA580C', fillOpacity: 0.08,
+              }}
+              interactive={false}
+            />
+            <Marker
+              position={[autoAdjustPoint.lat, autoAdjustPoint.lng]}
+              icon={FENCE_FIRST_DOT_ICON}
+              draggable={true}
+              eventHandlers={{
+                dragend: (e) => {
+                  const ll = e.target.getLatLng()
+                  autoOnAdjustDrag(ll.lat, ll.lng)
+                },
+              }}
+            />
+          </>
+        )}
+
         {/* Épingles standard — non-interactives, sélection via proximité */}
         {nonFencePins.map(pin => (
           <Marker
             key={pin.id}
             position={[pin.lat, pin.lng]}
-            icon={makeDivIcon(pin.type, overduePins.has(pin.id), (pin.photoCount ?? 0) > 0)}
+            icon={makeDivIcon(pin.type, overduePins.has(pin.id), (pin.photoCount ?? 0) > 0, pin.waterStatus)}
             interactive={false}
           />
         ))}
@@ -1690,11 +2256,13 @@ export default function MapPage() {
             />
           ))}
 
-        {/* Pointeurs partagés (auto-fade après 30s, on cache aussi le sien) */}
+        {/* Pointeurs partagés des AUTRES utilisateurs (depuis Firestore).
+            Le sien à soi est rendu séparément via localPointer (cf. en dessous)
+            pour avoir un retour visuel IMMÉDIAT sans attendre le round-trip Firestore. */}
         {users
           .filter(u => u.uid !== user?.uid
             && u.livePointer
-            && (now - (u.livePointer.updatedAt ?? 0)) < 30_000)
+            && (now - (u.livePointer.updatedAt ?? 0)) < 60_000)
           .map(u => (
             <Marker
               key={`ptr-${u.uid}-${u.livePointer!.updatedAt}`}
@@ -1704,6 +2272,17 @@ export default function MapPage() {
               zIndexOffset={600}
             />
           ))}
+
+        {/* Pointeur LOCAL de l'expéditeur (affichage immédiat, indépendant de Firestore) */}
+        {localPointer && (now - localPointer.at) < 60_000 && (
+          <Marker
+            key={`ptr-local-${localPointer.at}`}
+            position={[localPointer.lat, localPointer.lng]}
+            icon={makePointerIcon(profile?.color || '#2D6A4F', `${profile?.displayName ?? 'toi'} (toi)`)}
+            interactive={false}
+            zIndexOffset={600}
+          />
+        )}
       </MapContainer>
 
       {/* ── Bandeau mode pointer (curseur partagé) ── */}
@@ -1715,6 +2294,15 @@ export default function MapPage() {
           <button onClick={() => setPointerMode(false)} className="ml-1 opacity-70 active:opacity-100">
             <X size={16} />
           </button>
+        </div>
+      )}
+
+      {/* ── Toast confirmation envoi pointer (2s) ── */}
+      {pointerToast && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1001]
+                        bg-meadow text-white text-sm font-semibold px-4 py-2 rounded-2xl
+                        shadow-lg flex items-center gap-2 animate-fade-in">
+          <Check size={14} /> Pointer envoyé à la famille
         </div>
       )}
 
@@ -1748,8 +2336,8 @@ export default function MapPage() {
         </div>
       )}
 
-      {/* ── Barre d'outils clôture ── */}
-      {fenceMode && !fenceFormVisible && (
+      {/* ── Barre d'outils clôture (mode manuel) ── */}
+      {fenceMode && fenceMethod === 'manual' && !fenceFormVisible && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000]
                         text-white rounded-2xl shadow-xl
                         px-3 py-2.5 flex items-center gap-2 max-w-[92vw]"
@@ -1788,6 +2376,258 @@ export default function MapPage() {
           >
             <X size={14} />
           </button>
+        </div>
+      )}
+
+      {/* ── Barre d'outils clôture (mode auto GPS) ── */}
+      {fenceMode && fenceMethod === 'auto' && !fenceFormVisible && autoState !== 'snap-prompt' && autoState !== 'close-prompt' && autoState !== 'adjust' && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] w-[92vw] max-w-md
+                        text-white rounded-2xl shadow-xl px-4 py-3"
+             style={{ backgroundColor: selectedPreset?.color ?? '#1A4731' }}>
+          {autoState === 'idle' ? (
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-bold leading-tight">
+                  📍 Mode auto
+                  {fencePoints.length > 0 && (
+                    <span className="ml-1 text-xs font-semibold opacity-90">· {fencePoints.length} poteau{fencePoints.length > 1 ? 'x' : ''}</span>
+                  )}
+                </p>
+                <button onClick={cancelFence} className="p-1.5 rounded-lg bg-white/20 active:bg-white/40">
+                  <X size={14} />
+                </button>
+              </div>
+              <p className="text-[11px] opacity-90 leading-snug">
+                {fencePoints.length === 0
+                  ? 'Place le téléphone sur le 1ᵉʳ poteau, puis capture.'
+                  : 'Déplace-toi au poteau suivant, puis capture. Si tu reviens au 1ᵉʳ, on te proposera de fermer le parc.'}
+              </p>
+              <button
+                onClick={autoStartCapture}
+                className="w-full py-3 rounded-xl bg-white text-charcoal text-sm font-bold
+                           active:scale-95 transition-all flex items-center justify-center gap-2"
+              >
+                📍 Capturer ce poteau ({AUTO_SAMPLE_SECONDS}s)
+              </button>
+              {fencePoints.length > 0 && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={undoFencePoint}
+                    className="flex-1 py-2 rounded-lg bg-white/20 text-xs font-semibold active:bg-white/30
+                               flex items-center justify-center gap-1"
+                    title="Signaler une erreur sur le dernier poteau"
+                  >
+                    <Undo2 size={12} /> Signaler erreur
+                  </button>
+                  {fencePoints.length >= 3 && (
+                    <button
+                      onClick={() => { handleFenceClose() }}
+                      className="flex-1 py-2 rounded-lg bg-white text-charcoal text-xs font-bold active:scale-95"
+                    >
+                      Fermer le parc
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : autoState === 'capturing' ? (
+            <div className="space-y-2.5 text-center">
+              <p className="text-sm font-bold">📡 Capture GPS en cours…</p>
+              <div className="text-4xl font-bold tabular-nums">{autoSecondsLeft.toFixed(1)}s</div>
+              <div className="h-1.5 bg-white/20 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-white transition-all duration-200"
+                  style={{ width: `${100 * (1 - autoSecondsLeft / AUTO_SAMPLE_SECONDS)}%` }}
+                />
+              </div>
+              <p className="text-[11px] opacity-90">
+                {autoSampleCount} mesure{autoSampleCount > 1 ? 's' : ''}
+                {autoBestAccuracy !== null && ` · meilleure précision : ${Math.round(autoBestAccuracy)} m`}
+              </p>
+              {autoSampleCount > AUTO_WARMUP_SAMPLES && (
+                <p className="text-[10px] opacity-80 italic">
+                  Cercle vert sur la carte = position estimée live
+                </p>
+              )}
+              {autoSampleCount <= AUTO_WARMUP_SAMPLES && (
+                <p className="text-[10px] opacity-80 italic">
+                  ⏳ Warm-up… (on jette les {AUTO_WARMUP_SAMPLES} 1ères mesures, souvent en cache)
+                </p>
+              )}
+              <div className="flex gap-2">
+                {/* Permet à l'utilisateur de finir tôt si la précision est déjà excellente */}
+                {autoBestAccuracy !== null && autoBestAccuracy < 5 && autoSampleCount > AUTO_WARMUP_SAMPLES + 3 && (
+                  <button
+                    onClick={autoFinishEarly}
+                    className="flex-1 py-2 rounded-lg bg-white text-charcoal text-xs font-bold active:scale-95"
+                  >
+                    ✓ Stop, précision OK
+                  </button>
+                )}
+                <button
+                  onClick={autoCancelCapture}
+                  className="flex-1 py-2 rounded-lg bg-white/20 text-xs font-semibold active:bg-white/30"
+                >
+                  Annuler
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* ── Phase d'ajustement (drag du marqueur sur la photo aérienne) ── */}
+      {fenceMode && fenceMethod === 'auto' && autoState === 'adjust' && autoAdjustPoint && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] w-[92vw] max-w-md
+                        text-white rounded-2xl shadow-xl px-4 py-3 space-y-2.5"
+             style={{ backgroundColor: '#1A4731' }}>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-bold">🎯 Ajuste si nécessaire</p>
+            <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full">
+              ±{autoAdjustPoint.accuracy} m
+            </span>
+          </div>
+          <p className="text-[11px] opacity-90 leading-snug">
+            Position GPS captée. Si elle ne tombe pas pile sur le poteau réel sur la photo aérienne
+            (décalage IGN possible en zone rurale), <strong>glisse le point orange</strong> sur la carte
+            pour le caler. Sinon valide directement.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={autoValidateAdjusted}
+              className="flex-1 py-2.5 rounded-xl bg-white text-charcoal text-sm font-bold active:scale-95"
+            >
+              ✓ Valider ce poteau
+            </button>
+            <button
+              onClick={autoCancelAdjust}
+              className="px-3 py-2.5 rounded-xl bg-white/20 text-xs font-semibold active:bg-white/30"
+            >
+              Annuler
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Barre d'outils édition d'une clôture existante ── */}
+      {fenceEditPin && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] w-[92vw] max-w-md
+                        text-white rounded-2xl shadow-xl px-4 py-3 space-y-2.5"
+             style={{ backgroundColor: fenceEditPin.presetColor ?? '#EA580C' }}>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-bold leading-tight">
+              ✏️ Édition — {fenceEditPin.name}
+              <span className="ml-1 text-xs font-semibold opacity-90">
+                · {fenceEditPoints.length} poteau{fenceEditPoints.length > 1 ? 'x' : ''}
+              </span>
+            </p>
+            <button
+              onClick={cancelEditFence}
+              className="p-1.5 rounded-lg bg-white/20 active:bg-white/40"
+              aria-label="Annuler l'édition"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <p className="text-[11px] opacity-90 leading-snug">
+            <strong>Glisse un poteau</strong> pour le repositionner.
+            <strong> Double-tap</strong> sur un poteau pour le supprimer.
+            Les changements ne sont pris en compte qu'au «&nbsp;Valider&nbsp;».
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={saveEditFence}
+              disabled={fenceEditSaving}
+              className="flex-1 py-2.5 rounded-xl bg-white text-charcoal text-sm font-bold
+                         active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
+            >
+              <Check size={14} /> {fenceEditSaving ? '…' : 'Valider le nouveau tracé'}
+            </button>
+            <button
+              onClick={cancelEditFence}
+              className="px-3 py-2.5 rounded-xl bg-white/20 text-xs font-semibold active:bg-white/30"
+            >
+              Annuler
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Prompt : snap vers un poteau existant ── */}
+      {autoState === 'snap-prompt' && autoSnapCandidate && autoPendingPoint && (
+        <div className="fixed inset-0 z-[1500] bg-charcoal/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+          <div className="bg-card rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-3">
+            <div className="flex items-start gap-2">
+              <span className="text-2xl">🔗</span>
+              <div>
+                <p className="text-sm font-bold text-charcoal">Poteau déjà présent à proximité</p>
+                <p className="text-xs text-muted mt-1">
+                  Tu es à moins de {AUTO_SNAP_M} m d'un poteau de «&nbsp;{autoSnapCandidate.sourceName}&nbsp;».
+                  Veux-tu relier les deux clôtures à ce poteau, ou créer un poteau indépendant&nbsp;?
+                </p>
+              </div>
+            </div>
+            <div className="space-y-2 pt-1">
+              <button
+                onClick={autoLinkToExisting}
+                className="w-full py-3 rounded-xl bg-forest text-white text-sm font-bold active:scale-95
+                           flex items-center justify-center gap-2"
+              >
+                🔗 Relier au poteau existant (recommandé)
+              </button>
+              <button
+                onClick={autoCreateIndependentPost}
+                className="w-full py-3 rounded-xl border border-border bg-cream text-charcoal text-sm font-semibold active:bg-card"
+              >
+                Créer un poteau indépendant ici
+              </button>
+              <button
+                onClick={() => { setAutoSnapCandidate(null); setAutoPendingPoint(null); setAutoState('idle') }}
+                className="w-full py-2 rounded-xl text-xs text-muted active:bg-cream"
+              >
+                Annuler ce poteau
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Prompt : retour au premier poteau, proposer la fermeture ── */}
+      {autoState === 'close-prompt' && autoPendingPoint && (
+        <div className="fixed inset-0 z-[1500] bg-charcoal/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+          <div className="bg-card rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-3">
+            <div className="flex items-start gap-2">
+              <span className="text-2xl">🎯</span>
+              <div>
+                <p className="text-sm font-bold text-charcoal">Retour au premier poteau ?</p>
+                <p className="text-xs text-muted mt-1">
+                  Tu es à moins de {AUTO_CLOSE_M} m du poteau de départ. Si tu as fait le tour du parc,
+                  on peut le fermer maintenant.
+                </p>
+              </div>
+            </div>
+            <div className="space-y-2 pt-1">
+              <button
+                onClick={autoConfirmClose}
+                className="w-full py-3 rounded-xl bg-forest text-white text-sm font-bold active:scale-95
+                           flex items-center justify-center gap-2"
+              >
+                ✓ Oui, fermer le parc
+              </button>
+              <button
+                onClick={autoDeclineClose}
+                className="w-full py-3 rounded-xl border border-border bg-cream text-charcoal text-sm font-semibold active:bg-card"
+              >
+                Non, ajouter un poteau ici quand même
+              </button>
+              <button
+                onClick={() => { setAutoPendingPoint(null); setAutoState('idle') }}
+                className="w-full py-2 rounded-xl text-xs text-muted active:bg-cream"
+              >
+                Annuler ce poteau
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1955,10 +2795,14 @@ export default function MapPage() {
             </span>
           </button>
         )}
-        {/* Badge animaux non placés */}
+        {/* Badge animaux non placés — couleurs explicites + bordure pour rester
+            lisible aussi en dark mode au-dessus d'une photo aérienne sombre. */}
         {animals.filter(a => a.enclosureId === null).length > 0 && !addMode && !fenceMode && !scissorMode && (
-          <div className="bg-sun/90 backdrop-blur-sm rounded-xl px-3 py-1.5 shadow-md">
-            <span className="text-xs font-semibold text-earth">
+          <div
+            className="rounded-xl px-3 py-1.5 shadow-md border"
+            style={{ backgroundColor: '#FACC15', borderColor: '#92400E' }}
+          >
+            <span className="text-xs font-bold" style={{ color: '#3B2106' }}>
               ⚠ {animals.filter(a => a.enclosureId === null).length} non placé{animals.filter(a => a.enclosureId === null).length > 1 ? 's' : ''}
             </span>
           </div>
@@ -2018,19 +2862,25 @@ export default function MapPage() {
 
                       return (
                         <div key={animal.id} className="rounded-xl border border-border bg-cream overflow-hidden">
-                          {/* En-tête animal */}
+                          {/* En-tête animal — clic sur le nom = fiche complète */}
                           <div className="flex items-center gap-3 px-4 py-3">
-                            <span className="text-2xl flex-shrink-0">
-                              {animal.species === 'horse' ? '🐎' : '🐴'}
-                            </span>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-bold text-charcoal">{animal.name}</p>
-                              <p className="text-xs text-muted">
-                                {currentFence
-                                  ? <span className="text-forest font-semibold">📍 {currentFence.name}</span>
-                                  : <span className="text-sun font-semibold">⚠ Non placé</span>}
-                              </p>
-                            </div>
+                            <button
+                              onClick={() => { setAnimalPanelOpen(false); navigate(`/animal/${animal.id}`) }}
+                              className="flex items-center gap-3 flex-1 min-w-0 text-left active:opacity-70 transition-opacity"
+                              title="Voir la fiche complète"
+                            >
+                              <span className="text-2xl flex-shrink-0">
+                                {getSpeciesInfo(animal.species, customSpecies).emoji}
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-bold text-charcoal">{animal.name}</p>
+                                <p className="text-xs text-muted">
+                                  {currentFence
+                                    ? <span className="text-forest font-semibold">📍 {currentFence.name}</span>
+                                    : <span className="text-sun font-semibold">⚠ Non placé</span>}
+                                </p>
+                              </div>
+                            </button>
                             <button
                               onClick={() => setAnimalPanelEditing(isEditing ? null : animal.id)}
                               className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-colors ${
@@ -2523,14 +3373,31 @@ export default function MapPage() {
                   <Plus size={16} /> Nouveau type de fil
                 </button>
 
-                <button
-                  onClick={() => selectedPreset && startFenceWithPreset(selectedPreset)}
-                  disabled={!selectedPreset}
-                  className="w-full py-4 rounded-xl font-semibold text-white text-base bg-orange-500
-                             active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-lg"
-                >
-                  Commencer à dessiner →
-                </button>
+                <div className="space-y-2">
+                  <button
+                    onClick={() => selectedPreset && startFenceWithPreset(selectedPreset, 'manual')}
+                    disabled={!selectedPreset}
+                    className="w-full py-3.5 rounded-xl font-semibold text-white text-base bg-orange-500
+                               active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-lg
+                               flex items-center justify-center gap-2"
+                  >
+                    🖐️ Mode manuel · placer sur la carte
+                  </button>
+                  <button
+                    onClick={() => selectedPreset && startFenceWithPreset(selectedPreset, 'auto')}
+                    disabled={!selectedPreset}
+                    className="w-full py-3.5 rounded-xl font-semibold text-white text-base bg-forest
+                               active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-lg
+                               flex items-center justify-center gap-2"
+                  >
+                    📍 Mode auto · poteau-par-poteau (GPS)
+                  </button>
+                  <p className="text-[11px] text-muted/80 text-center pt-1 leading-relaxed">
+                    En auto, marche jusqu'à chaque poteau, pose le téléphone dessus,
+                    et appuie sur «&nbsp;Capturer&nbsp;». L'app utilise le GPS haute précision
+                    pendant {AUTO_SAMPLE_SECONDS}s pour fixer le poteau au mètre près.
+                  </p>
+                </div>
               </>
             ) : (
               <div className="space-y-4">
@@ -2795,6 +3662,18 @@ export default function MapPage() {
                   </span>
                 </div>
 
+                {/* Bouton : passer en mode édition du tracé (drag des poteaux) */}
+                {!isTemp && (
+                  <button
+                    onClick={() => startEditFence(selected)}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl
+                               bg-forest/10 border border-forest/30 text-forest text-sm font-bold
+                               active:bg-forest/20 transition-colors"
+                  >
+                    <Pencil size={14} /> Modifier le tracé (drag des poteaux)
+                  </button>
+                )}
+
                 {/* Bouton restaurer fil unique (uniquement pour enclos découpé) */}
                 {selected.fillOnly && isFenceClosed(selected) && (
                   <button
@@ -2825,6 +3704,8 @@ export default function MapPage() {
                         <button
                           onClick={() => {
                             setPendingEnclosureAnimals(animals.filter(a => a.enclosureId === selected.id).map(a => a.id))
+                            setPendingMoveDate(tsToDateInputLocal())
+                            setPendingMoveNote('')
                             setEditEnclosureAnimals(true)
                           }}
                           className="text-xs text-forest font-bold px-3 py-1.5 rounded-lg bg-forest/10 active:bg-forest/20 transition-colors"
@@ -2837,13 +3718,15 @@ export default function MapPage() {
                     <div className="p-3">
                       {!editEnclosureAnimals ? (
                         (() => {
-                          const enc = animals.filter(a => a.enclosureId === selected.id)
+                          const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === selected.id))
                           return enc.length === 0 ? (
                             <div className="text-center py-3">
                               <p className="text-sm text-muted italic mb-2">Aucun animal placé ici</p>
                               <button
                                 onClick={() => {
                                   setPendingEnclosureAnimals([])
+                                  setPendingMoveDate(tsToDateInputLocal())
+                                  setPendingMoveNote('')
                                   setEditEnclosureAnimals(true)
                                 }}
                                 className="px-4 py-2 rounded-xl bg-forest text-white text-sm font-bold active:opacity-80 transition-opacity"
@@ -2852,13 +3735,45 @@ export default function MapPage() {
                               </button>
                             </div>
                           ) : (
-                            <div className="flex flex-wrap gap-1.5">
-                              {enc.map(a => (
-                                <span key={a.id}
-                                      className="px-2.5 py-1.5 rounded-xl bg-forest/10 border border-forest/30 text-forest text-xs font-semibold flex items-center gap-1">
-                                  {a.species === 'horse' ? '🐎' : '🐴'} {a.name}
-                                </span>
-                              ))}
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap gap-1.5">
+                                {enc.map(a => {
+                                  const f = healthFreshness(a.lastCheckedHealthy)
+                                  const seenBy = a.lastCheckedHealthyBy
+                                    ? (users.find(u => u.uid === a.lastCheckedHealthyBy)?.displayName ?? '?')
+                                    : null
+                                  const title = seenBy
+                                    ? `${formatAgo(a.lastCheckedHealthy)} (par ${seenBy}) — touchez pour la fiche`
+                                    : `${formatAgo(a.lastCheckedHealthy)} — touchez pour la fiche`
+                                  return (
+                                    <button key={a.id}
+                                          title={title}
+                                          onClick={() => navigate(`/animal/${a.id}`)}
+                                          className="px-2.5 py-1.5 rounded-xl bg-forest/10 border border-forest/30 text-forest text-xs font-semibold flex items-center gap-1.5 active:bg-forest/20 transition-colors">
+                                      <span className={`w-2 h-2 rounded-full ${healthDotClass(f)}`} aria-hidden />
+                                      {getSpeciesInfo(a.species, customSpecies).emoji} {a.name}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                              <button
+                                onClick={() => markAllHealthy(enc)}
+                                disabled={savingHealth || !user}
+                                className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl
+                                           bg-meadow/15 border border-meadow/40 text-meadow text-xs font-bold
+                                           active:bg-meadow/25 transition-colors disabled:opacity-50"
+                              >
+                                <Check size={13} />
+                                {savingHealth ? 'Enregistrement…' : `Tous vus en bonne santé (${enc.length})`}
+                              </button>
+                              {enc.some(a => a.lastCheckedHealthy) && (
+                                <p className="text-[10px] text-muted/70 text-center">
+                                  Dernier check : {(() => {
+                                    const ts = Math.max(...enc.map(a => a.lastCheckedHealthy ?? 0))
+                                    return ts ? formatAgo(ts) : '—'
+                                  })()}
+                                </p>
+                              )}
                             </div>
                           )
                         })()
@@ -2874,7 +3789,7 @@ export default function MapPage() {
                             </p>
                           ) : (
                             <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
-                              {animals.map(a => {
+                              {sortAnimalsByName(animals).map(a => {
                                 const isSelected = pendingEnclosureAnimals.includes(a.id)
                                 const isElsewhere = a.enclosureId && a.enclosureId !== selected.id
                                 return (
@@ -2890,7 +3805,7 @@ export default function MapPage() {
                                         : 'border-border text-muted bg-white'
                                     }`}
                                   >
-                                    {a.species === 'horse' ? '🐎' : '🐴'} {a.name}
+                                    {getSpeciesInfo(a.species, customSpecies).emoji} {a.name}
                                     {isElsewhere && !isSelected && (
                                       <span className="text-muted/50 text-[10px]">↗ autre enclos</span>
                                     )}
@@ -2899,6 +3814,33 @@ export default function MapPage() {
                               })}
                             </div>
                           )}
+                          {/* Date + note du mouvement — utile pour reconstituer un calendrier
+                              de pâturage PAC (déclaration des dates réelles de présence). */}
+                          <div className="bg-cream/60 rounded-xl p-2.5 space-y-2 border border-border/50">
+                            <div>
+                              <label className="block text-[10px] font-bold text-muted uppercase tracking-wider mb-1">
+                                Date du mouvement
+                              </label>
+                              <input
+                                type="date"
+                                value={pendingMoveDate || tsToDateInputLocal()}
+                                onChange={e => setPendingMoveDate(e.target.value)}
+                                className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
+                              />
+                              <p className="text-[9px] text-muted mt-0.5 leading-tight">
+                                Par défaut aujourd'hui. Mettre une date passée pour saisir
+                                un mouvement rétroactif (calendrier PAC).
+                              </p>
+                            </div>
+                            <input
+                              type="text"
+                              value={pendingMoveNote}
+                              onChange={e => setPendingMoveNote(e.target.value)}
+                              placeholder="Note (optionnelle) — ex: rotation, transhumance…"
+                              className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
+                            />
+                          </div>
+
                           <div className="flex gap-2 pt-1">
                             <button
                               onClick={() => saveEnclosureAnimals(selected.id)}
@@ -2931,6 +3873,15 @@ export default function MapPage() {
                 {/* Historique des rotations (uniquement pour enclos fermés) */}
                 {isFenceClosed(selected) && (
                   <div className="rounded-xl bg-cream border border-border/40 overflow-hidden">
+                    <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/40">
+                      <span className="text-xs font-semibold text-muted uppercase tracking-wider flex items-center gap-1.5">
+                        🌿 Pâturage
+                      </span>
+                      <button onClick={() => navigate('/grazing')}
+                              className="text-[10px] font-bold text-forest bg-forest/10 px-2 py-1 rounded-md active:bg-forest/20">
+                        Calendrier complet →
+                      </button>
+                    </div>
                     <button
                       onClick={() => setHistoryVisible(v => !v)}
                       className="w-full px-3 py-2.5 flex items-center justify-between active:bg-border/30 transition-colors"
@@ -2956,7 +3907,7 @@ export default function MapPage() {
                                 <li key={m.id}
                                     className={`text-xs leading-snug px-2.5 py-1.5 rounded-lg ${cameIn ? 'bg-meadow/10' : 'bg-danger/5'}`}>
                                   <span className="font-bold">
-                                    {m.species === 'horse' ? '🐎' : '🐴'} {m.animalName}
+                                    {getSpeciesInfo(m.species, customSpecies).emoji} {m.animalName}
                                   </span>
                                   {' '}
                                   {cameIn
@@ -3224,7 +4175,7 @@ export default function MapPage() {
               GPS : {selected.lat.toFixed(5)}, {selected.lng.toFixed(5)}
             </p>
 
-            {!confirmDeletePin ? (
+            {isTemp ? null : !confirmDeletePin ? (
               <button onClick={() => setConfirmDeletePin(true)}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-xl
                            border border-danger/30 text-danger text-sm font-semibold
@@ -3320,6 +4271,9 @@ export default function MapPage() {
           </div>
         </div>
       )}
+
+      {/* Fiche détaillée : ouverte via navigate('/animal/:id') depuis chip
+          enclos / panneau placement. Voir AnimalDetail.tsx. */}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, deleteDoc, doc, onSnapshot, orderBy, query } from 'firebase/firestore'
-import { Bug, ChevronDown, ChevronRight, Copy, ExternalLink, Trash2, RefreshCw, Download, Trash } from 'lucide-react'
+import { Bug, ChevronDown, ChevronRight, Copy, ExternalLink, Trash2, Download, Trash } from 'lucide-react'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import type { ConsoleEntry, ActionEntry } from '../services/bugReporter'
@@ -160,7 +160,10 @@ export default function Bugs() {
     manual: bugs.filter(b => b.source === 'manual').length,
   }), [bugs])
 
-  /* Export bulk : tous les rapports filtrés en un seul markdown + JSON. */
+  /* Export bulk : tous les rapports filtrés en un seul markdown + JSON.
+     JSON → toujours un téléchargement de fichier (le presse-papier perd la structure
+     et n'a aucun intérêt). MD → téléchargement aussi par défaut ; on garde le
+     bouton "Tout copier (MD)" séparé pour le presse-papier. */
   async function exportAll(format: 'md' | 'json') {
     if (filtered.length === 0) {
       setExportNotice('Rien à exporter.')
@@ -169,35 +172,58 @@ export default function Bugs() {
     }
     let content: string
     let filename: string
+    let mime: string
     if (format === 'md') {
-      content = filtered.map((b, i) => `${i === 0 ? '' : '\n---\n\n'}${buildMarkdown(b)}`).join('')
+      content  = filtered.map((b, i) => `${i === 0 ? '' : '\n---\n\n'}${buildMarkdown(b)}`).join('')
       filename = `ferme-bugs-${new Date().toISOString().slice(0, 10)}.md`
+      mime     = 'text/markdown'
     } else {
-      content = JSON.stringify(filtered.map(b => ({
+      content  = JSON.stringify(filtered.map(b => ({
         ...b,
         // Sérialise le createdAt Firestore en timestamp millis simple
         createdAt: tsOf(b),
       })), null, 2)
       filename = `ferme-bugs-${new Date().toISOString().slice(0, 10)}.json`
+      mime     = 'application/json'
     }
-    // Tentative 1 : presse-papier (utile sur mobile pour coller dans une discussion)
+    try {
+      const blob = new Blob([content], { type: mime })
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      // revoke après un délai : sur certains navigateurs Android le téléchargement
+      // est encore en cours quand l'event handler retourne
+      setTimeout(() => URL.revokeObjectURL(url), 1500)
+      setExportNotice(`✓ Téléchargement : ${filename}`)
+    } catch {
+      // Fallback presse-papier si le download ne passe pas (rare ; ex. webview très restreinte)
+      try {
+        await navigator.clipboard.writeText(content)
+        setExportNotice(`✓ Copié dans le presse-papier (${filtered.length} rapport(s))`)
+      } catch {
+        setExportNotice('Échec export.')
+      }
+    }
+    setTimeout(() => setExportNotice(null), 3500)
+  }
+
+  /* Copie MD pure (le bouton "Tout copier (MD)" reste utile pour coller dans un chat) */
+  async function copyAllMd() {
+    if (filtered.length === 0) {
+      setExportNotice('Rien à copier.')
+      setTimeout(() => setExportNotice(null), 2000)
+      return
+    }
+    const content = filtered.map((b, i) => `${i === 0 ? '' : '\n---\n\n'}${buildMarkdown(b)}`).join('')
     try {
       await navigator.clipboard.writeText(content)
       setExportNotice(`✓ ${filtered.length} rapport(s) copiés dans le presse-papier`)
     } catch {
-      // Tentative 2 : téléchargement de fichier
-      try {
-        const blob = new Blob([content], { type: format === 'md' ? 'text/markdown' : 'application/json' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = filename
-        a.click()
-        URL.revokeObjectURL(url)
-        setExportNotice(`✓ Téléchargement : ${filename}`)
-      } catch {
-        setExportNotice('Échec export.')
-      }
+      setExportNotice('Presse-papier indisponible, utilise Export JSON.')
     }
     setTimeout(() => setExportNotice(null), 3500)
   }
@@ -249,7 +275,7 @@ export default function Bugs() {
       {/* Actions globales : exporter / supprimer tout */}
       <div className="px-4 mt-3 flex gap-2">
         <button
-          onClick={() => exportAll('md')}
+          onClick={copyAllMd}
           disabled={filtered.length === 0}
           className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl
                      border border-border text-xs font-semibold text-charcoal active:bg-cream
@@ -444,14 +470,9 @@ export default function Bugs() {
       <div className="px-4 mt-6 text-center">
         <p className="text-[11px] text-muted/60 leading-relaxed">
           Bouton 🐞 flottant en bas à droite pour signaler un bug.<br />
-          Les erreurs JavaScript non rattrapées sont capturées automatiquement.
+          Les erreurs JavaScript non rattrapées sont capturées automatiquement.<br />
+          La liste se rafraîchit toute seule (temps réel).
         </p>
-        <button
-          onClick={() => window.location.reload()}
-          className="mt-3 inline-flex items-center gap-1.5 text-xs text-forest/80 active:text-forest"
-        >
-          <RefreshCw size={12} /> Rafraîchir
-        </button>
         {!user && <p className="text-xs text-muted mt-2">Connecte-toi pour rapporter un bug.</p>}
       </div>
     </div>

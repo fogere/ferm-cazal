@@ -127,6 +127,70 @@ export const checkReminders = onRequest(
         }
       }
 
+      // ── Tâches assignées avec heure précise (toute priorité) ──
+      // Quand un super admin crée une tâche avec hasDueTime=true et assignedTo,
+      // on envoie une notif dès que dueDate est atteinte, une seule fois (reminderSentAt).
+      const timedSnap = await db
+        .collection('tasks')
+        .where('completed', '==', false)
+        .where('hasDueTime', '==', true)
+        .where('dueDate', '<=', now)
+        .get()
+
+      for (const taskDoc of timedSnap.docs) {
+        const task = taskDoc.data()
+        // Garde-fou : on ne notifie pas pour des tâches passées de plus de 6h
+        // (évite de spammer si quelqu'un a backfillé une vieille tâche)
+        if (now - (task.dueDate ?? 0) > 6 * 3_600_000) {
+          if (!task.reminderSentAt && !task.broadcastNotifiedAt) {
+            await taskDoc.ref.update({ reminderSentAt: now, broadcastNotifiedAt: now })
+          }
+          continue
+        }
+
+        const dt = new Date(task.dueDate)
+        const hh = String(dt.getHours()).padStart(2, '0')
+        const mm = String(dt.getMinutes()).padStart(2, '0')
+
+        // Mode broadcast : notif à TOUS les uid ayant un fcmToken
+        if (task.broadcast) {
+          if (task.broadcastNotifiedAt) continue
+          try {
+            const usersSnap = await db.collection('users').get()
+            for (const u of usersSnap.docs) {
+              const ud = u.data()
+              if (!ud.fcmToken) continue
+              await sendToUser(
+                u.id,
+                '📣 Tâche du jour (équipe)',
+                `"${task.title}" — prévue à ${hh}:${mm}${task.zone ? ` · ${task.zone}` : ''}`,
+                { type: 'task_broadcast', taskId: taskDoc.id, severity: task.priority === 'urgent' ? 'urgent' : 'info' },
+              )
+            }
+            await taskDoc.ref.update({ broadcastNotifiedAt: now })
+          } catch {
+            stats.errors++
+          }
+          continue
+        }
+
+        // Mode classique : notification à la personne assignée
+        if (!task.assignedTo) continue
+        if (task.reminderSentAt) continue
+
+        try {
+          await sendToUser(
+            task.assignedTo,
+            '🔔 Tâche du jour',
+            `"${task.title}" — prévue à ${hh}:${mm}${task.zone ? ` · ${task.zone}` : ''}`,
+            { type: 'task_due', taskId: taskDoc.id, severity: task.priority === 'urgent' ? 'urgent' : 'info' }
+          )
+          await taskDoc.ref.update({ reminderSentAt: now })
+        } catch {
+          stats.errors++
+        }
+      }
+
     } catch (err) {
       console.error('checkReminders fatal error:', err)
       res.status(500).json({ error: String(err) })

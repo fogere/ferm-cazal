@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
-import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching'
-import { registerRoute } from 'workbox-routing'
+import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching'
+import { registerRoute, NavigationRoute } from 'workbox-routing'
 import { CacheFirst, NetworkFirst } from 'workbox-strategies'
 import { ExpirationPlugin } from 'workbox-expiration'
 import { CacheableResponsePlugin } from 'workbox-cacheable-response'
@@ -37,16 +37,52 @@ onBackgroundMessage(messaging, (payload) => {
   const { title, body, icon } = payload.notification ?? {}
   self.registration.showNotification(title ?? 'Ferme Stinglhamber', {
     body:  body ?? '',
-    icon:  icon ?? '/icons/farm-icon.svg',
-    badge: '/icons/farm-icon.svg',
+    icon:  icon ?? '/icons/farm-icon-192.png',
+    badge: '/icons/farm-icon-192.png',
     vibrate: [200, 100, 200],
     requireInteraction: payload.data?.['severity'] === 'urgent',
+    data: payload.data ?? {},
   } as NotificationOptions)
+})
+
+// Click sur une notification (FCM background OU notif locale du geofence) :
+// route vers l'URL fournie dans `data.url`, en focalisant un onglet existant
+// si possible plutôt qu'en en ouvrant un nouveau.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const target = (event.notification.data as { url?: string } | undefined)?.url ?? '/dashboard'
+  event.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    for (const client of all) {
+      // L'origine est forcément le même domaine (Web Push limité same-origin)
+      if ('focus' in client) {
+        await (client as WindowClient).focus()
+        ;(client as WindowClient).navigate(target).catch(() => {})
+        return
+      }
+    }
+    if (self.clients.openWindow) await self.clients.openWindow(target)
+  })())
 })
 
 // ── Précache du shell applicatif (JS, CSS, HTML, assets) ──
 precacheAndRoute(self.__WB_MANIFEST)
 cleanupOutdatedCaches()
+
+// ── SPA fallback : toute navigation (ex: /tasks, /map, refresh, lien partagé) ──
+// Sans ça, ouvrir directement /tasks hors ligne → page "dinosaure" Chrome.
+// Avec ça, toute requête de navigation est servie par le /index.html précaché,
+// qui bootstrappe ensuite React Router côté client depuis le cache.
+// Exclusions : on laisse passer les requêtes vers Firestore/Auth/Storage qui ne
+// sont pas des navigations HTML mais des XHR/fetch d'API.
+const navigationHandler = createHandlerBoundToURL('/index.html')
+const navigationRoute = new NavigationRoute(navigationHandler, {
+  denylist: [
+    /^\/__\//,         // Firebase Auth iframe (/__/auth/...)
+    /^\/api\//,        // toute API à venir
+  ],
+})
+registerRoute(navigationRoute)
 
 // ── Plugin quota 5 Go : priorité à l'app et aux données Firestore ──
 // Les tuiles IGN ne sont mises en cache que s'il reste de la place

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Wind, Thermometer, Droplets, CheckCircle2, Circle,
   AlertTriangle, ChevronRight, RefreshCw, Flame, Stethoscope,
@@ -7,6 +8,8 @@ import {
 import { doc, updateDoc, collection, query, where, onSnapshot } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
+import { useCustomSpecies } from '../hooks/useCustomSpecies'
+import { getSpeciesInfo } from '../services/species'
 import { fetchWeather, getWeatherInfo, computeVigilance, computeFireRisk } from '../services/weather'
 import type { WeatherData, Task, Availability, FermeAlert, VigilanceLevel, FireRiskLevel, MapPin, Animal, AnimalCareEntry, Reserve } from '../types'
 
@@ -99,6 +102,7 @@ function FireRiskBadge({ level }: { level: NonNullable<FireRiskLevel> }) {
 
 export default function Dashboard() {
   const { user, profile } = useAuth()
+  const customSpecies = useCustomSpecies()
 
   const [weather,    setWeather]    = useState<WeatherData | null>(null)
   const [vigilance,  setVigilance]  = useState<VigilanceLevel>('Vert')
@@ -516,10 +520,10 @@ export default function Dashboard() {
                 )
               })}
             </ul>
-            <a href="/map"
+            <Link to="/map"
                className="flex items-center justify-center gap-1 text-forest text-xs font-semibold mt-2 py-1.5 rounded-lg active:bg-meadow/10 transition-colors">
               Ouvrir la carte <ChevronRight size={14} />
-            </a>
+            </Link>
           </div>
         )}
 
@@ -578,10 +582,10 @@ export default function Dashboard() {
                 </li>
               ))}
             </ul>
-            <a href="/admin"
+            <Link to="/admin"
                className="flex items-center justify-center gap-1 text-forest text-xs font-semibold mt-2 py-1.5 rounded-lg active:bg-meadow/10 transition-colors">
               Gérer les réserves <ChevronRight size={14} />
-            </a>
+            </Link>
           </div>
         )}
 
@@ -599,7 +603,7 @@ export default function Dashboard() {
                 return (
                   <li key={e.id}
                       className="flex items-center gap-3 px-3 py-2 rounded-xl bg-danger/5 border border-danger/20">
-                    <span className="text-lg flex-shrink-0">{animal.species === 'horse' ? '🐎' : '🐴'}</span>
+                    <span className="text-lg flex-shrink-0">{getSpeciesInfo(animal.species, customSpecies).emoji}</span>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-charcoal truncate">
                         {animal.name} <span className="text-muted font-normal">· {
@@ -621,10 +625,10 @@ export default function Dashboard() {
                 )
               })}
             </ul>
-            <a href="/admin"
+            <Link to="/admin"
                className="flex items-center justify-center gap-1 text-forest text-xs font-semibold mt-2 py-1.5 rounded-lg active:bg-meadow/10 transition-colors">
               Gérer les soins <ChevronRight size={14} />
-            </a>
+            </Link>
           </div>
         )}
 
@@ -767,10 +771,10 @@ export default function Dashboard() {
           )}
 
           {/* Lien vers toutes les tâches */}
-          <a href="/tasks"
+          <Link to="/tasks"
              className="flex items-center justify-center gap-1 text-forest text-sm font-semibold mt-3 py-2 rounded-xl active:bg-meadow/10 transition-colors">
             Voir toutes les tâches <ChevronRight size={16} />
-          </a>
+          </Link>
         </div>
 
         {/* Bilan de la semaine — toujours visible, plus visible le dimanche */}

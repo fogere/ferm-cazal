@@ -139,11 +139,41 @@ Ou dans Firebase Console → Functions → checkReminders → Logs.
 ### Voir les données en live
 Firebase Console → Firestore Database → onglet "Data".
 
-### Lire/écrire en CLI (besoin de gcloud)
+### Backup Firestore en local (sans coût, sans GCS)
+
+Un script Node lit toutes les collections critiques et écrit un JSON daté dans
+`backups/` (gitignored, ne sera pas commit).
+
+**Première fois** :
+```cmd
+cd /d "C:\Users\Administrator\Downloads\projet farm\scripts"
+npm init -y
+npm install firebase-admin
+```
+Puis télécharge un service account depuis Firebase Console → Project Settings
+→ Service Accounts → Generate new private key. Place le JSON sous
+`scripts/le-cazal-service-account.json` (déjà dans le .gitignore).
+
+**Lancer un backup manuel** :
+```cmd
+cd /d "C:\Users\Administrator\Downloads\projet farm"
+node scripts/backup-firestore.cjs
+```
+Sortie : `backups/firestore-backup-YYYY-MM-DD.json`. Garde les 12 derniers
+automatiquement, supprime les plus anciens.
+
+**Automatiser hebdomadaire** (Planificateur de tâches Windows) :
+1. Démarrer → Planificateur de tâches → Créer une tâche.
+2. Déclencheur : hebdomadaire, lundi 04:00.
+3. Action : `node` avec arg `scripts/backup-firestore.cjs` et dossier de
+   départ = `C:\Users\Administrator\Downloads\projet farm`.
+
+### Export complet vers GCS (optionnel — nécessite gcloud + bucket)
 ```cmd
 gcloud firestore export gs://le-cazal-backup/$(date +%Y%m%d)
 ```
-(Pour le backup — pas encore configuré, à mettre en place.)
+Plus complet (versions binaires Firestore importables), mais paie le stockage
+GCS (~0.02 €/GB/mois). Non configuré aujourd'hui.
 
 ### Reset un user FCM token
 Firebase Console → Firestore → users → {uid} → effacer le champ `fcmToken`.

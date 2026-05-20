@@ -30,6 +30,11 @@ firebase-adminsdk*.json
 *.backup
 .firebaserc.*.backup
 
+# ── Backups Firestore locaux (générés par scripts/backup-firestore.cjs) ──
+backups/
+le-cazal-service-account.json
+scripts/le-cazal-service-account.json
+
 # ── Scripts de migration ponctuels (peuvent contenir mots de passe) ──
 scripts/migrate-users.cjs
 scripts/migration-output.txt

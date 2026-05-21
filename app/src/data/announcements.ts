@@ -26,6 +26,28 @@ export interface Announcement {
 export const ANNOUNCEMENTS_READ_LS_KEY = 'fm_announcements_read'
 
 export const ANNOUNCEMENTS: Announcement[] = [
+  // ── 21/05/2026 (fin de soirée) — cours d'eau polyline Phase 1 + suite refonte à venir ──
+  {
+    id:        '2026-05-21-cours-eau-polyline',
+    title:     'Cours d\'eau — Phase 1 (tracé + saisonnalité)',
+    forUser:   'Eugenie',
+    createdAt: Date.parse('2026-05-21T23:45:00+02:00'),
+    body: `Coucou Eugénie 👋
+
+Première partie de ce que tu demandais sur les cours d'eau, c'est en ligne.
+
+Sur la carte, tu as maintenant un nouvel outil "🏞️ Cours d'eau" :
+1. Active l'outil dans la barre du bas.
+2. Touche la carte point par point pour tracer le cours d'eau.
+3. Quand tu termines, tu choisis : "permanent" ou "saisonnier" (avec les mois actifs).
+
+Les anciens points d'eau naturels en cercle restent affichés tant que tu ne les supprimes pas — pas de migration automatique pour ne rien casser. Quand tu veux passer un point en tracé : supprime l'ancien puis trace le nouveau cours d'eau au même endroit.
+
+Ce qui reste à faire (noté, à venir) :
+- "Atténuation manuelle par segment" : pouvoir dire "à partir de ce point, le débit chute de 90% car ça s'infiltre dans le sol". Pas encore implémenté.
+- Refonte clôtures vs espaces : ton idée plus profonde de séparer "définition d'un espace" (terrain qui nous appartient) du "tracé physique de clôture" (amovible, modifiable). Gros chantier, à discuter ensemble avant que je touche. Snap automatique du tracé clôture sur le tracé espace + zones vides intérieures (bouts de terrain qui ne nous appartiennent pas au milieu d'un grand parc) — c'est tout noté.`,
+  },
+
   // ── 21/05/2026 (fin de soirée) — V2 safe : intensité fil, voyant batterie, tâches "pour tous", timeout GPS ──
   {
     id:        '2026-05-21-tache-pour-tous',

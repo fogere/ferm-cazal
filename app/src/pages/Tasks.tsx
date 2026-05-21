@@ -294,10 +294,14 @@ export default function Tasks() {
     try {
       // 3 modes :
       //   - 'pool'      : assignedTo=null, n'importe qui prend (comportement par défaut)
-      //   - 'assigned'  : assignedTo=uid choisi, notif individuelle au cron à l'heure due
-      //   - 'broadcast' : assignedTo=null + broadcast:true, notif à TOUS au cron à l'heure due
+      //   - 'assigned'  : assignedTo=uid choisi (super-admin uniquement — l'UI ne propose
+      //                   pas ce mode aux autres)
+      //   - 'broadcast' : assignedTo=null + broadcast:true, tâche partagée et notifiée
+      //                   à TOUS. Demande Nils 21/05/2026 : ouvert à tous les regular users
+      //                   (avant : super-admin uniquement). L'envoi de notif au cron requiert
+      //                   toujours hasDueTime, lui-même restreint aux super-admins.
       const isAssigned  = superAdmin && form.mode === 'assigned' && !!form.assignedTo
-      const isBroadcast = superAdmin && form.mode === 'broadcast'
+      const isBroadcast = form.mode === 'broadcast'
       await addDoc(collection(db, 'tasks'), {
         title:        form.title.trim(),
         zone:         form.zone.trim(),
@@ -747,48 +751,49 @@ export default function Tasks() {
                 )}
               </div>
 
-              {/* Mode d'assignation (super admin uniquement) */}
-              {superAdmin && (
-                <div>
-                  <label className="block text-xs font-semibold text-muted uppercase tracking-wider mb-2">
-                    Mode <span className="font-normal text-[10px] normal-case">(super admin)</span>
-                  </label>
-                  <div className="grid grid-cols-3 gap-1.5 mb-2">
-                    {([
-                      ['pool',      '🏊 Pool',     'Personne assignée, premier qui prend'],
-                      ['assigned',  '👤 Assignée', "À une personne précise, notif à elle"],
-                      ['broadcast', '📣 Broadcast', "Notif à tout le monde, n'importe qui peut faire"],
-                    ] as const).map(([k, label, hint]) => (
-                      <button key={k}
-                              type="button"
-                              onClick={() => setForm(f => ({ ...f, mode: k }))}
-                              disabled={saving}
-                              title={hint}
-                              className={`py-2 rounded-lg border text-[11px] font-bold transition-all ${
-                                form.mode === k
-                                  ? 'border-forest bg-forest text-white'
-                                  : 'border-border bg-cream text-muted'
-                              }`}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  {form.mode === 'assigned' && (
-                    <select
-                      value={form.assignedTo}
-                      onChange={e => setForm(f => ({ ...f, assignedTo: e.target.value }))}
-                      disabled={saving}
-                      className="w-full px-4 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
-                                 focus:outline-none focus:ring-2 focus:ring-forest transition-all"
-                    >
-                      <option value="">— Choisir une personne —</option>
-                      {users.map(u => (
-                        <option key={u.uid} value={u.uid}>{u.displayName}</option>
-                      ))}
-                    </select>
-                  )}
+              {/* Mode d'assignation — Pool/Broadcast accessible à tous,
+                  Assignée réservée aux super-admins (Eugénie/Benoît) */}
+              <div>
+                <label className="block text-xs font-semibold text-muted uppercase tracking-wider mb-2">
+                  Mode {!superAdmin && <span className="font-normal text-[10px] normal-case">(👤 Assignée réservée aux super-admins)</span>}
+                </label>
+                <div className="grid grid-cols-3 gap-1.5 mb-2">
+                  {([
+                    ['pool',      '🏊 Pool',      'Personne assignée, premier qui prend', true],
+                    ['assigned',  '👤 Assignée',  "À une personne précise, notif à elle", superAdmin],
+                    ['broadcast', '📣 Pour tous', "Tâche partagée, tout le monde la voit, n'importe qui peut faire", true],
+                  ] as const).map(([k, label, hint, enabled]) => (
+                    <button key={k}
+                            type="button"
+                            onClick={() => enabled && setForm(f => ({ ...f, mode: k }))}
+                            disabled={saving || !enabled}
+                            title={enabled ? hint : 'Réservé aux super-admins (Eugénie/Benoît)'}
+                            className={`py-2 rounded-lg border text-[11px] font-bold transition-all ${
+                              form.mode === k
+                                ? 'border-forest bg-forest text-white'
+                                : enabled
+                                  ? 'border-border bg-cream text-muted'
+                                  : 'border-border/40 bg-cream/40 text-muted/40 cursor-not-allowed'
+                            }`}>
+                      {label}
+                    </button>
+                  ))}
                 </div>
-              )}
+                {form.mode === 'assigned' && superAdmin && (
+                  <select
+                    value={form.assignedTo}
+                    onChange={e => setForm(f => ({ ...f, assignedTo: e.target.value }))}
+                    disabled={saving}
+                    className="w-full px-4 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
+                               focus:outline-none focus:ring-2 focus:ring-forest transition-all"
+                  >
+                    <option value="">— Choisir une personne —</option>
+                    {users.map(u => (
+                      <option key={u.uid} value={u.uid}>{u.displayName}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
 
               {/* Récurrence */}
               <div>

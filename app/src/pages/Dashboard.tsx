@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   Wind, Thermometer, Droplets, CheckCircle2, Circle,
   AlertTriangle, ChevronRight, RefreshCw, Flame, Stethoscope,
-  Navigation, Zap, Hand, ChevronDown, BellRing,
+  Navigation, Zap, Hand, ChevronDown, BellRing, Megaphone,
 } from 'lucide-react'
 import { doc, updateDoc, collection, query, where, onSnapshot } from 'firebase/firestore'
 import { db } from '../firebase'
@@ -11,7 +11,8 @@ import { useAuth } from '../hooks/useAuth'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'
 import { getSpeciesInfo } from '../services/species'
 import { fetchWeather, getWeatherInfo, computeVigilance, computeFireRisk } from '../services/weather'
-import type { WeatherData, Task, Availability, FermeAlert, VigilanceLevel, FireRiskLevel, MapPin, Animal, AnimalCareEntry, Reserve } from '../types'
+import type { WeatherData, Task, Availability, FermeAlert, VigilanceLevel, FireRiskLevel, MapPin, Animal, AnimalCareEntry, Reserve, UserMessage } from '../types'
+import { getVisibleAnnouncements, getReadAnnouncementIds } from '../data/announcements'
 
 // Distance haversine en mètres entre deux coordonnées GPS
 function distanceMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
@@ -119,6 +120,47 @@ export default function Dashboard() {
 
   // Réserves
   const [reserves, setReserves] = useState<Reserve[]>([])
+
+  // Annonces (fil unifié : statiques code + messages Firestore)
+  // — statiques : data/announcements.ts (que je remplis directement, ciblées par displayName)
+  // — Firestore : user_messages (legacy, encore supporté)
+  // Compte des non-lues = unread statiques + unread Firestore. Affiché en bannière.
+  const [unreadFirestore, setUnreadFirestore] = useState<number>(0)
+  const [totalFirestore, setTotalFirestore]   = useState<number>(0)
+  useEffect(() => {
+    if (!user) return
+    const q = query(collection(db, 'user_messages'), where('toUid', '==', user.uid))
+    const unsub = onSnapshot(q, snap => {
+      let unread = 0
+      for (const d of snap.docs) {
+        const m = d.data() as UserMessage
+        if (!m.readAt) unread += 1
+      }
+      setUnreadFirestore(unread)
+      setTotalFirestore(snap.size)
+    }, err => console.warn('[dashboard] messages:', err.code))
+    return unsub
+  }, [user])
+
+  // Recalcul périodique (1 min) pour rafraîchir les lectures localStorage des annonces
+  // statiques sans recharger la page après marquage lu sur /messages.
+  const [annTick, setAnnTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setAnnTick(v => v + 1), 60_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const announcementsCount = useMemo(() => {
+    const list = getVisibleAnnouncements(profile?.displayName)
+    const readIds = getReadAnnouncementIds()
+    let unread = 0
+    for (const a of list) if (!readIds.has(a.id)) unread += 1
+    return { total: list.length, unread }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.displayName, annTick])
+
+  const totalMessages  = totalFirestore  + announcementsCount.total
+  const unreadMessages = unreadFirestore + announcementsCount.unread
 
   // Chargement météo (1 fois au montage, avec cache 1h en mémoire)
   const loadWeather = useCallback(async () => {
@@ -436,6 +478,50 @@ export default function Dashboard() {
       </div>
 
       <div className="px-4 space-y-4 mt-2">
+
+        {/* Bannière annonces — visible dès qu'il existe au moins une annonce / message
+            (statique côté code OU Firestore). Accentuée si non-lue, discrète sinon. */}
+        {totalMessages > 0 && (
+          unreadMessages > 0 ? (
+            <Link
+              to="/messages"
+              className="block bg-forest text-white rounded-2xl p-4 shadow-md active:scale-[0.98] transition-transform"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
+                  <Megaphone size={20} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold">
+                    {unreadMessages === 1
+                      ? 'Tu as 1 nouvelle annonce'
+                      : `Tu as ${unreadMessages} nouvelles annonces`}
+                  </p>
+                  <p className="text-xs text-white/80 mt-0.5">Touche pour les lire</p>
+                </div>
+                <ChevronRight size={18} className="text-white/70 flex-shrink-0" />
+              </div>
+            </Link>
+          ) : (
+            <Link
+              to="/messages"
+              className="block bg-card border border-border rounded-2xl p-3 active:bg-cream transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-forest/10 flex items-center justify-center flex-shrink-0">
+                  <Megaphone size={16} className="text-forest" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-semibold text-charcoal">Mes annonces</p>
+                  <p className="text-[11px] text-muted mt-0.5">
+                    {totalMessages} annonce{totalMessages > 1 ? 's' : ''} — touche pour relire
+                  </p>
+                </div>
+                <ChevronRight size={16} className="text-muted flex-shrink-0" />
+              </div>
+            </Link>
+          )
+        )}
 
         {/* Disponibilité du jour */}
         <div className="bg-card rounded-2xl p-4 shadow-sm">

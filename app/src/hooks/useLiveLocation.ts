@@ -86,7 +86,10 @@ export function useLiveLocation() {
         }).catch(() => {})
       },
       err => console.warn('[geo]', err.message),
-      { enableHighAccuracy: false, maximumAge: 60_000, timeout: 30_000 }
+      // enableHighAccuracy: true — bug Eugénie 21/05/2026 "500 m de rayon aléatoire".
+      // `false` faisait du Wifi/Cell positioning (50-500 m). `true` force le GPS satellite
+      // (5-20 m typique en outdoor). Coût batterie acceptable : partage auto-stop à 2 h.
+      { enableHighAccuracy: true, maximumAge: 30_000, timeout: 30_000 }
     )
 
     return () => {

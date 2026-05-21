@@ -113,7 +113,7 @@ export interface Battery {
   note: string
 }
 
-export type PinType = 'water_natural' | 'water_manual' | 'battery' | 'zone' | 'fence' | 'note' | 'alert'
+export type PinType = 'water_natural' | 'water_manual' | 'battery' | 'zone' | 'fence' | 'note' | 'alert' | 'todo' | 'water_stream'
 
 export interface MapPin {
   id: string
@@ -153,6 +153,10 @@ export interface MapPin {
   checkIntervalDays?: number
   zoneCovered?: string
   nextCheckAt?: number
+  // Toggle ON/OFF — bug Nils 21/05/2026 : pouvoir signaler qu'une batterie est éteinte,
+  // ce qui rend invisible toutes les clôtures qui lui sont connectées et place un voyant
+  // visuel sur le pin batterie. Par défaut (non défini) = ON.
+  powerOn?: boolean
 
   // ── zone ──
   currentOccupants?: string[]
@@ -169,6 +173,43 @@ export interface MapPin {
   fillOnly?: boolean // true = enclos découpé : garder le fill + animaux, le contour est géré par des segments séparés
   cutFromId?: string // ID du fence parent dont ce segment provient (lié à une coupe ciseau)
   photoCount?: number // nombre de photos attachées (maintenu via uploadPinPhoto / deletePinPhoto)
+
+  // ── todo (point "à faire" sur la carte : arbre mort à couper, clôture à réparer…) ──
+  // Demande Eugénie 20/05/2026. Type minimal : un pin 'todo' avec un statut binaire
+  // (open / done). La description est dans `name` + `note`. Pas d'assignation pour
+  // l'instant (un super-admin peut créer une vraie Task si besoin de notif).
+  todoStatus?:      'open' | 'done'
+  todoCompletedAt?: number
+  todoCompletedBy?: string
+
+  // ── fence : rotation à prévoir ──
+  // Demande Eugénie 21/05/2026 : "un bouton pour signaler qu'il faut bientôt
+  // changer les animaux de parc". Date prévue de rotation → badge ⏰ sur le parc
+  // qui devient orange à J-7 puis rouge à échéance. Effacé une fois la rotation effective.
+  rotationDueAt?:   number
+  rotationNote?:    string
+
+  // ── fence (électrique) : intensité du courant ──
+  // Demande Nils 21/05/2026 : "option d'atténuation du motif électrique pour
+  // indiquer son intensité". S'applique uniquement aux fence avec wireStyle='electric'.
+  //   full       → opacity normale (par défaut quand non défini)
+  //   attenuated → opacité réduite, motif pointillé (signale fin de circuit / courant faible)
+  //   off        → opacité 30% + motif rouge (batterie débranchée ou circuit coupé)
+  electricityIntensity?: 'full' | 'attenuated' | 'off'
+  // Référence à la batterie qui alimente cette clôture. Si la batterie associée a
+  // `powerOn === false`, la clôture est rendue comme "off" automatiquement (override
+  // de electricityIntensity). Demande Nils 21/05/2026.
+  connectedBatteryId?: string
+
+  // ── water_stream (cours d'eau tracé en polyline) ──
+  // Demande Eugénie 21/05/2026 (V2) : remplacer water_natural (pin ponctuel) par un
+  // vrai tracé linéaire. Phase 1 : tracé + saisonnalité. Phase 2 (à venir) : atténuation
+  // manuelle par segment ("à partir de ce point, -90% de débit").
+  //
+  // `points` (déjà existant pour fence) sert au tracé.
+  streamMode?:          'permanent' | 'seasonal'
+  // Si seasonal : mois où l'eau coule (1 = janvier, 12 = décembre). Vide = aucun mois actif.
+  streamActiveMonths?:  number[]
 }
 
 export interface FencePreset {
@@ -361,6 +402,23 @@ export interface AnimalCareEntry {
   // date + recurrenceDays ; et quand l'utilisateur "marque fait" la prochaine
   // échéance (= crée la nouvelle entrée), la récurrence est chaînée.
   recurrenceDays?: number
+}
+
+// Message ciblé envoyé d'un utilisateur (super-admin) à un autre. Sert principalement
+// à répondre à un bug report : la réponse reste persistée dans /messages et le destinataire
+// peut la relire autant de fois qu'il veut. Pas de FCM (le cron natif s'en charge si besoin),
+// juste un badge in-app sur le Dashboard + la liste sur /messages.
+export interface UserMessage {
+  id: string
+  toUid: string            // destinataire
+  toUidName?: string       // pour debug (displayName au moment de l'envoi)
+  fromUid: string          // expéditeur
+  fromUidName?: string     // affiché dans la liste (pour ne pas refetch les profils)
+  title: string            // 80 chars max suggérés
+  body: string             // texte libre, peut contenir des retours ligne
+  relatedBugId?: string    // référence au bugReports d'origine (optionnel)
+  createdAt: number
+  readAt?: number | null   // null = pas encore lu ; sinon timestamp de première ouverture
 }
 
 export interface Reserve {

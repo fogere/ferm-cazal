@@ -167,6 +167,10 @@ export default function Admin() {
   const [newRaceOpen,     setNewRaceOpen]     = useState(false)
   const [newRaceName,     setNewRaceName]     = useState('')
   const [newRaceEmoji,    setNewRaceEmoji]    = useState('🐱')
+  // Édition d'une race existante (bug Eugénie 21/05/2026 : faute de frappe à corriger sans tout supprimer)
+  const [editingRaceId,   setEditingRaceId]   = useState<string | null>(null)
+  const [editRaceName,    setEditRaceName]    = useState('')
+  const [editRaceEmoji,   setEditRaceEmoji]   = useState('')
   const [newRaceGestation, setNewRaceGestation] = useState('')
   const [newRaceSaving,   setNewRaceSaving]   = useState(false)
   const [newRaceError,    setNewRaceError]    = useState<string | null>(null)
@@ -550,6 +554,39 @@ export default function Admin() {
       setNewRaceError('Échec enregistrement.')
     } finally {
       setNewRaceSaving(false)
+    }
+  }
+
+  function startEditRace(c: { id: string; name: string; emoji: string }) {
+    setEditingRaceId(c.id)
+    setEditRaceName(c.name)
+    setEditRaceEmoji(c.emoji)
+  }
+
+  function cancelEditRace() {
+    setEditingRaceId(null)
+    setEditRaceName('')
+    setEditRaceEmoji('')
+  }
+
+  async function saveEditRace() {
+    if (!editingRaceId) return
+    const name  = editRaceName.trim()
+    const emoji = editRaceEmoji.trim()
+    if (!name || !emoji) {
+      alert('Nom et emoji obligatoires.')
+      return
+    }
+    // On garde l'id fixe (sinon il faudrait migrer tous les animaux qui l'utilisent).
+    const next = customSpecies.map(c =>
+      c.id === editingRaceId ? { ...c, name, emoji } : c,
+    )
+    try {
+      await setDoc(doc(db, 'config', 'farm'), { customSpecies: next }, { merge: true })
+      cancelEditRace()
+    } catch (e) {
+      console.error('[saveEditRace]', e)
+      alert("Échec de l'enregistrement. Réessaye dans un instant.")
     }
   }
 
@@ -1093,25 +1130,73 @@ export default function Admin() {
                 </div>
               )}
 
-              {/* Liste des races personnalisées (pour suppression) */}
+              {/* Liste des races personnalisées (édition + suppression) */}
               {customSpecies.length > 0 && (
                 <div className="space-y-1">
                   <p className="text-[10px] font-semibold text-muted/70 uppercase tracking-wider">Races perso</p>
-                  {customSpecies.map(c => (
-                    <div key={c.id} className="flex items-center justify-between bg-cream/50 border border-border rounded-lg px-2.5 py-1.5">
-                      <span className="text-xs text-charcoal">
-                        {c.emoji} {c.name}
-                        {c.gestationDays && <span className="text-muted ml-1">· {c.gestationDays} j</span>}
-                      </span>
-                      <button
-                        onClick={() => removeCustomRace(c.id)}
-                        className="text-muted active:text-danger p-1"
-                        aria-label={`Supprimer la race ${c.name}`}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  ))}
+                  {customSpecies.map(c => {
+                    const isEditing = editingRaceId === c.id
+                    return (
+                      <div key={c.id} className="flex items-center gap-2 bg-cream/50 border border-border rounded-lg px-2.5 py-1.5">
+                        {isEditing ? (
+                          <>
+                            <input
+                              type="text"
+                              value={editRaceEmoji}
+                              onChange={e => setEditRaceEmoji(e.target.value)}
+                              maxLength={4}
+                              className="w-12 text-center px-1 py-1 rounded border border-border bg-white text-sm"
+                            />
+                            <input
+                              type="text"
+                              autoFocus
+                              value={editRaceName}
+                              onChange={e => setEditRaceName(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') saveEditRace()
+                                if (e.key === 'Escape') cancelEditRace()
+                              }}
+                              className="flex-1 px-2 py-1 rounded border border-border bg-white text-xs"
+                            />
+                            <button
+                              onClick={saveEditRace}
+                              className="px-2 py-1 bg-forest text-white rounded text-[11px] font-bold active:opacity-80"
+                            >
+                              OK
+                            </button>
+                            <button
+                              onClick={cancelEditRace}
+                              className="text-muted active:text-charcoal p-1"
+                              aria-label="Annuler"
+                            >
+                              <X size={12} />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs text-charcoal flex-1">
+                              {c.emoji} {c.name}
+                              {c.gestationDays && <span className="text-muted ml-1">· {c.gestationDays} j</span>}
+                            </span>
+                            <button
+                              onClick={() => startEditRace(c)}
+                              className="text-muted active:text-forest p-1"
+                              aria-label={`Modifier la race ${c.name}`}
+                            >
+                              <Pencil size={12} />
+                            </button>
+                            <button
+                              onClick={() => removeCustomRace(c.id)}
+                              className="text-muted active:text-danger p-1"
+                              aria-label={`Supprimer la race ${c.name}`}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
               <div className="flex gap-2">
@@ -1271,6 +1356,22 @@ export default function Admin() {
 
                         {tab === 'details' && (
                           <div className="bg-card rounded-xl p-3 space-y-3 border border-forest/20">
+                            {/* Nom — bug Eugénie 21/05/2026 : pouvoir corriger une faute de frappe sans tout recréer */}
+                            <div>
+                              <label className="block text-[11px] font-bold text-muted uppercase tracking-wider mb-1">Nom</label>
+                              <input
+                                type="text"
+                                defaultValue={a.name}
+                                onBlur={e => {
+                                  const v = e.target.value.trim()
+                                  if (v && v !== a.name) updateAnimalDetails(a.id, { name: v })
+                                  else e.target.value = a.name
+                                }}
+                                className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
+                                placeholder="ex: Hercule"
+                              />
+                            </div>
+
                             <div>
                               <label className="block text-[11px] font-bold text-muted uppercase tracking-wider mb-1">Date de naissance</label>
                               <div className="flex gap-2 items-center">

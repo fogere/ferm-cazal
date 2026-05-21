@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   collection, onSnapshot, addDoc, query, where,
 } from 'firebase/firestore'
@@ -38,6 +38,7 @@ function fmtDate(ts: number): string {
  */
 export default function Grazing() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { user, isTemp } = useAuth()
   const customSpecies = useCustomSpecies()
 
@@ -49,6 +50,18 @@ export default function Grazing() {
   const [windowMonths, setWindowMonths] = useState<6 | 12 | 24>(12)
   const [showAddMove, setShowAddMove] = useState(false)
   const [showPaste,   setShowPaste]   = useState(false)
+
+  // Ouverture directe du modal "noter un mouvement" depuis la carte (bug Benoît 20/05/2026).
+  // Le user clique sur "Noter un mouvement" depuis le détail d'un enclos → arrive ici avec
+  // ?addFor=<fenceId>. On nettoie le param après ouverture pour ne pas le rouvrir au reload.
+  useEffect(() => {
+    if (searchParams.get('addFor') && !isTemp) {
+      setShowAddMove(true)
+      const next = new URLSearchParams(searchParams)
+      next.delete('addFor')
+      setSearchParams(next, { replace: true })
+    }
+  }, [searchParams, isTemp, setSearchParams])
 
   /* ─── Subscriptions ─── */
   useEffect(() => {

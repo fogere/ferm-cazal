@@ -177,6 +177,31 @@ service cloud.firestore {
       allow delete: if isRegularUser();
     }
 
+    // ── Messages ciblés (boîte de réception in-app) ──
+    // Utilisé pour répondre aux bugs/questions des utilisatrices sans passer par
+    // un canal externe. Le destinataire peut relire à volonté ; il n'y a pas
+    // d'archive (pas demandé). Aucune notif push : juste un badge in-app.
+    //
+    // - create : utilisateurs réguliers uniquement, et fromUid doit être leur propre uid
+    //   (anti-spoof). Les aides temporaires ne peuvent pas envoyer de messages.
+    // - read : destinataire OU émetteur uniquement (jamais tiers)
+    // - update : destinataire uniquement, et uniquement readAt (marquer lu)
+    // - delete : destinataire OU émetteur (rangement éventuel)
+    match /user_messages/{messageId} {
+      allow create: if isRegularUser()
+                       && request.resource.data.fromUid == request.auth.uid;
+      allow read:   if request.auth != null
+                       && (resource.data.toUid == request.auth.uid
+                           || resource.data.fromUid == request.auth.uid);
+      allow update: if request.auth != null
+                       && resource.data.toUid == request.auth.uid
+                       && request.resource.data.diff(resource.data).affectedKeys()
+                            .hasOnly(['readAt']);
+      allow delete: if request.auth != null
+                       && (resource.data.toUid == request.auth.uid
+                           || resource.data.fromUid == request.auth.uid);
+    }
+
     // Tout le reste : refusé
     match /{document=**} {
       allow read, write: if false;

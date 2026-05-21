@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MapContainer, TileLayer, Marker, Polyline, Polygon, Circle, useMapEvents, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Zap, Check, Pencil, Undo2, Scissors, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search } from 'lucide-react'
+import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Zap, Check, Pencil, Undo2, Scissors, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search, ChevronDown, ChevronUp } from 'lucide-react'
 import { compressImage } from '../services/image'
 import type { PinPhoto, EnclosureMovement } from '../types'
 import {
@@ -66,10 +66,15 @@ const PIN_CFG: Record<PinType, { emoji: string; label: string; color: string }> 
   fence:         { emoji: '🔌', label: 'Clôture',          color: '#EA580C' },
   note:          { emoji: '📍', label: 'Note',             color: '#8B5CF6' },
   alert:         { emoji: '⚠️', label: 'Alerte',           color: '#DC2626' },
+  todo:          { emoji: '🪓', label: 'À faire',          color: '#A16207' },
+  water_stream:  { emoji: '🏞️', label: 'Cours d\'eau',     color: '#0284C7' },
 }
 
-// Types disponibles dans le formulaire standard (fence a son propre outil de dessin)
-const PICKABLE_TYPES: PinType[] = ['water_natural', 'water_manual', 'battery', 'note', 'alert']
+// Types disponibles dans le formulaire de pin ponctuel (fence + water_stream ont leurs outils dédiés).
+// Demande Eugénie 21/05/2026 V2 : remplacer water_natural (pin ponctuel) par water_stream (polyline).
+// On retire water_natural du sélecteur — les anciens points restent affichés tels quels jusqu'à
+// migration manuelle (delete + re-create en cours d'eau).
+const PICKABLE_TYPES: PinType[] = ['water_manual', 'battery', 'note', 'alert', 'todo']
 
 /* ─── batteries ─── */
 
@@ -123,6 +128,8 @@ function makeDivIcon(
   overdue = false,
   hasPhotos = false,
   waterStatus?: MapPin['waterStatus'],
+  todoDone = false,
+  batteryOff = false,
 ): L.DivIcon {
   let { emoji, color } = PIN_CFG[type]
   let statusBadge = ''
@@ -137,14 +144,30 @@ function makeDivIcon(
         font-size:10px;line-height:1;box-shadow:0 1px 3px rgba(0,0,0,0.4);">${v.badge}</div>`
     }
   }
+  // Todo "fait" : on grise le pin et on ajoute un badge ✓ pour qu'il reste visible
+  // sur la carte (Eugénie peut revoir l'historique) sans crier comme un todo ouvert.
+  if (type === 'todo' && todoDone) {
+    color = '#6B7280'   // gris
+    statusBadge = `<div style="position:absolute;bottom:-3px;right:-3px;width:18px;height:18px;border-radius:50%;
+      background:#16A34A;border:2px solid white;display:flex;align-items:center;justify-content:center;
+      font-size:11px;font-weight:bold;color:white;line-height:1;box-shadow:0 1px 3px rgba(0,0,0,0.4);">✓</div>`
+  }
+  // Batterie éteinte (bug Nils 21/05/2026) : grise + voyant ⊘ rouge
+  if (type === 'battery' && batteryOff) {
+    color = '#6B7280'
+    statusBadge = `<div style="position:absolute;bottom:-3px;right:-3px;width:18px;height:18px;border-radius:50%;
+      background:#DC2626;border:2px solid white;display:flex;align-items:center;justify-content:center;
+      font-size:11px;font-weight:bold;color:white;line-height:1;box-shadow:0 1px 3px rgba(0,0,0,0.4);">⊘</div>`
+  }
   const border = overdue ? '3px solid #DC2626' : '2.5px solid white'
+  const opacity = (type === 'todo' && todoDone) || (type === 'battery' && batteryOff) ? '0.7' : '1'
   const photoBadge = hasPhotos
     ? `<div style="position:absolute;top:-3px;right:-3px;width:16px;height:16px;border-radius:50%;
         background:#1A4731;border:2px solid white;display:flex;align-items:center;justify-content:center;
         font-size:9px;line-height:1;box-shadow:0 1px 3px rgba(0,0,0,0.4);">📷</div>`
     : ''
   return L.divIcon({
-    html: `<div style="position:relative;width:38px;height:38px;">
+    html: `<div style="position:relative;width:38px;height:38px;opacity:${opacity};">
       <div style="background:${color};width:38px;height:38px;border-radius:50%;
         display:flex;align-items:center;justify-content:center;font-size:20px;
         box-shadow:0 2px 8px rgba(0,0,0,0.35);border:${border};">${emoji}</div>
@@ -241,6 +264,18 @@ const FENCE_FIRST_DOT_ICON = L.divIcon({
   iconAnchor: [7, 7],
 })
 
+// Point intermédiaire ghost (au milieu d'un segment, en mode édition).
+// Eugénie clique dessus pour insérer un vrai poteau à cet emplacement.
+const FENCE_MID_DOT_ICON = L.divIcon({
+  html: `<div style="background:#22C55E;width:14px;height:14px;border-radius:50%;
+    border:2px dashed white;opacity:0.55;box-shadow:0 1px 4px rgba(0,0,0,0.25);
+    display:flex;align-items:center;justify-content:center;
+    color:white;font-size:10px;font-weight:bold;line-height:1;">+</div>`,
+  className: '',
+  iconSize: [14, 14],
+  iconAnchor: [7, 7],
+})
+
 function makeSnapIcon(isClose: boolean): L.DivIcon {
   const color = isClose ? '#22C55E' : '#F59E0B'
   return L.divIcon({
@@ -259,6 +294,7 @@ function makeEnclosureLabelIcon(
   enclosureAnimals: Animal[],
   zoom: number,
   customSpecies: import('../types').CustomSpecies[] = [],
+  rotationDueAt?: number,
 ): L.DivIcon {
   // Couleurs depuis CSS vars → s'adaptent automatiquement light/dark
   let inner: string
@@ -280,6 +316,21 @@ function makeEnclosureLabelIcon(
     }
     inner = `<strong style="font-size:13px;white-space:nowrap;color:var(--color-charcoal)">${parts.join(' · ')}</strong>`
   }
+
+  // Badge "rotation à prévoir" — orange à J-7, rouge à échéance dépassée.
+  // Visible en plus du label normal pour signaler qu'il faut bouger les animaux.
+  if (rotationDueAt && enclosureAnimals.length > 0) {
+    const daysLeft = (rotationDueAt - Date.now()) / 86_400_000
+    if (daysLeft <= 7) {
+      const overdue = daysLeft < 0
+      const bg = overdue ? '#DC2626' : '#EA580C'
+      const txt = overdue ? '⏰ retard' : `⏰ J${daysLeft < 1 ? '0' : `-${Math.ceil(daysLeft)}`}`
+      inner = `<div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+        ${inner}
+        <div style="background:${bg};color:white;font-size:9px;font-weight:bold;padding:1px 5px;border-radius:8px;white-space:nowrap">${txt}</div>
+      </div>`
+    }
+  }
   return L.divIcon({
     html: `<div class="enclosure-label" style="border-radius:10px;padding:5px 9px;
       box-shadow:0 2px 10px rgba(0,0,0,0.35);
@@ -296,6 +347,90 @@ function isWaterOverdue(pin: MapPin): boolean {
   return !!(deadline && deadline <= Date.now())
 }
 
+/**
+ * Couleur de remplissage d'un enclos selon la fraîcheur du pâturage.
+ * Demande Eugénie 20/05/2026 : visualiser en un coup d'œil les parcs
+ * récemment pâturés (encore en repos) vs les parcs prêts à repâturer.
+ *
+ *   occupied  → vert moyen      (présence actuelle d'animaux)
+ *   fresh     → marron clair    (vide < 14 j  — repos en cours)
+ *   resting   → jaune clair     (vide 14-60 j — repousse)
+ *   ready     → vert vif        (vide > 60 j ou jamais  — prêt à pâturer)
+ *
+ * Le contour de la clôture (presetColor) n'est PAS affecté — seulement le fill.
+ */
+type GrazingStatus = 'occupied' | 'fresh' | 'resting' | 'ready'
+
+/**
+ * Remonte la chaîne `cutFromId` jusqu'à la racine. Un parc qui n'a pas été
+ * découpé est sa propre racine. Un sous-parc créé par le ciseau pointe vers son
+ * parent ; un sous-sous-parc remonte de proche en proche.
+ *
+ * Garde-fou anti-cycle (max 10 sauts) — ne devrait jamais arriver mais coûte rien.
+ */
+function getFenceRootId(pin: MapPin, allFences: MapPin[]): string {
+  let current = pin
+  for (let i = 0; i < 10; i++) {
+    if (!current.cutFromId) return current.id
+    const parent = allFences.find(f => f.id === current.cutFromId)
+    if (!parent) return current.id
+    current = parent
+  }
+  return current.id
+}
+
+/**
+ * Tous les pins du même "groupe de pâturage" qu'un pin donné : son parc racine
+ * + tous les sous-parcs (cousins, frères) issus du même découpage.
+ *
+ * Demande Eugénie 21/05/2026 : "même dans un parc scindé en plusieurs parties
+ * ça agit comme si c'étaient des parcs indépendants". On veut que la fraîcheur
+ * d'herbe agrège les rotations sur l'ensemble du parc d'origine.
+ */
+function getFenceGroup(pin: MapPin, allFences: MapPin[]): MapPin[] {
+  const rootId = getFenceRootId(pin, allFences)
+  return allFences.filter(f => f.id === rootId || getFenceRootId(f, allFences) === rootId)
+}
+
+function computeGrazingStatus(
+  pin: MapPin,
+  allFences: MapPin[],
+  animals: Animal[],
+  movements: EnclosureMovement[],
+): GrazingStatus {
+  // Agrégation : on regarde TOUS les pins du même groupe (parc d'origine + sous-parcs)
+  const group = getFenceGroup(pin, allFences)
+  const groupIds = new Set(group.map(g => g.id))
+
+  // Occupé si AU MOINS un animal est présent dans n'importe quel sous-parc du groupe.
+  const hasOccupants = animals.some(a => a.enclosureId && groupIds.has(a.enclosureId))
+  if (hasOccupants) return 'occupied'
+
+  // Dernière sortie d'un animal HORS du groupe (transition vers un parc qui n'est
+  // pas dans le même groupe). Les mouvements internes (d'un sous-parc à un autre
+  // sous-parc du même groupe) ne comptent pas — l'herbe a déjà été broutée.
+  let lastExit = 0
+  for (const m of movements) {
+    if (!m.fromEnclosureId || !groupIds.has(m.fromEnclosureId)) continue
+    // Sortie effective : vers null (libéré) ou vers un parc EXTÉRIEUR au groupe
+    if (m.toEnclosureId === null || !m.toEnclosureId || !groupIds.has(m.toEnclosureId)) {
+      if (m.movedAt > lastExit) lastExit = m.movedAt
+    }
+  }
+  if (lastExit === 0) return 'ready'
+  const daysSince = (Date.now() - lastExit) / 86_400_000
+  if (daysSince < 14) return 'fresh'
+  if (daysSince < 60) return 'resting'
+  return 'ready'
+}
+
+const GRAZING_FILL: Record<GrazingStatus, { color: string; opacity: number }> = {
+  occupied: { color: '#16A34A', opacity: 0.20 }, // vert moyen — animaux présents
+  fresh:    { color: '#92400E', opacity: 0.22 }, // brun chaud — broutaillé récemment
+  resting:  { color: '#EAB308', opacity: 0.16 }, // jaune — en repos / repousse
+  ready:    { color: '#22C55E', opacity: 0.16 }, // vert vif — prêt à repâturer
+}
+
 function isBatteryDue(pin: MapPin): boolean {
   if (pin.type !== 'battery') return false
   return !!(pin.nextCheckAt && pin.nextCheckAt <= Date.now())
@@ -309,6 +444,7 @@ const SNAP_RADIUS_PX = 44
 function MapClickCapture({
   addActive, fenceActive, scissorActive, scissorFenceId, scissorOverridePoints,
   pointerActive, onPointer,
+  streamActive, onStreamPoint,
   onPin, onFencePoint, onFenceClose, onSelect, onScissorSnap, onSnapHover,
   fencePins, allPins, fenceFirstPoint,
 }: {
@@ -319,6 +455,8 @@ function MapClickCapture({
   scissorOverridePoints: { lat: number; lng: number }[]
   pointerActive: boolean
   onPointer: (lat: number, lng: number) => void
+  streamActive: boolean
+  onStreamPoint: (lat: number, lng: number) => void
   onPin: (lat: number, lng: number) => void
   onFencePoint: (lat: number, lng: number) => void
   onFenceClose: () => void
@@ -361,6 +499,11 @@ function MapClickCapture({
       // ── Mode pointer (curseur partagé) : envoie la position aux autres ──
       if (pointerActive) {
         onPointer(e.latlng.lat, e.latlng.lng)
+        return
+      }
+      // ── Mode cours d'eau (water_stream) : accumule des points ──
+      if (streamActive) {
+        onStreamPoint(e.latlng.lat, e.latlng.lng)
         return
       }
       // ── Mode ciseau : snap sur le fil le plus proche ──
@@ -441,22 +584,23 @@ function MapClickCapture({
       if (addActive)   { onPin(e.latlng.lat, e.latlng.lng);        return }
 
       // ── Sélection par proximité style Blender ──
+      // Bug Eugénie 21/05/2026 : avant, l'intérieur des polygones était prioritaire,
+      // donc impossible de sélectionner un point d'eau placé DANS un enclos en cliquant
+      // dessus — on tombait toujours sur l'édition d'enclos. Inversé : pins → fil → enclos.
       const clickPx = map.latLngToContainerPoint(e.latlng)
       let bestPin: MapPin | null = null
       let bestDist = SNAP_RADIUS_PX
 
-      // 1. Intérieur des polygones fermés (priorité la plus haute)
-      for (const pin of fencePins) {
-        if (!pin.points || !isFenceClosed(pin)) continue
-        if (pointInPolygon(e.latlng.lat, e.latlng.lng, pin.points)) {
-          bestPin = pin
-          bestDist = -1  // priorité absolue
-          break
-        }
+      // 1. Épingles standard (priorité la plus haute — points eau, batterie, todo, etc.)
+      for (const pin of allPins) {
+        if (pin.type === 'fence') continue
+        const pos = map.latLngToContainerPoint(L.latLng(pin.lat, pin.lng))
+        const d   = Math.hypot(clickPx.x - pos.x, clickPx.y - pos.y)
+        if (d < bestDist) { bestDist = d; bestPin = pin }
       }
 
-      if (bestDist >= 0) {
-        // 2. Fil de clôture (proximité segment)
+      // 2. Fil de clôture (proximité segment) — si aucun pin dans le rayon
+      if (!bestPin) {
         for (const pin of fencePins) {
           if (!pin.points || pin.points.length < 2) continue
           for (let i = 0; i < pin.points.length - 1; i++) {
@@ -466,12 +610,16 @@ function MapClickCapture({
             if (d < bestDist) { bestDist = d; bestPin = pin }
           }
         }
-        // 3. Épingles standard
-        for (const pin of allPins) {
-          if (pin.type === 'fence') continue
-          const pos = map.latLngToContainerPoint(L.latLng(pin.lat, pin.lng))
-          const d   = Math.hypot(clickPx.x - pos.x, clickPx.y - pos.y)
-          if (d < bestDist) { bestDist = d; bestPin = pin }
+      }
+
+      // 3. Intérieur des polygones fermés — DERNIER recours (clic en zone vide d'un enclos)
+      if (!bestPin) {
+        for (const pin of fencePins) {
+          if (!pin.points || !isFenceClosed(pin)) continue
+          if (pointInPolygon(e.latlng.lat, e.latlng.lng, pin.points)) {
+            bestPin = pin
+            break
+          }
         }
       }
 
@@ -595,6 +743,9 @@ export default function MapPage() {
   const [addMode,      setAddMode]      = useState(false)
   const [pendingPos,   setPendingPos]   = useState<{ lat: number; lng: number } | null>(null)
   const [selected,     setSelected]     = useState<MapPin | null>(null)
+  // Renommer un pin (parc, point d'eau, batterie…) sans le recréer — bug Eugénie 21/05/2026.
+  const [renamingPin,  setRenamingPin]  = useState(false)
+  const [renameValue,  setRenameValue]  = useState('')
   const [form,         setForm]         = useState<FormState>(() => blankForm(user?.uid ?? ''))
   const [saving,       setSaving]       = useState(false)
   const [actionBusy,   setActionBusy]   = useState(false)
@@ -602,6 +753,16 @@ export default function MapPage() {
   const [flyTrigger,   setFlyTrigger]   = useState(0)
   const [editOccupants, setEditOccupants] = useState(false)
   const [pendingOccupants, setPendingOccupants] = useState<string[]>([])
+
+  // États mode "cours d'eau" — bug Eugénie 21/05/2026 V2.
+  // Mode dessin polyline simple : on clique, on accumule des points, on valide.
+  // Plus minimal que fenceMode (pas de presets / wireCount / GPS auto).
+  const [streamMode,         setStreamMode]         = useState(false)
+  const [streamPoints,       setStreamPoints]       = useState<{ lat: number; lng: number }[]>([])
+  const [streamFormVisible,  setStreamFormVisible]  = useState(false)
+  const [streamFormName,     setStreamFormName]     = useState('')
+  const [streamFormSeasonal, setStreamFormSeasonal] = useState(false)
+  const [streamFormMonths,   setStreamFormMonths]   = useState<number[]>([])
 
   // États mode clôture
   const [fenceMode,        setFenceMode]        = useState(false)
@@ -696,6 +857,18 @@ export default function MapPage() {
   // Historique mouvements d'animaux (pour enclos sélectionné)
   const [enclosureHistory, setEnclosureHistory] = useState<EnclosureMovement[]>([])
   const [historyVisible,   setHistoryVisible]   = useState(false)
+  // TOUS les mouvements (pour colorer les enclos selon la fraîcheur du pâturage).
+  // Demande Eugénie 20/05/2026 : "changer la couleur des parcs quand ils ont été pâturés".
+  // Borné à ~2200 docs en pratique (cf. ARCHITECTURE.md) → impact négligeable.
+  const [allMovements, setAllMovements] = useState<EnclosureMovement[]>([])
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, 'enclosure_movements'),
+      snap => setAllMovements(snap.docs.map(d => ({ id: d.id, ...d.data() } as EnclosureMovement))),
+      err => console.warn('[Map] all enclosure_movements:', err.code),
+    )
+    return unsub
+  }, [])
   // Tick interne (1Hz) pour faire disparaître les pointeurs expirés sans nouveau snapshot Firestore
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
@@ -802,7 +975,32 @@ export default function MapPage() {
     setConfirmDeletePin(false)
     setHistoryVisible(false)
     setEnclosureHistory([])
+    setRenamingPin(false)
+    setRenameValue('')
   }, [selected?.id])
+
+  // Commit du rename : update Firestore + selected local pour feedback immédiat.
+  async function commitRename() {
+    if (!selected || !user) return
+    const next = renameValue.trim()
+    if (!next || next === selected.name) {
+      setRenamingPin(false)
+      return
+    }
+    try {
+      await updateDoc(doc(db, 'map_pins', selected.id), {
+        name: next,
+        updatedAt: Date.now(),
+        updatedBy: user.uid,
+      })
+      setSelected({ ...selected, name: next })
+    } catch (e) {
+      console.warn('[map] rename:', e)
+      alert("Échec du renommage. Réessaye dans un instant.")
+    } finally {
+      setRenamingPin(false)
+    }
+  }
 
   // Historique : abonnement lazy uniquement quand un enclos est sélectionné ET le panneau ouvert
   useEffect(() => {
@@ -967,6 +1165,20 @@ export default function MapPage() {
         if (idx === 0) next[next.length - 1] = { lat, lng }
         else if (idx === next.length - 1) next[0] = { lat, lng }
       }
+      return next
+    })
+  }
+
+  // Insère un nouveau poteau au milieu du segment [idx, idx+1].
+  // Demande Eugénie 21/05/2026 : "ajouter un poteau entre 2 poteaux existants pour être plus précis".
+  function insertEditPoint(afterIdx: number) {
+    if (!fenceEditPin) return
+    setFenceEditPoints(prev => {
+      const a = prev[afterIdx]
+      const b = prev[afterIdx + 1]
+      if (!a || !b) return prev
+      const mid = { lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 }
+      const next = [...prev.slice(0, afterIdx + 1), mid, ...prev.slice(afterIdx + 1)]
       return next
     })
   }
@@ -1578,6 +1790,12 @@ export default function MapPage() {
         })
       }
 
+      // Pin "à faire" : init en statut "ouvert". La description est dans note,
+      // la complétion se fait depuis le panneau de détail (bouton "✓ Fait").
+      if (form.type === 'todo') {
+        Object.assign(base, { todoStatus: 'open' })
+      }
+
       await addDoc(collection(db, 'map_pins'), base)
       cancelAdd()
     } finally {
@@ -1856,7 +2074,7 @@ export default function MapPage() {
   const overduePins  = new Set(pins.filter(p => isWaterOverdue(p) || isBatteryDue(p)).map(p => p.id))
   const fencePins    = pins.filter(p => p.type === 'fence' && (p.points?.length ?? 0) >= 2)
   const nonFencePins = pins.filter(p => p.type !== 'fence' || (p.points?.length ?? 0) < 2)
-  const anyModeActive = addMode || fenceMode || scissorMode || pointerMode
+  const anyModeActive = addMode || fenceMode || scissorMode || pointerMode || streamMode
 
   function toggleMonth(m: number) {
     setForm(f => ({
@@ -1881,17 +2099,39 @@ export default function MapPage() {
   }
 
   function getFencePathOptions(pin: MapPin): L.PolylineOptions {
-    const color   = pin.presetColor ?? '#EA580C'
+    let   color   = pin.presetColor ?? '#EA580C'
     const count   = pin.wireCount   ?? 1
     const baseW   = Math.max(2, 1.5 + count * 1.5)
     // Segments issus d'une coupe : un peu plus épais pour bien les voir
     const weight  = pin.cutFromId ? baseW + 1 : baseW
     const preset  = fencePresets.find(p => p.id === pin.presetId)
-    const dashArray = preset?.wireStyle === 'barbed' ? '2 6'
-                    : preset?.wireStyle === 'ribbon' ? '14 4'
-                    : preset?.wireStyle === 'plain'  ? '8 6'
-                    : undefined  // electric : ligne continue
-    return { color, weight, opacity: 0.9, dashArray }
+    let dashArray: string | undefined =
+        preset?.wireStyle === 'barbed' ? '2 6'
+      : preset?.wireStyle === 'ribbon' ? '14 4'
+      : preset?.wireStyle === 'plain'  ? '8 6'
+      : undefined  // electric : ligne continue
+
+    // Intensité du courant — uniquement pour les clôtures électriques (bug Nils 21/05/2026)
+    let opacity = 0.9
+    if (preset?.wireStyle === 'electric') {
+      // Override "off" si la batterie connectée est éteinte (bug Nils 21/05/2026)
+      const battery = pin.connectedBatteryId
+        ? pins.find(p => p.id === pin.connectedBatteryId)
+        : null
+      const batteryOff = battery && battery.powerOn === false
+      const effective = batteryOff ? 'off' : (pin.electricityIntensity ?? 'full')
+
+      if (effective === 'attenuated') {
+        opacity = 0.55
+        dashArray = '6 6'
+      } else if (effective === 'off') {
+        opacity = 0.35
+        dashArray = '3 8'
+        color = '#94A3B8'
+      }
+    }
+
+    return { color, weight, opacity, dashArray }
   }
 
   /* ─── render ─── */
@@ -1969,6 +2209,8 @@ export default function MapPage() {
           scissorOverridePoints={scissorPoints}
           pointerActive={pointerMode}
           onPointer={sendPointer}
+          streamActive={streamMode && !streamFormVisible}
+          onStreamPoint={(lat, lng) => setStreamPoints(prev => [...prev, { lat, lng }])}
           onPin={handleMapClick}
           onFencePoint={handleFencePoint}
           onFenceClose={handleFenceClose}
@@ -1989,17 +2231,21 @@ export default function MapPage() {
         )}
 
         {/* ── Clôtures ── */}
-        {/* Passe 1 : remplissage enclos fermés (fill uniquement, zéro stroke) */}
+        {/* Passe 1 : remplissage enclos fermés — couleur selon la fraîcheur du pâturage */}
         {fencePins
           .filter(pin => isFenceClosed(pin) && !(scissorMode && pin.id === scissorFenceId))
-          .map(pin => (
-            <Polygon
-              key={pin.id + '-fill'}
-              positions={pin.points!.map(p => [p.lat, p.lng] as [number, number])}
-              pathOptions={{ stroke: false, weight: 0, opacity: 0, fill: true, fillColor: pin.presetColor ?? '#EA580C', fillOpacity: 0.12 }}
-              interactive={false}
-            />
-          ))}
+          .map(pin => {
+            const status = computeGrazingStatus(pin, fencePins, animals, allMovements)
+            const fill = GRAZING_FILL[status]
+            return (
+              <Polygon
+                key={pin.id + '-fill'}
+                positions={pin.points!.map(p => [p.lat, p.lng] as [number, number])}
+                pathOptions={{ stroke: false, weight: 0, opacity: 0, fill: true, fillColor: fill.color, fillOpacity: fill.opacity }}
+                interactive={false}
+              />
+            )
+          })}
         {/* Passe 2 : contour des enclos fermés (sauf fillOnly — leur contour est dans des segments séparés) */}
         {fencePins
           .filter(pin => isFenceClosed(pin) && !pin.fillOnly && !(scissorMode && pin.id === scissorFenceId))
@@ -2024,8 +2270,10 @@ export default function MapPage() {
           ))}
 
         {/* Labels animaux dans les enclos fermés — position GARANTIE à l'intérieur du polygone */}
+        {/* Bug Eugénie 20/05/2026 : ne pas afficher "Vide" en vue large — ça surcharge la carte */}
         {fencePins
           .filter(pin => isFenceClosed(pin) && !(scissorMode && pin.id === scissorFenceId))
+          .filter(pin => mapZoom >= LABEL_ZOOM || animals.some(a => a.enclosureId === pin.id))
           .map(pin => {
             const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
             const labelPos = pin.points ? insidePolygonCentroid(pin.points) : { lat: pin.lat, lng: pin.lng }
@@ -2033,7 +2281,7 @@ export default function MapPage() {
               <Marker
                 key={`label-${pin.id}`}
                 position={[labelPos.lat, labelPos.lng]}
-                icon={makeEnclosureLabelIcon(enc, mapZoom, customSpecies)}
+                icon={makeEnclosureLabelIcon(enc, mapZoom, customSpecies, pin.rotationDueAt)}
                 interactive={false}
               />
             )
@@ -2112,6 +2360,47 @@ export default function MapPage() {
           </>
         )}
 
+        {/* Cours d'eau en cours de dessin */}
+        {streamMode && streamPoints.length > 0 && (
+          <>
+            <Polyline
+              positions={streamPoints.map(p => [p.lat, p.lng] as [number, number])}
+              pathOptions={{ color: '#0284C7', weight: 4, dashArray: '8 6', opacity: 0.8 }}
+              interactive={false}
+            />
+            {streamPoints.map((p, i) => (
+              <Marker
+                key={`stream-draw-${i}`}
+                position={[p.lat, p.lng]}
+                icon={FENCE_DOT_ICON}
+                interactive={false}
+              />
+            ))}
+          </>
+        )}
+
+        {/* Cours d'eau enregistrés */}
+        {pins.filter(p => p.type === 'water_stream' && (p.points?.length ?? 0) >= 2).map(pin => {
+          const currentMonth = new Date().getMonth() + 1  // 1-12
+          const isSeasonal = pin.streamMode === 'seasonal'
+          const isActiveNow = !isSeasonal || (pin.streamActiveMonths?.includes(currentMonth) ?? false)
+          return (
+            <Polyline
+              key={pin.id}
+              positions={pin.points!.map(p => [p.lat, p.lng] as [number, number])}
+              pathOptions={{
+                color: '#0284C7',
+                weight: 4,
+                opacity: isActiveNow ? 0.85 : 0.35,
+                dashArray: isActiveNow ? undefined : '6 6',
+              }}
+              eventHandlers={{
+                click: () => setSelected(pin),
+              }}
+            />
+          )
+        })}
+
         {/* ── Édition d'une clôture existante : aperçu live + markers draggables ── */}
         {fenceEditPin && fenceEditPoints.length > 0 && (
           <>
@@ -2156,6 +2445,27 @@ export default function MapPage() {
                       dragEditPoint(i, ll.lat, ll.lng)
                     },
                     dblclick: () => removeEditPoint(i),
+                  }}
+                />
+              )
+            })}
+
+            {/* Markers ghost au milieu de chaque segment : tap pour insérer un poteau */}
+            {fenceEditPoints.map((p, i) => {
+              const next = fenceEditPoints[i + 1]
+              if (!next) return null
+              // En enclos fermé, le dernier segment relie le dernier point au premier (doublon),
+              // donc l'intermédiaire serait redondant avec le premier ghost. On le skippe.
+              const closed = isFenceClosed(fenceEditPin)
+              if (closed && i === fenceEditPoints.length - 2) return null
+              const mid = { lat: (p.lat + next.lat) / 2, lng: (p.lng + next.lng) / 2 }
+              return (
+                <Marker
+                  key={`edit-mid-${i}`}
+                  position={[mid.lat, mid.lng]}
+                  icon={FENCE_MID_DOT_ICON}
+                  eventHandlers={{
+                    click: () => insertEditPoint(i),
                   }}
                 />
               )
@@ -2223,7 +2533,7 @@ export default function MapPage() {
           <Marker
             key={pin.id}
             position={[pin.lat, pin.lng]}
-            icon={makeDivIcon(pin.type, overduePins.has(pin.id), (pin.photoCount ?? 0) > 0, pin.waterStatus)}
+            icon={makeDivIcon(pin.type, overduePins.has(pin.id), (pin.photoCount ?? 0) > 0, pin.waterStatus, pin.todoStatus === 'done', pin.type === 'battery' && pin.powerOn === false)}
             interactive={false}
           />
         ))}
@@ -2530,7 +2840,8 @@ export default function MapPage() {
             </button>
           </div>
           <p className="text-[11px] opacity-90 leading-snug">
-            <strong>Glisse un poteau</strong> pour le repositionner.
+            <strong>Glisse</strong> un poteau pour le repositionner.
+            <strong> Touche un + vert</strong> entre 2 poteaux pour en insérer un nouveau.
             <strong> Double-tap</strong> sur un poteau pour le supprimer.
             Les changements ne sont pris en compte qu'au «&nbsp;Valider&nbsp;».
           </p>
@@ -2735,7 +3046,7 @@ export default function MapPage() {
 
 
       {/* ── Boutons flottants (FAB) ── */}
-      {!addMode && !pendingPos && !selected && !fenceMode && !scissorMode && !pointerMode && (
+      {!addMode && !pendingPos && !selected && !fenceMode && !scissorMode && !pointerMode && !streamMode && (
         <div className="absolute bottom-6 right-4 z-[1000] flex flex-col gap-3 items-end">
           <button
             onClick={() => setPointerMode(true)}
@@ -2766,12 +3077,215 @@ export default function MapPage() {
             <Scissors size={18} />
             <span className="text-sm font-semibold">Couper</span>
           </button>
+          {/* Bouton cours d'eau — bug Eugénie 21/05/2026 V2 */}
+          <button
+            onClick={() => { setStreamMode(true); setStreamPoints([]) }}
+            className="bg-sky-600 text-white rounded-2xl px-4 py-3 shadow-lg
+                       active:scale-95 transition-all flex items-center gap-2"
+            title="Tracer un cours d'eau"
+          >
+            <span className="text-base leading-none">🏞️</span>
+            <span className="text-sm font-semibold">Cours d'eau</span>
+          </button>
           <button
             onClick={() => setAddMode(true)}
             className="bg-forest text-white rounded-2xl p-4 shadow-xl active:scale-95 transition-all"
           >
             <Plus size={24} />
           </button>
+        </div>
+      )}
+
+      {/* ── Barre d'outils : mode "Tracer un cours d'eau" ── */}
+      {streamMode && !streamFormVisible && (
+        <>
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] w-[92vw] max-w-md
+                          text-white rounded-2xl shadow-xl px-4 py-3 space-y-2"
+               style={{ backgroundColor: '#0284C7' }}>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-bold leading-tight">
+                🏞️ Tracé du cours d'eau
+                <span className="ml-1 text-xs font-semibold opacity-90">
+                  · {streamPoints.length} point{streamPoints.length > 1 ? 's' : ''}
+                </span>
+              </p>
+              <button
+                onClick={() => { setStreamMode(false); setStreamPoints([]) }}
+                className="p-1.5 rounded-lg bg-white/20 active:bg-white/40"
+                aria-label="Annuler"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <p className="text-[11px] opacity-90 leading-snug">
+              Touche la carte pour ajouter chaque point du cours d'eau (source → embouchure).
+              Touche "Valider" quand le tracé suit le cours réel.
+            </p>
+          </div>
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[1001] flex gap-2">
+            {streamPoints.length > 0 && (
+              <button
+                onClick={() => setStreamPoints(prev => prev.slice(0, -1))}
+                className="bg-card text-charcoal rounded-2xl px-4 py-3 shadow-lg
+                           active:scale-95 transition-all flex items-center gap-2 border border-border"
+              >
+                <Undo2 size={16} />
+                <span className="text-sm font-semibold">Retirer le dernier</span>
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setStreamFormName('')
+                setStreamFormSeasonal(false)
+                setStreamFormMonths([])
+                setStreamFormVisible(true)
+              }}
+              disabled={streamPoints.length < 2}
+              className="bg-sky-600 text-white rounded-2xl px-5 py-3 shadow-xl
+                         active:scale-95 transition-all flex items-center gap-2 disabled:opacity-40"
+            >
+              <Check size={18} />
+              <span className="text-sm font-bold">Valider le tracé</span>
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* ── Modal : nom + saisonnalité du cours d'eau ── */}
+      {streamFormVisible && (
+        <div className="fixed inset-0 z-[2500] bg-black/50 flex items-end sm:items-center justify-center p-3">
+          <div className="bg-card w-full max-w-md rounded-3xl shadow-xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-5 pt-5 pb-3 flex items-start justify-between border-b border-border/40">
+              <div>
+                <p className="text-xs font-semibold text-muted uppercase tracking-wider">
+                  🏞️ Nouveau cours d'eau
+                </p>
+                <p className="text-xs text-muted/80 mt-1">
+                  {streamPoints.length} points tracés
+                </p>
+              </div>
+              <button
+                onClick={() => setStreamFormVisible(false)}
+                className="ml-2 w-8 h-8 rounded-lg bg-cream flex items-center justify-center active:scale-95 flex-shrink-0"
+                aria-label="Retour au tracé"
+              >
+                <X size={16} className="text-muted" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-4 overflow-y-auto">
+              <label className="block">
+                <span className="text-xs font-semibold text-charcoal block mb-1.5">Nom du cours d'eau *</span>
+                <input
+                  type="text"
+                  autoFocus
+                  value={streamFormName}
+                  onChange={e => setStreamFormName(e.target.value)}
+                  maxLength={60}
+                  className="w-full px-3 py-2 rounded-xl border border-border bg-cream text-sm text-charcoal
+                             focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                  placeholder="ex: Ruisseau du bas, Source de la prairie…"
+                />
+              </label>
+
+              <div>
+                <span className="text-xs font-semibold text-charcoal block mb-1.5">Régime</span>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setStreamFormSeasonal(false)}
+                    className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                      !streamFormSeasonal
+                        ? 'border-sky-500 bg-sky-500 text-white'
+                        : 'border-border bg-cream text-muted'
+                    }`}
+                  >
+                    Permanent (toute l'année)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStreamFormSeasonal(true)}
+                    className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                      streamFormSeasonal
+                        ? 'border-sky-500 bg-sky-500 text-white'
+                        : 'border-border bg-cream text-muted'
+                    }`}
+                  >
+                    Saisonnier (subit aléas)
+                  </button>
+                </div>
+              </div>
+
+              {streamFormSeasonal && (
+                <div>
+                  <span className="text-xs font-semibold text-charcoal block mb-1.5">Mois où il coule</span>
+                  <div className="grid grid-cols-6 gap-1">
+                    {['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'].map((m, idx) => {
+                      const monthNum = idx + 1
+                      const active = streamFormMonths.includes(monthNum)
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setStreamFormMonths(prev =>
+                            active ? prev.filter(x => x !== monthNum) : [...prev, monthNum].sort((a, b) => a - b),
+                          )}
+                          className={`py-1.5 rounded-lg text-[10px] font-bold transition-all border ${
+                            active
+                              ? 'bg-sky-500 text-white border-sky-500'
+                              : 'bg-cream text-muted border-border'
+                          }`}
+                        >
+                          {m}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-[10px] text-muted/80 mt-1.5">
+                    Les mois cochés = l'eau coule. Les autres mois, le tracé apparaîtra en gris pointillé sur la carte.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="px-5 py-3 border-t border-border/40 flex gap-2">
+              <button
+                onClick={() => setStreamFormVisible(false)}
+                className="px-4 py-2.5 rounded-xl border border-border text-sm font-semibold text-muted active:bg-cream"
+              >
+                Retour au tracé
+              </button>
+              <button
+                onClick={async () => {
+                  if (!streamFormName.trim() || !user) return
+                  const now = Date.now()
+                  await addDoc(collection(db, 'map_pins'), {
+                    name:               streamFormName.trim(),
+                    type:                'water_stream',
+                    note:                '',
+                    lat:                 streamPoints[0].lat,
+                    lng:                 streamPoints[0].lng,
+                    points:              streamPoints,
+                    status:              'ok',
+                    createdAt:           now,
+                    createdBy:           user.uid,
+                    updatedAt:           now,
+                    streamMode:          streamFormSeasonal ? 'seasonal' : 'permanent',
+                    streamActiveMonths:  streamFormSeasonal ? streamFormMonths : [],
+                  })
+                  setStreamMode(false)
+                  setStreamPoints([])
+                  setStreamFormVisible(false)
+                }}
+                disabled={!streamFormName.trim()}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl
+                           bg-sky-600 text-white text-sm font-bold active:scale-95
+                           disabled:opacity-40"
+              >
+                <Check size={15} /> Enregistrer le cours d'eau
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -3572,15 +4086,43 @@ export default function MapPage() {
           <div className="relative bg-card rounded-t-3xl px-5 pt-5 pb-10 shadow-2xl max-h-[80vh] overflow-y-auto">
 
             <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
                 <span className="text-3xl">{PIN_CFG[selected.type]?.emoji}</span>
-                <div>
-                  <h2 className="text-charcoal text-lg font-bold m-0">{selected.name}</h2>
+                <div className="flex-1 min-w-0">
+                  {renamingPin && !isTemp ? (
+                    <input
+                      type="text"
+                      autoFocus
+                      value={renameValue}
+                      onChange={e => setRenameValue(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') commitRename()
+                        if (e.key === 'Escape') { setRenamingPin(false); setRenameValue('') }
+                      }}
+                      maxLength={60}
+                      className="w-full px-2 py-1 rounded-lg border-2 border-forest bg-white text-charcoal text-lg font-bold
+                                 focus:outline-none focus:ring-2 focus:ring-forest/30"
+                    />
+                  ) : (
+                    <button
+                      onClick={() => {
+                        if (isTemp) return
+                        setRenameValue(selected.name)
+                        setRenamingPin(true)
+                      }}
+                      disabled={isTemp}
+                      className={`flex items-center gap-1.5 text-left ${isTemp ? 'cursor-default' : 'active:bg-cream/50 -mx-1 px-1 rounded-md transition-colors'}`}
+                    >
+                      <h2 className="text-charcoal text-lg font-bold m-0 truncate">{selected.name}</h2>
+                      {!isTemp && <Pencil size={12} className="text-muted flex-shrink-0" />}
+                    </button>
+                  )}
                   <p className="text-muted text-xs mt-0.5">{PIN_CFG[selected.type]?.label}</p>
                 </div>
               </div>
-              <button onClick={() => { setSelected(null); setEditOccupants(false) }}
-                      className="p-2 rounded-xl text-muted active:bg-cream">
+              <button onClick={() => { setSelected(null); setEditOccupants(false); setRenamingPin(false) }}
+                      className="p-2 rounded-xl text-muted active:bg-cream flex-shrink-0">
                 <X size={20} />
               </button>
             </div>
@@ -3650,6 +4192,112 @@ export default function MapPage() {
                     <span className="text-xs text-muted font-semibold">V</span>
                   </div>
                 </div>
+
+                {/* Connexion à une batterie — visible uniquement pour les clôtures électriques.
+                    Bug Nils 21/05/2026 : circuit visible/invisible selon état batterie. */}
+                {(() => {
+                  const preset = fencePresets.find(p => p.id === selected.presetId)
+                  if (preset?.wireStyle !== 'electric') return null
+                  const batteryPins = pins.filter(p => p.type === 'battery')
+                  if (batteryPins.length === 0) return null
+                  const setBattery = async (bid: string | null) => {
+                    if (!user) return
+                    setActionBusy(true)
+                    try {
+                      const payload: Record<string, unknown> = {
+                        updatedAt: Date.now(),
+                        updatedBy: user.uid,
+                      }
+                      payload.connectedBatteryId = bid ?? deleteField()
+                      await updateDoc(doc(db, 'map_pins', selected.id), payload)
+                      setSelected({ ...selected, connectedBatteryId: bid ?? undefined })
+                    } finally { setActionBusy(false) }
+                  }
+                  return (
+                    <div className="rounded-xl p-3 bg-cream border border-border">
+                      <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">
+                        Reliée à une batterie
+                      </p>
+                      <select
+                        value={selected.connectedBatteryId ?? ''}
+                        onChange={e => setBattery(e.target.value || null)}
+                        disabled={isTemp || actionBusy}
+                        className="w-full px-3 py-2 rounded-lg border border-border bg-white text-xs text-charcoal"
+                      >
+                        <option value="">— Aucune —</option>
+                        {batteryPins.map(b => (
+                          <option key={b.id} value={b.id}>
+                            {b.name} {b.powerOn === false ? '(éteinte)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[10px] text-muted/80 mt-1.5 leading-tight">
+                        Si la batterie est éteinte, cette clôture s'affiche automatiquement
+                        comme coupée (grisée).
+                      </p>
+                    </div>
+                  )
+                })()}
+
+                {/* Intensité du courant — visible uniquement pour les clôtures électriques.
+                    Bug Nils 21/05/2026 : indiquer visuellement la baisse d'intensité. */}
+                {(() => {
+                  const preset = fencePresets.find(p => p.id === selected.presetId)
+                  if (preset?.wireStyle !== 'electric') return null
+                  const current = selected.electricityIntensity ?? 'full'
+                  const setIntensity = async (level: 'full' | 'attenuated' | 'off') => {
+                    if (!user) return
+                    setActionBusy(true)
+                    try {
+                      const payload: Record<string, unknown> = {
+                        updatedAt: Date.now(),
+                        updatedBy: user.uid,
+                      }
+                      if (level === 'full') {
+                        payload.electricityIntensity = deleteField()
+                      } else {
+                        payload.electricityIntensity = level
+                      }
+                      await updateDoc(doc(db, 'map_pins', selected.id), payload)
+                      setSelected({
+                        ...selected,
+                        electricityIntensity: level === 'full' ? undefined : level,
+                      })
+                    } finally { setActionBusy(false) }
+                  }
+                  const options: Array<['full' | 'attenuated' | 'off', string, string]> = [
+                    ['full',       '⚡ Plein',     'Courant pleine puissance'],
+                    ['attenuated', '⚡ Atténué',   'Courant faible (fin de circuit)'],
+                    ['off',        '⊘ Coupé',      'Pas de courant (débranché)'],
+                  ]
+                  return (
+                    <div className="rounded-xl p-3 bg-cream border border-border">
+                      <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">
+                        Intensité du courant
+                      </p>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {options.map(([k, label, hint]) => (
+                          <button
+                            key={k}
+                            onClick={() => !isTemp && setIntensity(k)}
+                            disabled={isTemp || actionBusy}
+                            title={hint}
+                            className={`py-2 rounded-lg border text-[11px] font-bold transition-all ${
+                              current === k
+                                ? 'border-orange-500 bg-orange-500 text-white'
+                                : 'border-border bg-card text-muted'
+                            } disabled:opacity-40`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-muted/80 mt-1.5 leading-tight">
+                        Visuel sur la carte : trait plein, pointillé moyen, ou pointillé gris/dispersé.
+                      </p>
+                    </div>
+                  )
+                })()}
 
                 {/* Infos tracé */}
                 <div className="rounded-xl p-3 bg-orange-500/10 border border-orange-500/20 flex items-center gap-2">
@@ -3870,6 +4518,82 @@ export default function MapPage() {
                   </div>
                 )}
 
+                {/* Rotation à prévoir — demande Eugénie 21/05/2026 */}
+                {isFenceClosed(selected) && !isTemp && (() => {
+                  const occupants = animals.filter(a => a.enclosureId === selected.id).length
+                  if (occupants === 0) return null
+                  const setRotationIn = async (days: number | null) => {
+                    if (!user) return
+                    setActionBusy(true)
+                    try {
+                      const payload: Record<string, unknown> = {
+                        updatedAt: Date.now(),
+                        updatedBy: user.uid,
+                      }
+                      if (days === null) {
+                        payload.rotationDueAt = deleteField()
+                      } else {
+                        payload.rotationDueAt = Date.now() + days * 86_400_000
+                      }
+                      await updateDoc(doc(db, 'map_pins', selected.id), payload)
+                      setSelected({
+                        ...selected,
+                        rotationDueAt: days === null ? undefined : Date.now() + days * 86_400_000,
+                      })
+                    } finally { setActionBusy(false) }
+                  }
+                  const due = selected.rotationDueAt
+                  if (due) {
+                    const daysLeft = (due - Date.now()) / 86_400_000
+                    const overdue = daysLeft < 0
+                    return (
+                      <div className={`rounded-xl p-3 border ${overdue ? 'bg-danger/10 border-danger/30' : 'bg-orange-500/10 border-orange-500/30'}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-bold text-charcoal">⏰ Rotation prévue</p>
+                            <p className="text-xs text-muted mt-0.5">
+                              {overdue
+                                ? `En retard de ${Math.ceil(-daysLeft)} j`
+                                : daysLeft < 1
+                                  ? "Aujourd'hui"
+                                  : `Dans ${Math.ceil(daysLeft)} j`}
+                              {' · '}
+                              {new Date(due).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => setRotationIn(null)}
+                            disabled={actionBusy}
+                            className="text-[11px] font-bold text-muted bg-card border border-border px-2 py-1 rounded-md active:bg-cream disabled:opacity-50"
+                          >
+                            Annuler
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  }
+                  return (
+                    <div className="rounded-xl p-3 bg-cream border border-border/40">
+                      <p className="text-xs font-semibold text-charcoal mb-2">⏰ Signaler une rotation à prévoir</p>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {[1, 3, 7, 14].map(d => (
+                          <button
+                            key={d}
+                            onClick={() => setRotationIn(d)}
+                            disabled={actionBusy}
+                            className="py-2 rounded-lg bg-card border border-border text-xs font-bold text-charcoal active:bg-orange-500/10 active:border-orange-500/40 disabled:opacity-50 transition-colors"
+                          >
+                            J+{d}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-muted/80 mt-1.5">
+                        Tout le monde verra une horloge ⏰ sur ce parc à J-7 (orange) puis rouge à échéance.
+                      </p>
+                    </div>
+                  )
+                })()}
+
                 {/* Historique des rotations (uniquement pour enclos fermés) */}
                 {isFenceClosed(selected) && (
                   <div className="rounded-xl bg-cream border border-border/40 overflow-hidden">
@@ -3889,7 +4613,8 @@ export default function MapPage() {
                       <span className="text-xs font-semibold text-muted uppercase tracking-wider flex items-center gap-1.5">
                         🔄 Historique des mouvements
                       </span>
-                      {historyVisible ? <Undo2 size={14} className="text-muted" /> : <Pencil size={14} className="text-muted" />}
+                      {/* Bug Benoît 20/05/2026 : crayon trompeur (suggérait l'édition). C'est juste un toggle. */}
+                      {historyVisible ? <ChevronUp size={14} className="text-muted" /> : <ChevronDown size={14} className="text-muted" />}
                     </button>
                     {historyVisible && (
                       <div className="px-3 pb-3 pt-1">
@@ -3919,6 +4644,15 @@ export default function MapPage() {
                               )
                             })}
                           </ul>
+                        )}
+                        {!isTemp && (
+                          <button
+                            onClick={() => navigate(`/grazing?addFor=${selected.id}`)}
+                            className="mt-2 w-full text-[11px] font-bold text-forest bg-forest/10
+                                       px-3 py-2 rounded-lg active:bg-forest/20 flex items-center justify-center gap-1.5"
+                          >
+                            <Pencil size={12} /> Noter un mouvement
+                          </button>
                         )}
                       </div>
                     )}
@@ -4051,6 +4785,42 @@ export default function MapPage() {
                   <Check size={18} />
                   {actionBusy ? 'Enregistrement…' : "J'ai vérifié ✓"}
                 </button>
+
+                {/* Bouton ON/OFF — demande Nils 21/05/2026 */}
+                {!isTemp && (() => {
+                  const isOff = selected.powerOn === false
+                  const connectedCount = pins.filter(
+                    p => p.type === 'fence' && p.connectedBatteryId === selected.id,
+                  ).length
+                  const togglePower = async () => {
+                    if (!user) return
+                    setActionBusy(true)
+                    try {
+                      await updateDoc(doc(db, 'map_pins', selected.id), {
+                        powerOn: !isOff,
+                        updatedAt: Date.now(),
+                        updatedBy: user.uid,
+                      })
+                      setSelected({ ...selected, powerOn: !isOff })
+                    } finally { setActionBusy(false) }
+                  }
+                  return (
+                    <button
+                      onClick={togglePower}
+                      disabled={actionBusy}
+                      className={`w-full flex items-center justify-center gap-2 py-3 rounded-2xl
+                                  font-bold text-sm shadow active:scale-95 transition-all disabled:opacity-50 ${
+                        isOff
+                          ? 'bg-meadow text-white'
+                          : 'bg-danger/10 border-2 border-danger/40 text-danger'
+                      }`}
+                    >
+                      {isOff
+                        ? <>⚡ Rallumer la batterie</>
+                        : <>⊘ Éteindre la batterie {connectedCount > 0 && <span className="text-[10px] font-normal opacity-90">({connectedCount} clôture{connectedCount > 1 ? 's' : ''})</span>}</>}
+                    </button>
+                  )
+                })()}
               </div>
             )}
 
@@ -4117,6 +4887,90 @@ export default function MapPage() {
                       ))}
                     </div>
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Bloc tâche "à faire" ── */}
+            {selected.type === 'todo' && (
+              <div className="mb-4 space-y-3">
+                {selected.todoStatus === 'done' ? (
+                  <div className="rounded-xl p-3 flex items-center gap-3 bg-meadow/10 border border-meadow/30">
+                    <Check size={20} className="text-meadow" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-charcoal">Tâche terminée</p>
+                      {selected.todoCompletedAt && (
+                        <p className="text-xs text-muted mt-0.5">
+                          Faite {timeAgo(selected.todoCompletedAt)}
+                          {selected.todoCompletedBy && (() => {
+                            const author = users.find(u => u.uid === selected.todoCompletedBy)?.displayName
+                            return author ? ` · par ${author}` : ''
+                          })()}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl p-3 flex items-center gap-3 bg-earth/10 border border-earth/30">
+                    <span className="text-2xl">🪓</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-charcoal">Tâche à faire</p>
+                      <p className="text-xs text-muted mt-0.5">
+                        Créée {timeAgo(selected.createdAt)}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {!isTemp && (
+                  selected.todoStatus === 'done' ? (
+                    <button
+                      onClick={async () => {
+                        if (!user) return
+                        setActionBusy(true)
+                        try {
+                          await updateDoc(doc(db, 'map_pins', selected.id), {
+                            todoStatus: 'open',
+                            todoCompletedAt: deleteField(),
+                            todoCompletedBy: deleteField(),
+                            updatedAt: Date.now(),
+                            updatedBy: user.uid,
+                          })
+                          setSelected({ ...selected, todoStatus: 'open', todoCompletedAt: undefined, todoCompletedBy: undefined })
+                        } finally { setActionBusy(false) }
+                      }}
+                      disabled={actionBusy}
+                      className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl
+                                 border border-border text-charcoal font-bold text-sm
+                                 active:bg-cream disabled:opacity-50 transition-all"
+                    >
+                      <Undo2 size={18} /> Rouvrir cette tâche
+                    </button>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        if (!user) return
+                        setActionBusy(true)
+                        try {
+                          const now = Date.now()
+                          await updateDoc(doc(db, 'map_pins', selected.id), {
+                            todoStatus: 'done',
+                            todoCompletedAt: now,
+                            todoCompletedBy: user.uid,
+                            updatedAt: now,
+                            updatedBy: user.uid,
+                          })
+                          setSelected({ ...selected, todoStatus: 'done', todoCompletedAt: now, todoCompletedBy: user.uid })
+                        } finally { setActionBusy(false) }
+                      }}
+                      disabled={actionBusy}
+                      className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl
+                                 bg-meadow text-white font-bold text-base shadow-lg
+                                 active:scale-95 disabled:opacity-50 transition-all"
+                    >
+                      <Check size={20} /> Marquer comme faite
+                    </button>
+                  )
                 )}
               </div>
             )}

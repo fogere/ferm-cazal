@@ -20,7 +20,11 @@ import { useAuth } from './useAuth'
 
 const RECENT_WINDOW_MS = 90_000   // un autre user est "en train de regarder" si mapOpenAt < 90s
 const PUBLISH_INTERVAL = 60_000   // 1 publication par minute max tant qu'un viewer est actif
-const POSITION_TIMEOUT = 15_000
+// 45 s : avec enableHighAccuracy=true (fix bug Eugénie 21/05), le first fix GPS peut
+// prendre 20-30 s sur Android quand on est en intérieur ou en cold start. Anciennement
+// 15 s → "Timeout expired" en boucle dans les logs. À 45 s on laisse le temps au GPS de
+// se chauffer ; si vraiment pas de signal, on abandonne (mieux que de boucler des erreurs).
+const POSITION_TIMEOUT = 45_000
 
 export function useOnDemandLocationPublish() {
   const { user, profile } = useAuth()
@@ -69,7 +73,9 @@ export function useOnDemandLocationPublish() {
           }).catch(() => {})
         },
         err => console.warn('[onDemandPublish] geoloc:', err.message),
-        { enableHighAccuracy: false, maximumAge: 60_000, timeout: POSITION_TIMEOUT },
+        // enableHighAccuracy: true — bug Eugénie 21/05/2026 (précision ~500 m).
+        // GPS satellite forcé pour que les autres voient une position fiable.
+        { enableHighAccuracy: true, maximumAge: 30_000, timeout: POSITION_TIMEOUT },
       )
     }, 10_000) // check toutes les 10 s, mais l'écriture est throttlée à 1/minute
 

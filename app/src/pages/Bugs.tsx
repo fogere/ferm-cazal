@@ -1,9 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
-import { collection, deleteDoc, doc, onSnapshot, orderBy, query } from 'firebase/firestore'
-import { Bug, ChevronDown, ChevronRight, Copy, ExternalLink, Trash2, Download, Trash } from 'lucide-react'
+import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query } from 'firebase/firestore'
+import { Bug, ChevronDown, ChevronRight, Copy, ExternalLink, Trash2, Download, Trash, Mail, X } from 'lucide-react'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import type { ConsoleEntry, ActionEntry } from '../services/bugReporter'
+
+// Super-admins autorisés à répondre aux bugs (même règle que Tasks.tsx).
+// Identifiés par leur displayName (en minuscules, sans accents).
+const SUPER_ADMIN_NAMES = ['eugenie', 'eugénie', 'benoit', 'benoît']
+function normalizeName(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+}
+function isSuperAdmin(name: string | undefined | null): boolean {
+  if (!name) return false
+  return SUPER_ADMIN_NAMES.includes(normalizeName(name))
+}
 
 interface StoredBug {
   id:              string
@@ -102,7 +113,7 @@ function openExternalLinkIssue(b: StoredBug) {
 }
 
 export default function Bugs() {
-  const { user, isTemp } = useAuth()
+  const { user, profile, isTemp } = useAuth()
   const [bugs, setBugs] = useState<StoredBug[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [filter, setFilter] = useState<'all' | 'auto' | 'manual'>('all')
@@ -110,6 +121,64 @@ export default function Bugs() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [exportNotice, setExportNotice] = useState<string | null>(null)
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false)
+  // Compose de réponse (réservé aux super-admins)
+  const [replyTarget, setReplyTarget] = useState<StoredBug | null>(null)
+  const [replyTitle, setReplyTitle] = useState('')
+  const [replyBody,  setReplyBody]  = useState('')
+  const [replySending, setReplySending] = useState(false)
+  const [replyError, setReplyError] = useState<string | null>(null)
+
+  const canReply = isSuperAdmin(profile?.displayName)
+
+  function openReply(b: StoredBug) {
+    setReplyTarget(b)
+    // Pré-remplir un titre par défaut pour gagner du temps
+    const preview = b.description.length > 60 ? b.description.slice(0, 60) + '…' : b.description
+    setReplyTitle(`Réponse à : ${preview}`)
+    setReplyBody('')
+    setReplyError(null)
+  }
+
+  function closeReply() {
+    setReplyTarget(null)
+    setReplyTitle('')
+    setReplyBody('')
+    setReplyError(null)
+    setReplySending(false)
+  }
+
+  async function sendReply() {
+    if (!replyTarget || !user || !profile) return
+    if (!replyTarget.reportedBy) {
+      setReplyError("Ce bug n'a pas d'auteur identifié, impossible de répondre.")
+      return
+    }
+    if (!replyBody.trim()) {
+      setReplyError('Écris une réponse avant d\'envoyer.')
+      return
+    }
+    setReplySending(true)
+    setReplyError(null)
+    try {
+      await addDoc(collection(db, 'user_messages'), {
+        toUid:        replyTarget.reportedBy,
+        toUidName:    replyTarget.reportedByName ?? null,
+        fromUid:      user.uid,
+        fromUidName:  profile.displayName ?? null,
+        title:        replyTitle.trim() || 'Réponse à ton signalement',
+        body:         replyBody.trim(),
+        relatedBugId: replyTarget.id,
+        createdAt:    Date.now(),
+        readAt:       null,
+      })
+      closeReply()
+    } catch (e) {
+      setReplyError('Échec de l\'envoi. Réessaie dans un instant.')
+      console.warn('[bugs] sendReply:', e)
+    } finally {
+      setReplySending(false)
+    }
+  }
 
   useEffect(() => {
     const q = query(collection(db, 'bugReports'), orderBy('createdAt', 'desc'))
@@ -417,17 +486,26 @@ export default function Bugs() {
                     {b.userAgent && <div className="break-all"><span className="font-semibold">UA : </span>{b.userAgent}</div>}
                   </div>
 
-                  <div className="flex gap-2 pt-2">
+                  <div className="flex gap-2 pt-2 flex-wrap">
+                    {canReply && b.reportedBy && b.reportedBy !== user?.uid && (
+                      <button
+                        onClick={() => openReply(b)}
+                        className="flex-1 min-w-[110px] flex items-center justify-center gap-1.5 py-2 rounded-xl
+                                   bg-forest text-white text-xs font-semibold active:scale-95"
+                      >
+                        <Mail size={13} /> Répondre
+                      </button>
+                    )}
                     <button
                       onClick={() => copyMd(b)}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl
+                      className="flex-1 min-w-[100px] flex items-center justify-center gap-1.5 py-2 rounded-xl
                                  border border-border text-xs font-semibold text-charcoal active:bg-cream"
                     >
                       <Copy size={13} /> {copied === b.id ? 'Copié ✓' : copied === 'error' ? 'Échec' : 'Copier MD'}
                     </button>
                     <button
                       onClick={() => openExternalLinkIssue(b)}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl
+                      className="flex-1 min-w-[100px] flex items-center justify-center gap-1.5 py-2 rounded-xl
                                  bg-charcoal text-white text-xs font-semibold active:scale-95"
                     >
                       <ExternalLink size={13} /> Ouvrir issue
@@ -475,6 +553,94 @@ export default function Bugs() {
         </p>
         {!user && <p className="text-xs text-muted mt-2">Connecte-toi pour rapporter un bug.</p>}
       </div>
+
+      {/* Modal de réponse au bug — réservé aux super-admins */}
+      {replyTarget && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-3"
+          onClick={closeReply}
+        >
+          <div
+            className="bg-card w-full max-w-md rounded-3xl shadow-xl overflow-hidden flex flex-col max-h-[90vh]"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-5 pt-5 pb-3 flex items-start justify-between border-b border-border/40">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-muted uppercase tracking-wider">
+                  Répondre à {replyTarget.reportedByName ?? 'cet utilisateur'}
+                </p>
+                <p className="text-xs text-muted/80 mt-1 line-clamp-2">
+                  « {replyTarget.description} »
+                </p>
+              </div>
+              <button
+                onClick={closeReply}
+                className="ml-2 w-8 h-8 rounded-lg bg-cream flex items-center justify-center active:scale-95 flex-shrink-0"
+                aria-label="Fermer"
+              >
+                <X size={16} className="text-muted" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-3 overflow-y-auto">
+              <label className="block">
+                <span className="text-xs font-semibold text-charcoal block mb-1.5">Titre du message</span>
+                <input
+                  type="text"
+                  value={replyTitle}
+                  onChange={e => setReplyTitle(e.target.value)}
+                  maxLength={100}
+                  className="w-full px-3 py-2 rounded-xl border border-border bg-cream text-sm text-charcoal
+                             focus:outline-none focus:ring-2 focus:ring-forest/30"
+                  placeholder="Réponse à ta question"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-xs font-semibold text-charcoal block mb-1.5">Message</span>
+                <textarea
+                  value={replyBody}
+                  onChange={e => setReplyBody(e.target.value)}
+                  rows={8}
+                  className="w-full px-3 py-2 rounded-xl border border-border bg-cream text-sm text-charcoal
+                             focus:outline-none focus:ring-2 focus:ring-forest/30 resize-y"
+                  placeholder="Explique-lui comment faire, ou réponds à sa question. Le message reste consultable dans sa boîte de réception."
+                />
+              </label>
+
+              <p className="text-[11px] text-muted italic">
+                Le destinataire verra ce message sur son Dashboard et pourra le relire dans
+                <strong> Messages</strong>. Aucune notification push n'est envoyée.
+              </p>
+
+              {replyError && (
+                <p className="text-xs text-danger bg-danger/10 border border-danger/30 rounded-lg px-3 py-2">
+                  {replyError}
+                </p>
+              )}
+            </div>
+
+            <div className="px-5 py-3 border-t border-border/40 flex gap-2 flex-shrink-0">
+              <button
+                onClick={closeReply}
+                disabled={replySending}
+                className="px-4 py-2.5 rounded-xl border border-border text-sm font-semibold text-muted active:bg-cream disabled:opacity-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={sendReply}
+                disabled={replySending || !replyBody.trim()}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl
+                           bg-forest text-white text-sm font-bold active:scale-95
+                           disabled:opacity-50 disabled:active:scale-100"
+              >
+                <Mail size={15} /> {replySending ? 'Envoi…' : 'Envoyer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

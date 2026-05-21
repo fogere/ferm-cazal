@@ -122,7 +122,9 @@ export function useGeofenceAlert() {
         }).catch(() => {})
       },
       err => console.warn('[geofence] watch:', err.message),
-      { enableHighAccuracy: false, maximumAge: 60_000, timeout: 30_000 },
+      // enableHighAccuracy: true — bug Eugénie 21/05/2026 (précision ~500 m).
+      // Critique pour la geofence : sinon faux positifs/négatifs sur les enclos voisins.
+      { enableHighAccuracy: true, maximumAge: 30_000, timeout: 30_000 },
     )
 
     return () => {

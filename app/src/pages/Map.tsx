@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MapContainer, TileLayer, Marker, Polyline, Polygon, Circle, useMapEvents, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Zap, Check, Pencil, Undo2, Scissors, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search, ChevronDown, ChevronUp } from 'lucide-react'
+import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Check, Pencil, Undo2, Scissors, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search, ChevronDown, ChevronUp } from 'lucide-react'
 import { compressImage } from '../services/image'
 import type { PinPhoto, EnclosureMovement } from '../types'
 import {
@@ -21,14 +21,17 @@ import {
 import {
   dateInputToTs as dateInputToTsLocal,
   tsToDateInput as tsToDateInputLocal,
-  formatAgo, timeAgo, timeUntil,
+  formatAgo, timeAgo,
 } from '../services/map/time'
 import { healthFreshness, healthDotClass } from '../services/map/health'
 import { getFenceVisualState } from '../services/map/fence-visual'
 import { getStreamSegments } from '../services/map/stream-visual'
 import { isWaterOverdue } from '../services/map/water'
+import { isBatteryDue } from '../services/map/battery'
 import { WaterManualPanel } from './map/panels/WaterManualPanel'
 import { WaterStreamPanel } from './map/panels/WaterStreamPanel'
+import { BatteryPanel } from './map/panels/BatteryPanel'
+import { BATTERY_STATUS_CFG } from './map/panels/shared'
 import type { MapPin, PinType, UserProfile, FencePreset, Animal } from '../types'
 
 /* ─── ferme ─── */
@@ -83,13 +86,7 @@ const PICKABLE_TYPES: PinType[] = ['water_manual', 'battery', 'note', 'alert', '
 
 /* ─── batteries ─── */
 
-const BATTERY_STATUS_CFG = {
-  good:     { label: 'Bon',        color: 'text-meadow',     bg: 'bg-meadow/10   border-meadow/30'  },
-  warning:  { label: 'Attention',  color: 'text-sun',        bg: 'bg-sun/10      border-sun/30'     },
-  critical: { label: 'Critique',   color: 'text-orange-600', bg: 'bg-orange-500/10 border-orange-500/30' },
-  replace:  { label: 'À changer', color: 'text-danger',     bg: 'bg-danger/10   border-danger/30'  },
-  down:     { label: 'En panne',   color: 'text-danger',     bg: 'bg-danger/15   border-danger/40'  },
-} as const
+// BATTERY_STATUS_CFG importé depuis pages/map/panels/shared (S1 refacto)
 
 /* ─── eau naturelle ─── */
 
@@ -428,11 +425,6 @@ const GRAZING_FILL: Record<GrazingStatus, { color: string; opacity: number }> = 
   fresh:    { color: '#92400E', opacity: 0.22 }, // brun chaud — broutaillé récemment
   resting:  { color: '#EAB308', opacity: 0.16 }, // jaune — en repos / repousse
   ready:    { color: '#22C55E', opacity: 0.16 }, // vert vif — prêt à repâturer
-}
-
-function isBatteryDue(pin: MapPin): boolean {
-  if (pin.type !== 'battery') return false
-  return !!(pin.nextCheckAt && pin.nextCheckAt <= Date.now())
 }
 
 /* ─── sous-composants Leaflet ─── */
@@ -4706,85 +4698,27 @@ export default function MapPage() {
 
             {/* ── Bloc batterie ── */}
             {selected.type === 'battery' && (
-              <div className="mb-4 space-y-3">
-                {selected.batteryStatus && (() => {
-                  const cfg = BATTERY_STATUS_CFG[selected.batteryStatus as keyof typeof BATTERY_STATUS_CFG]
-                  return cfg ? (
-                    <div className={`rounded-xl p-3 border ${cfg.bg} flex items-center gap-2`}>
-                      <Zap size={18} className={cfg.color} />
-                      <span className={`text-sm font-semibold ${cfg.color}`}>{cfg.label}</span>
-                      {isBatteryDue(selected) && (
-                        <span className="ml-auto text-xs text-danger font-semibold">Vérification due !</span>
-                      )}
-                    </div>
-                  ) : null
-                })()}
-                <DetailRow label="Dernière vérif." value={selected.lastChecked ? timeAgo(selected.lastChecked) : 'Jamais'} />
-                {selected.nextCheckAt && (
-                  <DetailRow
-                    label="Prochaine vérif."
-                    value={isBatteryDue(selected) ? `Dépassée ${timeAgo(selected.nextCheckAt)}` : timeUntil(selected.nextCheckAt)}
-                  />
-                )}
-                {selected.zoneCovered && <DetailRow label="Zone couverte" value={selected.zoneCovered} />}
-                <DetailRow label="Intervalle vérif." value={`Tous les ${selected.checkIntervalDays ?? 7} jours`} />
-                <p className="text-xs font-semibold text-muted uppercase tracking-wider pt-1">Statut de la batterie</p>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {(Object.entries(BATTERY_STATUS_CFG) as [string, { label: string; color: string }][]).map(([k, v]) => (
-                    <button key={k}
-                      onClick={() => setBatteryStatus(selected, k)}
-                      disabled={actionBusy}
-                      className={`py-2 rounded-xl border text-xs font-semibold transition-all active:scale-95 ${
-                        selected.batteryStatus === k
-                          ? `border-forest bg-forest/10 ${v.color}`
-                          : 'border-border text-muted bg-cream'
-                      }`}>{v.label}</button>
-                  ))}
-                </div>
-                <button onClick={() => checkBattery(selected)} disabled={actionBusy}
-                  className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl
-                             bg-sun/90 text-charcoal font-bold text-sm shadow
-                             active:scale-95 disabled:opacity-50 transition-all">
-                  <Check size={18} />
-                  {actionBusy ? 'Enregistrement…' : "J'ai vérifié ✓"}
-                </button>
-
-                {/* Bouton ON/OFF — demande Nils 21/05/2026 */}
-                {!isTemp && (() => {
-                  const isOff = selected.powerOn === false
-                  const connectedCount = pins.filter(
-                    p => p.type === 'fence' && p.connectedBatteryId === selected.id,
-                  ).length
-                  const togglePower = async () => {
-                    if (!user) return
-                    setActionBusy(true)
-                    try {
-                      await updateDoc(doc(db, 'map_pins', selected.id), {
-                        powerOn: !isOff,
-                        updatedAt: Date.now(),
-                        updatedBy: user.uid,
-                      })
-                      setSelected({ ...selected, powerOn: !isOff })
-                    } finally { setActionBusy(false) }
-                  }
-                  return (
-                    <button
-                      onClick={togglePower}
-                      disabled={actionBusy}
-                      className={`w-full flex items-center justify-center gap-2 py-3 rounded-2xl
-                                  font-bold text-sm shadow active:scale-95 transition-all disabled:opacity-50 ${
-                        isOff
-                          ? 'bg-meadow text-white'
-                          : 'bg-danger/10 border-2 border-danger/40 text-danger'
-                      }`}
-                    >
-                      {isOff
-                        ? <>⚡ Rallumer la batterie</>
-                        : <>⊘ Éteindre la batterie {connectedCount > 0 && <span className="text-[10px] font-normal opacity-90">({connectedCount} clôture{connectedCount > 1 ? 's' : ''})</span>}</>}
-                    </button>
-                  )
-                })()}
-              </div>
+              <BatteryPanel
+                pin={selected}
+                isTemp={isTemp}
+                actionBusy={actionBusy}
+                connectedFenceCount={pins.filter(p => p.type === 'fence' && p.connectedBatteryId === selected.id).length}
+                onSetStatus={setBatteryStatus}
+                onCheck={checkBattery}
+                onTogglePower={async (pin) => {
+                  if (!user) return
+                  const isOff = pin.powerOn === false
+                  setActionBusy(true)
+                  try {
+                    await updateDoc(doc(db, 'map_pins', pin.id), {
+                      powerOn: !isOff,
+                      updatedAt: Date.now(),
+                      updatedBy: user.uid,
+                    })
+                    setSelected({ ...pin, powerOn: !isOff })
+                  } finally { setActionBusy(false) }
+                }}
+              />
             )}
 
             {/* ── Bloc zone animaux ── */}

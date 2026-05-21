@@ -47,6 +47,8 @@ export function useGeofenceAlert() {
   const refreshTimer  = useRef<ReturnType<typeof setInterval> | null>(null)
   const insideEnclosure = useRef<string | null>(null)
   const notifiedMap   = useRef<Record<string, number>>({})
+  // Anti-spam logs : un seul warn par code d'erreur par montage
+  const geoLogged     = useRef<Set<string>>(new Set())
 
   // Charge / rafraîchit les enclos fermés + les animaux du cheptel
   async function refreshCache() {
@@ -121,7 +123,13 @@ export function useGeofenceAlert() {
           geofenceNotified: notifiedMap.current,
         }).catch(() => {})
       },
-      err => console.warn('[geofence] watch:', err.message),
+      err => {
+        const key = String(err.code ?? err.message)
+        if (!geoLogged.current.has(key)) {
+          geoLogged.current.add(key)
+          console.warn('[geofence] watch:', err.message, '(logué une seule fois/session)')
+        }
+      },
       // enableHighAccuracy: true — bug Eugénie 21/05/2026 (précision ~500 m).
       // Critique pour la geofence : sinon faux positifs/négatifs sur les enclos voisins.
       { enableHighAccuracy: true, maximumAge: 30_000, timeout: 30_000 },

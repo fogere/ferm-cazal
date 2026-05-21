@@ -35,6 +35,11 @@ export function useOnDemandLocationPublish() {
   const otherWatcherActive = useRef(false)
   const lastPublishAt      = useRef(0)
   const timerRef           = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Anti-spam des logs d'erreur geoloc : un seul warn par code par session.
+  // Sans ça, le buffer ring du bugReporter se remplit de "[onDemandPublish] geoloc:
+  // Timeout expired" toutes les 60 s et noie les vraies erreurs (vu dans les bug
+  // reports du 21/05/2026).
+  const geoLogged          = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     if (!myUid || !shareLocation) return
@@ -72,7 +77,13 @@ export function useOnDemandLocationPublish() {
             },
           }).catch(() => {})
         },
-        err => console.warn('[onDemandPublish] geoloc:', err.message),
+        err => {
+          const key = String(err.code ?? err.message)
+          if (!geoLogged.current.has(key)) {
+            geoLogged.current.add(key)
+            console.warn('[onDemandPublish] geoloc:', err.message, '(logué une seule fois/session)')
+          }
+        },
         // enableHighAccuracy: true — bug Eugénie 21/05/2026 (précision ~500 m).
         // GPS satellite forcé pour que les autres voient une position fiable.
         { enableHighAccuracy: true, maximumAge: 30_000, timeout: POSITION_TIMEOUT },

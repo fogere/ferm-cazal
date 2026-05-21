@@ -55,6 +55,8 @@ export function useLiveLocation() {
     let lastPos: { lat: number; lng: number } | null = null
     const startedAt = Date.now()
     let stopped = false
+    // Anti-spam logs : un seul warn par code d'erreur par montage (cf. bugReporter ring buffer)
+    const geoLogged = new Set<string>()
 
     const watchId = navigator.geolocation.watchPosition(
       pos => {
@@ -85,7 +87,13 @@ export function useLiveLocation() {
           },
         }).catch(() => {})
       },
-      err => console.warn('[geo]', err.message),
+      err => {
+        const key = String(err.code ?? err.message)
+        if (!geoLogged.has(key)) {
+          geoLogged.add(key)
+          console.warn('[geo]', err.message, '(logué une seule fois/session)')
+        }
+      },
       // enableHighAccuracy: true — bug Eugénie 21/05/2026 "500 m de rayon aléatoire".
       // `false` faisait du Wifi/Cell positioning (50-500 m). `true` force le GPS satellite
       // (5-20 m typique en outdoor). Coût batterie acceptable : partage auto-stop à 2 h.

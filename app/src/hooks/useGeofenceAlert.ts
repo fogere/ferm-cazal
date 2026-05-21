@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react'
 import {
-  collection, doc, getDocs, query, where, updateDoc,
+  collection, doc, getDocs, updateDoc,
 } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from './useAuth'
-import { pointInPolygon } from '../services/map/geometry'
+import { pointInPolygonWithHoles } from '../services/map/polygon'
 import { effectiveEnclosureId } from '../services/map/enclosure'
 import { useLocationCore } from './useLocationCore'
 import type { Animal, MapPin } from '../types'
@@ -26,6 +26,11 @@ import type { Animal, MapPin } from '../types'
  * Source GPS : `locationCore` (watchPosition partagé). Avant ce hook montait
  * son propre watchPosition, dupliqué avec useLiveLocation et
  * useOnDemandLocationPublish. Voir services/location/locationCore.ts.
+ *
+ * S5.1 : la détection se fait sur les `land_plot` (refonte clôtures/espaces)
+ * avec exclusion des holes via `pointInPolygonWithHoles`. Les fences fermés
+ * sans `migratedToPlotId` (rétrocompat — devraient être 0 après S3) sont
+ * inclus en fallback pour ne casser aucun cas.
  */
 
 const STALE_AFTER_MS  = 12 * 60 * 60 * 1000 // 12 h sans check → animal "à vérifier"
@@ -41,6 +46,10 @@ function isClosedFence(pin: MapPin): boolean {
   return Math.abs(a.lat - b.lat) < 1e-9 && Math.abs(a.lng - b.lng) < 1e-9
 }
 
+function isValidLandPlot(pin: MapPin): boolean {
+  return pin.type === 'land_plot' && (pin.points?.length ?? 0) >= 3
+}
+
 export function useGeofenceAlert() {
   const { user, profile, isTemp } = useAuth()
   const shareLocation = !!profile?.shareLocation
@@ -53,16 +62,19 @@ export function useGeofenceAlert() {
   const insideEnclosure = useRef<string | null>(null)
   const notifiedMap   = useRef<Record<string, number>>({})
 
-  // Charge / rafraîchit les enclos fermés + les animaux du cheptel
+  // Charge / rafraîchit les enclos candidats au geofence + les animaux du cheptel.
+  // Candidats = land_plots valides + fences fermés sans migratedToPlotId
+  // (rétrocompat — un user qui aurait créé un fence enclos avant migration).
   async function refreshCache() {
     try {
       const [pinsSnap, animalsSnap] = await Promise.all([
-        getDocs(query(collection(db, 'map_pins'), where('type', '==', 'fence'))),
+        getDocs(collection(db, 'map_pins')),
         getDocs(collection(db, 'animals')),
       ])
-      enclosuresRef.current = pinsSnap.docs
-        .map(d => ({ id: d.id, ...d.data() } as MapPin))
-        .filter(isClosedFence)
+      const allPins = pinsSnap.docs.map(d => ({ id: d.id, ...d.data() } as MapPin))
+      const plots = allPins.filter(isValidLandPlot)
+      const orphanFences = allPins.filter(p => isClosedFence(p) && !p.migratedToPlotId)
+      enclosuresRef.current = [...plots, ...orphanFences]
       animalsRef.current = animalsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Animal))
     } catch (e) {
       console.warn('[geofence] refresh:', e)
@@ -83,15 +95,21 @@ export function useGeofenceAlert() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active])
 
-  // Réception des positions partagées : pointInPolygon + notification locale.
+  // Réception des positions partagées : pointInPolygonWithHoles + notification locale.
   const onPosition = useCallback((u: { lat: number; lng: number }) => {
     if (!myUid) return
     const now = Date.now()
     if (now - lastCheckedAt.current < POS_CHECK_MS) return
     lastCheckedAt.current = now
 
+    // On cherche le premier enclos qui contient le point. Les holes (zones
+    // vides intérieures du land_plot) excluent la position : si on est dans
+    // un trou (bout de terrain qui n'appartient pas), on n'est PAS dans l'enclos.
     const candidate = enclosuresRef.current.find(e =>
-      pointInPolygon(u.lat, u.lng, e.points ?? []),
+      pointInPolygonWithHoles(u.lat, u.lng, {
+        outer: e.points ?? [],
+        holes: e.holes ?? [],
+      }),
     )
     if (!candidate) {
       insideEnclosure.current = null
@@ -102,8 +120,9 @@ export function useGeofenceAlert() {
     insideEnclosure.current = candidate.id
 
     // Animaux à vérifier : jamais checkés OU check de plus de 12 h.
-    // S2.5 : après migration fence → land_plot, animal.enclosureId pointe vers
-    // le land_plot.id. effectiveEnclosureId(candidate) résout le bon id.
+    // effectiveEnclosureId : pour un land_plot, renvoie son id (= ce que
+    // animal.enclosureId pointe après migration S3). Pour un fence non migré,
+    // renvoie son id (rétrocompat).
     const encId = effectiveEnclosureId(candidate)
     const stale = animalsRef.current.filter(a =>
       a.enclosureId === encId &&

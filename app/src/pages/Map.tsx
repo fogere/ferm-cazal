@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MapContainer, TileLayer, Marker, Polyline, Polygon, Circle, useMapEvents, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Check, Pencil, Undo2, Scissors, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search, ChevronDown, ChevronUp } from 'lucide-react'
+import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Check, Pencil, Undo2, Scissors, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search } from 'lucide-react'
 import { compressImage } from '../services/image'
 import type { PinPhoto, EnclosureMovement } from '../types'
 import {
@@ -20,10 +20,8 @@ import {
 } from '../services/map/geometry'
 import {
   dateInputToTs as dateInputToTsLocal,
-  tsToDateInput as tsToDateInputLocal,
-  formatAgo, timeAgo,
+  timeAgo,
 } from '../services/map/time'
-import { healthFreshness, healthDotClass } from '../services/map/health'
 import { getFenceVisualState } from '../services/map/fence-visual'
 import { getStreamSegments } from '../services/map/stream-visual'
 import { isWaterOverdue } from '../services/map/water'
@@ -32,6 +30,7 @@ import { WaterManualPanel } from './map/panels/WaterManualPanel'
 import { WaterStreamPanel } from './map/panels/WaterStreamPanel'
 import { BatteryPanel } from './map/panels/BatteryPanel'
 import { FencePanel } from './map/panels/FencePanel'
+import { EnclosurePlacementPanel } from './map/panels/EnclosurePlacementPanel'
 import { BATTERY_STATUS_CFG } from './map/panels/shared'
 import type { MapPin, PinType, UserProfile, FencePreset, Animal } from '../types'
 
@@ -4139,193 +4138,29 @@ export default function MapPage() {
                   onRestoreSingleWire={restoreSingleWire}
                 />
 
-                {/* ── Animaux (enclos fermé → assignation, ouvert → conseil) ── */}
-                {isFenceClosed(selected) ? (
-                  <div className="rounded-xl border-2 border-forest/30 bg-forest/5 overflow-hidden">
-                    {/* En-tête */}
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-forest/20">
-                      <div className="flex items-center gap-2">
-                        <span className="text-base">🐾</span>
-                        <p className="text-sm font-bold text-forest">Animaux dans l'enclos</p>
-                        <span className="text-xs font-bold text-forest/60 bg-forest/10 rounded-full px-2 py-0.5">
-                          {animals.filter(a => a.enclosureId === selected.id).length}
-                        </span>
-                      </div>
-                      {!editEnclosureAnimals && (
-                        <button
-                          onClick={() => {
-                            setPendingEnclosureAnimals(animals.filter(a => a.enclosureId === selected.id).map(a => a.id))
-                            setPendingMoveDate(tsToDateInputLocal())
-                            setPendingMoveNote('')
-                            setEditEnclosureAnimals(true)
-                          }}
-                          className="text-xs text-forest font-bold px-3 py-1.5 rounded-lg bg-forest/10 active:bg-forest/20 transition-colors"
-                        >
-                          ✏️ Modifier
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="p-3">
-                      {!editEnclosureAnimals ? (
-                        (() => {
-                          const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === selected.id))
-                          return enc.length === 0 ? (
-                            <div className="text-center py-3">
-                              <p className="text-sm text-muted italic mb-2">Aucun animal placé ici</p>
-                              <button
-                                onClick={() => {
-                                  setPendingEnclosureAnimals([])
-                                  setPendingMoveDate(tsToDateInputLocal())
-                                  setPendingMoveNote('')
-                                  setEditEnclosureAnimals(true)
-                                }}
-                                className="px-4 py-2 rounded-xl bg-forest text-white text-sm font-bold active:opacity-80 transition-opacity"
-                              >
-                                + Placer des animaux
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="space-y-2">
-                              <div className="flex flex-wrap gap-1.5">
-                                {enc.map(a => {
-                                  const f = healthFreshness(a.lastCheckedHealthy)
-                                  const seenBy = a.lastCheckedHealthyBy
-                                    ? (users.find(u => u.uid === a.lastCheckedHealthyBy)?.displayName ?? '?')
-                                    : null
-                                  const title = seenBy
-                                    ? `${formatAgo(a.lastCheckedHealthy)} (par ${seenBy}) — touchez pour la fiche`
-                                    : `${formatAgo(a.lastCheckedHealthy)} — touchez pour la fiche`
-                                  return (
-                                    <button key={a.id}
-                                          title={title}
-                                          onClick={() => navigate(`/animal/${a.id}`)}
-                                          className="px-2.5 py-1.5 rounded-xl bg-forest/10 border border-forest/30 text-forest text-xs font-semibold flex items-center gap-1.5 active:bg-forest/20 transition-colors">
-                                      <span className={`w-2 h-2 rounded-full ${healthDotClass(f)}`} aria-hidden />
-                                      {getSpeciesInfo(a.species, customSpecies).emoji} {a.name}
-                                    </button>
-                                  )
-                                })}
-                              </div>
-                              <button
-                                onClick={() => markAllHealthy(enc)}
-                                disabled={savingHealth || !user}
-                                className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl
-                                           bg-meadow/15 border border-meadow/40 text-meadow text-xs font-bold
-                                           active:bg-meadow/25 transition-colors disabled:opacity-50"
-                              >
-                                <Check size={13} />
-                                {savingHealth ? 'Enregistrement…' : `Tous vus en bonne santé (${enc.length})`}
-                              </button>
-                              {enc.some(a => a.lastCheckedHealthy) && (
-                                <p className="text-[10px] text-muted/70 text-center">
-                                  Dernier check : {(() => {
-                                    const ts = Math.max(...enc.map(a => a.lastCheckedHealthy ?? 0))
-                                    return ts ? formatAgo(ts) : '—'
-                                  })()}
-                                </p>
-                              )}
-                            </div>
-                          )
-                        })()
-                      ) : (
-                        <div className="space-y-2">
-                          <p className="text-xs text-muted font-medium">
-                            Touchez un animal pour l'ajouter ou le retirer.
-                            Un animal déplacé depuis un autre enclos sera libéré automatiquement.
-                          </p>
-                          {animals.length === 0 ? (
-                            <p className="text-xs text-muted italic text-center py-2">
-                              Aucun animal enregistré — ajoutez-en depuis Admin.
-                            </p>
-                          ) : (
-                            <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
-                              {sortAnimalsByName(animals).map(a => {
-                                const isSelected = pendingEnclosureAnimals.includes(a.id)
-                                const isElsewhere = a.enclosureId && a.enclosureId !== selected.id
-                                return (
-                                  <button
-                                    key={a.id}
-                                    type="button"
-                                    onClick={() => setPendingEnclosureAnimals(prev =>
-                                      prev.includes(a.id) ? prev.filter(id => id !== a.id) : [...prev, a.id]
-                                    )}
-                                    className={`px-3 py-2 rounded-xl border text-xs font-semibold transition-all flex items-center gap-1 ${
-                                      isSelected
-                                        ? 'border-forest text-forest bg-forest/10'
-                                        : 'border-border text-muted bg-white'
-                                    }`}
-                                  >
-                                    {getSpeciesInfo(a.species, customSpecies).emoji} {a.name}
-                                    {isElsewhere && !isSelected && (
-                                      <span className="text-muted/50 text-[10px]">↗ autre enclos</span>
-                                    )}
-                                  </button>
-                                )
-                              })}
-                            </div>
-                          )}
-                          {/* Date + note du mouvement — utile pour reconstituer un calendrier
-                              de pâturage PAC (déclaration des dates réelles de présence). */}
-                          <div className="bg-cream/60 rounded-xl p-2.5 space-y-2 border border-border/50">
-                            <div>
-                              <label className="block text-[10px] font-bold text-muted uppercase tracking-wider mb-1">
-                                Date du mouvement
-                              </label>
-                              <input
-                                type="date"
-                                value={pendingMoveDate || tsToDateInputLocal()}
-                                onChange={e => setPendingMoveDate(e.target.value)}
-                                className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
-                              />
-                              <p className="text-[9px] text-muted mt-0.5 leading-tight">
-                                Par défaut aujourd'hui. Mettre une date passée pour saisir
-                                un mouvement rétroactif (calendrier PAC).
-                              </p>
-                            </div>
-                            <input
-                              type="text"
-                              value={pendingMoveNote}
-                              onChange={e => setPendingMoveNote(e.target.value)}
-                              placeholder="Note (optionnelle) — ex: rotation, transhumance…"
-                              className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
-                            />
-                          </div>
-
-                          <div className="flex gap-2 pt-1">
-                            <button
-                              onClick={() => saveEnclosureAnimals(selected.id)}
-                              disabled={actionBusy}
-                              className="flex-1 py-3 rounded-xl bg-forest text-white text-sm font-bold active:opacity-80 disabled:opacity-50 transition-opacity"
-                            >
-                              {actionBusy ? 'Enregistrement…' : '✓ Confirmer'}
-                            </button>
-                            <button
-                              onClick={() => setEditEnclosureAnimals(false)}
-                              className="px-4 py-3 rounded-xl border border-border text-muted text-sm active:bg-cream"
-                            >
-                              Annuler
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-xl p-3 bg-cream border border-dashed border-border flex items-center gap-2">
-                    <span className="text-base">💡</span>
-                    <p className="text-xs text-muted leading-relaxed">
-                      <strong>Clôture ouverte.</strong> Fermez-la en rapprochant le dernier point
-                      du point vert de départ pour créer un enclos et y placer des animaux.
-                    </p>
-                  </div>
-                )}
-
-                {/* Rotation à prévoir — demande Eugénie 21/05/2026 */}
-                {isFenceClosed(selected) && !isTemp && (() => {
-                  const occupants = animals.filter(a => a.enclosureId === selected.id).length
-                  if (occupants === 0) return null
-                  const setRotationIn = async (days: number | null) => {
+                <EnclosurePlacementPanel
+                  pin={selected}
+                  isTemp={isTemp}
+                  actionBusy={actionBusy}
+                  savingHealth={savingHealth}
+                  user={user}
+                  animals={animals}
+                  users={users}
+                  customSpecies={customSpecies}
+                  enclosureHistory={enclosureHistory}
+                  historyVisible={historyVisible}
+                  setHistoryVisible={setHistoryVisible}
+                  editEnclosureAnimals={editEnclosureAnimals}
+                  setEditEnclosureAnimals={setEditEnclosureAnimals}
+                  pendingEnclosureAnimals={pendingEnclosureAnimals}
+                  setPendingEnclosureAnimals={setPendingEnclosureAnimals}
+                  pendingMoveDate={pendingMoveDate}
+                  setPendingMoveDate={setPendingMoveDate}
+                  pendingMoveNote={pendingMoveNote}
+                  setPendingMoveNote={setPendingMoveNote}
+                  onMarkAllHealthy={markAllHealthy}
+                  onSaveEnclosureAnimals={saveEnclosureAnimals}
+                  onSetRotation={async (pin, days) => {
                     if (!user) return
                     setActionBusy(true)
                     try {
@@ -4338,135 +4173,14 @@ export default function MapPage() {
                       } else {
                         payload.rotationDueAt = Date.now() + days * 86_400_000
                       }
-                      await updateDoc(doc(db, 'map_pins', selected.id), payload)
+                      await updateDoc(doc(db, 'map_pins', pin.id), payload)
                       setSelected({
-                        ...selected,
+                        ...pin,
                         rotationDueAt: days === null ? undefined : Date.now() + days * 86_400_000,
                       })
                     } finally { setActionBusy(false) }
-                  }
-                  const due = selected.rotationDueAt
-                  if (due) {
-                    const daysLeft = (due - Date.now()) / 86_400_000
-                    const overdue = daysLeft < 0
-                    return (
-                      <div className={`rounded-xl p-3 border ${overdue ? 'bg-danger/10 border-danger/30' : 'bg-orange-500/10 border-orange-500/30'}`}>
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-bold text-charcoal">⏰ Rotation prévue</p>
-                            <p className="text-xs text-muted mt-0.5">
-                              {overdue
-                                ? `En retard de ${Math.ceil(-daysLeft)} j`
-                                : daysLeft < 1
-                                  ? "Aujourd'hui"
-                                  : `Dans ${Math.ceil(daysLeft)} j`}
-                              {' · '}
-                              {new Date(due).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
-                            </p>
-                          </div>
-                          <button
-                            onClick={() => setRotationIn(null)}
-                            disabled={actionBusy}
-                            className="text-[11px] font-bold text-muted bg-card border border-border px-2 py-1 rounded-md active:bg-cream disabled:opacity-50"
-                          >
-                            Annuler
-                          </button>
-                        </div>
-                      </div>
-                    )
-                  }
-                  return (
-                    <div className="rounded-xl p-3 bg-cream border border-border/40">
-                      <p className="text-xs font-semibold text-charcoal mb-2">⏰ Signaler une rotation à prévoir</p>
-                      <div className="grid grid-cols-4 gap-1.5">
-                        {[1, 3, 7, 14].map(d => (
-                          <button
-                            key={d}
-                            onClick={() => setRotationIn(d)}
-                            disabled={actionBusy}
-                            className="py-2 rounded-lg bg-card border border-border text-xs font-bold text-charcoal active:bg-orange-500/10 active:border-orange-500/40 disabled:opacity-50 transition-colors"
-                          >
-                            J+{d}
-                          </button>
-                        ))}
-                      </div>
-                      <p className="text-[10px] text-muted/80 mt-1.5">
-                        Tout le monde verra une horloge ⏰ sur ce parc à J-7 (orange) puis rouge à échéance.
-                      </p>
-                    </div>
-                  )
-                })()}
-
-                {/* Historique des rotations (uniquement pour enclos fermés) */}
-                {isFenceClosed(selected) && (
-                  <div className="rounded-xl bg-cream border border-border/40 overflow-hidden">
-                    <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/40">
-                      <span className="text-xs font-semibold text-muted uppercase tracking-wider flex items-center gap-1.5">
-                        🌿 Pâturage
-                      </span>
-                      <button onClick={() => navigate('/grazing')}
-                              className="text-[10px] font-bold text-forest bg-forest/10 px-2 py-1 rounded-md active:bg-forest/20">
-                        Calendrier complet →
-                      </button>
-                    </div>
-                    <button
-                      onClick={() => setHistoryVisible(v => !v)}
-                      className="w-full px-3 py-2.5 flex items-center justify-between active:bg-border/30 transition-colors"
-                    >
-                      <span className="text-xs font-semibold text-muted uppercase tracking-wider flex items-center gap-1.5">
-                        🔄 Historique des mouvements
-                      </span>
-                      {/* Bug Benoît 20/05/2026 : crayon trompeur (suggérait l'édition). C'est juste un toggle. */}
-                      {historyVisible ? <ChevronUp size={14} className="text-muted" /> : <ChevronDown size={14} className="text-muted" />}
-                    </button>
-                    {historyVisible && (
-                      <div className="px-3 pb-3 pt-1">
-                        {enclosureHistory.length === 0 ? (
-                          <p className="text-xs text-muted italic text-center py-3">
-                            Aucun mouvement enregistré pour cet enclos.
-                          </p>
-                        ) : (
-                          <ul className="space-y-1.5 max-h-64 overflow-y-auto">
-                            {enclosureHistory.slice(0, 30).map(m => {
-                              const cameIn = m.toEnclosureId === selected.id
-                              const author = users.find(u => u.uid === m.movedBy)?.displayName ?? '—'
-                              const date   = new Date(m.movedAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
-                              return (
-                                <li key={m.id}
-                                    className={`text-xs leading-snug px-2.5 py-1.5 rounded-lg ${cameIn ? 'bg-meadow/10' : 'bg-danger/5'}`}>
-                                  <span className="font-bold">
-                                    {getSpeciesInfo(m.species, customSpecies).emoji} {m.animalName}
-                                  </span>
-                                  {' '}
-                                  {cameIn
-                                    ? <span className="text-meadow">↘ entré{m.fromEnclosureName ? ` (depuis « ${m.fromEnclosureName} »)` : ' (libre)'}</span>
-                                    : <span className="text-danger">↗ sorti{m.toEnclosureName ? ` (vers « ${m.toEnclosureName} »)` : ' (libéré)'}</span>
-                                  }
-                                  <div className="text-muted/80 text-[11px] mt-0.5">{date} · par {author}</div>
-                                </li>
-                              )
-                            })}
-                          </ul>
-                        )}
-                        {!isTemp && (
-                          <button
-                            onClick={() => navigate(`/grazing?addFor=${selected.id}`)}
-                            className="mt-2 w-full text-[11px] font-bold text-forest bg-forest/10
-                                       px-3 py-2 rounded-lg active:bg-forest/20 flex items-center justify-center gap-1.5"
-                          >
-                            <Pencil size={12} /> Noter un mouvement
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {selected.note && (
-                  <div className="bg-cream rounded-xl p-3 border border-border">
-                    <p className="text-charcoal text-sm">{selected.note}</p>
-                  </div>
-                )}
+                  }}
+                />
               </div>
             )}
 

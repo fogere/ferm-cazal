@@ -26,6 +26,7 @@ import { getFenceVisualState } from '../services/map/fence-visual'
 import { getStreamSegments } from '../services/map/stream-visual'
 import { isWaterOverdue } from '../services/map/water'
 import { isBatteryDue } from '../services/map/battery'
+import { enclosureQueryIds } from '../services/map/enclosure'
 import { WaterManualPanel } from './map/panels/WaterManualPanel'
 import { WaterStreamPanel } from './map/panels/WaterStreamPanel'
 import { BatteryPanel } from './map/panels/BatteryPanel'
@@ -999,16 +1000,18 @@ export default function MapPage() {
     }
   }
 
-  // Historique : abonnement lazy uniquement quand un enclos est sélectionné ET le panneau ouvert
+  // Historique : abonnement lazy uniquement quand un enclos est sélectionné ET le panneau ouvert.
+  // Couvre fence.id ET fence.migratedToPlotId via `where in` (S2.5 compat migration).
   useEffect(() => {
     if (!selected || !historyVisible) return
+    const ids = enclosureQueryIds(selected)
     const q = query(
       collection(db, 'enclosure_movements'),
-      where('toEnclosureId', '==', selected.id)
+      where('toEnclosureId', 'in', ids)
     )
     const q2 = query(
       collection(db, 'enclosure_movements'),
-      where('fromEnclosureId', '==', selected.id)
+      where('fromEnclosureId', 'in', ids)
     )
     const merged = new Map<string, EnclosureMovement>()
     const u1 = onSnapshot(
@@ -1028,7 +1031,7 @@ export default function MapPage() {
       err => console.warn('[Map] enclosure_movements(from):', err.code)
     )
     return () => { u1(); u2() }
-  }, [selected?.id, historyVisible])
+  }, [selected?.id, selected?.migratedToPlotId, historyVisible])
 
   // Subscription aux photos de l'épingle sélectionnée (lazy : uniquement quand panneau ouvert)
   useEffect(() => {
@@ -2018,6 +2021,10 @@ export default function MapPage() {
 
     const now = Date.now()
     const targetEnclosure = pins.find(p => p.id === fenceId)
+    // S2.5 compat migration : si le fence a un jumeau land_plot, on écrit
+    // l'identifiant logique du land_plot. Sinon on garde le fence.id.
+    // Côté lecture, le helper effectiveEnclosureId fait la même translation.
+    const targetId = targetEnclosure?.migratedToPlotId ?? fenceId
     // 1 seul writeBatch = 1 round-trip réseau pour tous les changements
     const batch = writeBatch(db)
     let hasChanges = false
@@ -2028,15 +2035,15 @@ export default function MapPage() {
 
     for (const a of animals) {
       const shouldBe = pendingEnclosureAnimals.includes(a.id)
-      const isCurrent = a.enclosureId === fenceId
+      const isCurrent = a.enclosureId === targetId
       if (shouldBe && !isCurrent) {
-        batch.update(doc(db, 'animals', a.id), { enclosureId: fenceId })
-        const fromEnc = a.enclosureId ? pins.find(p => p.id === a.enclosureId) : null
+        batch.update(doc(db, 'animals', a.id), { enclosureId: targetId })
+        const fromEnc = a.enclosureId ? pins.find(p => p.id === a.enclosureId || p.migratedToPlotId === a.enclosureId) : null
         const moveRef = doc(collection(db, 'enclosure_movements'))
         batch.set(moveRef, {
           animalId: a.id, animalName: a.name, species: a.species,
           fromEnclosureId: a.enclosureId, fromEnclosureName: fromEnc?.name ?? null,
-          toEnclosureId: fenceId,         toEnclosureName: targetEnclosure?.name ?? null,
+          toEnclosureId: targetId,        toEnclosureName: targetEnclosure?.name ?? null,
           movedAt: movedAtTs, movedBy: user.uid,
           recordedAt: now,
           ...(pendingMoveNote.trim() && { note: pendingMoveNote.trim() }),
@@ -2048,8 +2055,8 @@ export default function MapPage() {
         const moveRef = doc(collection(db, 'enclosure_movements'))
         batch.set(moveRef, {
           animalId: a.id, animalName: a.name, species: a.species,
-          fromEnclosureId: fenceId, fromEnclosureName: targetEnclosure?.name ?? null,
-          toEnclosureId: null,      toEnclosureName: null,
+          fromEnclosureId: targetId, fromEnclosureName: targetEnclosure?.name ?? null,
+          toEnclosureId: null,       toEnclosureName: null,
           movedAt: movedAtTs, movedBy: user.uid,
           recordedAt: now,
           ...(pendingMoveNote.trim() && { note: pendingMoveNote.trim() }),

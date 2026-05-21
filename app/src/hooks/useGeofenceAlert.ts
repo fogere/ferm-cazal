@@ -5,6 +5,7 @@ import {
 import { db } from '../firebase'
 import { useAuth } from './useAuth'
 import { pointInPolygon } from '../services/map/geometry'
+import { effectiveEnclosureId } from '../services/map/enclosure'
 import { useLocationCore } from './useLocationCore'
 import type { Animal, MapPin } from '../types'
 
@@ -100,9 +101,12 @@ export function useGeofenceAlert() {
     if (insideEnclosure.current === candidate.id) return
     insideEnclosure.current = candidate.id
 
-    // Animaux à vérifier : jamais checkés OU check de plus de 12 h
+    // Animaux à vérifier : jamais checkés OU check de plus de 12 h.
+    // S2.5 : après migration fence → land_plot, animal.enclosureId pointe vers
+    // le land_plot.id. effectiveEnclosureId(candidate) résout le bon id.
+    const encId = effectiveEnclosureId(candidate)
     const stale = animalsRef.current.filter(a =>
-      a.enclosureId === candidate.id &&
+      a.enclosureId === encId &&
       (!a.lastCheckedHealthy || now - a.lastCheckedHealthy > STALE_AFTER_MS),
     )
     if (stale.length === 0) return

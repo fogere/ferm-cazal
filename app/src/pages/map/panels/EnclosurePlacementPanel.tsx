@@ -17,6 +17,7 @@ import { healthFreshness, healthDotClass } from '../../../services/map/health'
 import { formatAgo } from '../../../services/map/time'
 import { getSpeciesInfo } from '../../../services/species'
 import { tsToDateInput } from '../../../services/map/time'
+import { effectiveEnclosureId } from '../../../services/map/enclosure'
 
 function sortAnimalsByName<T extends { name: string }>(list: T[]): T[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }))
@@ -62,6 +63,10 @@ export function EnclosurePlacementPanel(props: Props) {
     onMarkAllHealthy, onSaveEnclosureAnimals, onSetRotation,
   } = props
   const navigate = useNavigate()
+  // Identifiant logique de l'enclos. Pour un fence migré (migratedToPlotId
+  // présent), on compare contre le plot id ; sinon contre le fence id.
+  // Voir services/map/enclosure.ts.
+  const encId = effectiveEnclosureId(pin)
 
   return (
     <>
@@ -74,13 +79,13 @@ export function EnclosurePlacementPanel(props: Props) {
               <span className="text-base">🐾</span>
               <p className="text-sm font-bold text-forest">Animaux dans l'enclos</p>
               <span className="text-xs font-bold text-forest/60 bg-forest/10 rounded-full px-2 py-0.5">
-                {animals.filter(a => a.enclosureId === pin.id).length}
+                {animals.filter(a => a.enclosureId === encId).length}
               </span>
             </div>
             {!editEnclosureAnimals && (
               <button
                 onClick={() => {
-                  setPendingEnclosureAnimals(animals.filter(a => a.enclosureId === pin.id).map(a => a.id))
+                  setPendingEnclosureAnimals(animals.filter(a => a.enclosureId === encId).map(a => a.id))
                   setPendingMoveDate(tsToDateInput())
                   setPendingMoveNote('')
                   setEditEnclosureAnimals(true)
@@ -95,7 +100,7 @@ export function EnclosurePlacementPanel(props: Props) {
           <div className="p-3">
             {!editEnclosureAnimals ? (
               (() => {
-                const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
+                const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === encId))
                 return enc.length === 0 ? (
                   <div className="text-center py-3">
                     <p className="text-sm text-muted italic mb-2">Aucun animal placé ici</p>
@@ -168,7 +173,7 @@ export function EnclosurePlacementPanel(props: Props) {
                   <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
                     {sortAnimalsByName(animals).map(a => {
                       const isSelected = pendingEnclosureAnimals.includes(a.id)
-                      const isElsewhere = a.enclosureId && a.enclosureId !== pin.id
+                      const isElsewhere = a.enclosureId && a.enclosureId !== encId
                       return (
                         <button
                           key={a.id}
@@ -249,7 +254,7 @@ export function EnclosurePlacementPanel(props: Props) {
 
       {/* Rotation à prévoir — demande Eugénie 21/05/2026 */}
       {isFenceClosed(pin) && !isTemp && (() => {
-        const occupants = animals.filter(a => a.enclosureId === pin.id).length
+        const occupants = animals.filter(a => a.enclosureId === encId).length
         if (occupants === 0) return null
         const due = pin.rotationDueAt
         if (due) {
@@ -334,7 +339,7 @@ export function EnclosurePlacementPanel(props: Props) {
               ) : (
                 <ul className="space-y-1.5 max-h-64 overflow-y-auto">
                   {enclosureHistory.slice(0, 30).map(m => {
-                    const cameIn = m.toEnclosureId === pin.id
+                    const cameIn = m.toEnclosureId === encId
                     const author = users.find(u => u.uid === m.movedBy)?.displayName ?? '—'
                     const date   = new Date(m.movedAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
                     return (

@@ -25,6 +25,22 @@ function fmtDate(ts: number): string {
 }
 
 /**
+ * Pin éligible à recevoir des animaux dans Grazing (refonte clôtures/espaces S5).
+ * - Cible principale : land_plot avec ≥3 points (porteur du rôle d'enclos depuis S3).
+ * - Fallback rétrocompat : fence fermé non migré (ne devrait plus exister après S3,
+ *   mais on couvre le cas où un user en créerait un avant qu'on aie tout migré).
+ */
+function isEnclosureCandidate(pin: MapPin): boolean {
+  if (pin.type === 'land_plot' && (pin.points?.length ?? 0) >= 3) return true
+  if (pin.type === 'fence' && !pin.migratedToPlotId && (pin.points?.length ?? 0) >= 3) {
+    const a = pin.points![0]
+    const b = pin.points![pin.points!.length - 1]
+    return Math.abs(a.lat - b.lat) < 1e-9 && Math.abs(a.lng - b.lng) < 1e-9
+  }
+  return false
+}
+
+/**
  * Page "Calendrier de pâturage" — vue Gantt des présences animaux × enclos
  * sur les 12 derniers mois. Permet :
  *   - Saisie rétroactive de mouvements (pour reconstituer l'historique avant
@@ -240,7 +256,7 @@ export default function Grazing() {
       {showAddMove && (
         <AddMovementModal
           animals={animals}
-          pins={pins.filter(p => p.type === 'fence')}
+          pins={pins.filter(isEnclosureCandidate)}
           currentUid={user?.uid}
           onClose={() => setShowAddMove(false)}
         />
@@ -248,7 +264,7 @@ export default function Grazing() {
       {showPaste && (
         <PasteImportModal
           animals={animals}
-          pins={pins.filter(p => p.type === 'fence')}
+          pins={pins.filter(isEnclosureCandidate)}
           currentUid={user?.uid}
           users={users}
           onClose={() => setShowPaste(false)}

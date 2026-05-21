@@ -24,12 +24,19 @@ interface Props {
   onSetIntensity:    (pin: MapPin, level: IntensityLevel) => void | Promise<void>
   onStartEditFence:  (pin: MapPin) => void
   onRestoreSingleWire: (pin: MapPin) => void | Promise<void>
+  /**
+   * Si fourni ET pin.migratedToPlotId existe, affiche un bouton "→ Voir
+   * l'espace défini" qui ouvre le land_plot jumeau (refonte S3+).
+   * Le callback est appelé sans argument ; le parent résout le land_plot
+   * via pins.find(p => p.id === pin.migratedToPlotId).
+   */
+  onShowLinkedPlot?: () => void
 }
 
 export function FencePanel({
   pin, preset, isTemp, actionBusy, batteryPins,
   onUpdateWireCount, onUpdateVoltage, onSetBattery, onSetIntensity,
-  onStartEditFence, onRestoreSingleWire,
+  onStartEditFence, onRestoreSingleWire, onShowLinkedPlot,
 }: Props) {
   const presetColor = pin.presetColor ?? '#EA580C'
   const wireCount = pin.wireCount ?? 1
@@ -43,6 +50,24 @@ export function FencePanel({
 
   return (
     <>
+      {/* Lien vers l'espace défini jumeau (refonte clôtures/espaces S3+).
+          Affiché en tête pour signaler que ce fence a un land_plot porteur du
+          rôle d'enclos — Eugénie peut y accéder pour placer les animaux. */}
+      {pin.migratedToPlotId && onShowLinkedPlot && (
+        <button
+          onClick={onShowLinkedPlot}
+          className="w-full flex items-center justify-between gap-2 py-3 px-4 rounded-2xl
+                     bg-meadow/10 border-2 border-meadow/40 text-meadow font-bold
+                     active:scale-95 transition-all"
+        >
+          <span className="text-sm flex items-center gap-2">
+            <span className="text-base">⛰</span>
+            Voir l'espace défini
+          </span>
+          <span className="text-base">→</span>
+        </button>
+      )}
+
       {/* Badge preset */}
       <div className="rounded-xl p-3 flex items-center gap-3"
            style={{

@@ -4445,6 +4445,14 @@ export default function MapPage() {
                   }}
                   onStartEditFence={startEditFence}
                   onRestoreSingleWire={restoreSingleWire}
+                  onShowLinkedPlot={
+                    selected.migratedToPlotId
+                      ? () => {
+                          const plot = pins.find(p => p.id === selected.migratedToPlotId)
+                          if (plot) setSelected(plot)
+                        }
+                      : undefined
+                  }
                 />
 
                 <EnclosurePlacementPanel

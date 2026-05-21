@@ -1,0 +1,60 @@
+name: backup-firestore
+
+# Backup hebdomadaire de Firestore — dimanche 04:00 UTC (≈ 05:00 ou 06:00 Paris).
+# Réutilise scripts/backup-firestore.cjs (le même que la version manuelle).
+# Le résultat est uploadé en artifact GitHub (rétention 90 j, gratuit).
+#
+# Pour restaurer : Actions → ce workflow → run le plus récent → Artifacts →
+# télécharger le JSON, puis l'importer manuellement via Firebase Console
+# ou via un script de restore à écrire au besoin.
+on:
+  schedule:
+    - cron: '0 4 * * 0'   # dimanche 04:00 UTC
+  workflow_dispatch: {}    # bouton "Run workflow" pour test / backup à la demande
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Écrire le service account dans un fichier
+        # Le script attend scripts/le-cazal-service-account.json (chemin codé en dur).
+        # Le secret FIREBASE_SERVICE_ACCOUNT est le même que celui utilisé par notify.yml.
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          mkdir -p scripts
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > scripts/le-cazal-service-account.json
+
+      - name: Install firebase-admin
+        working-directory: scripts
+        run: npm install --omit=dev --no-audit --no-fund
+
+      - name: Run backup
+        run: node scripts/backup-firestore.cjs
+
+      - name: Nettoyer le service account (sécurité)
+        if: always()
+        run: rm -f scripts/le-cazal-service-account.json
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firestore-backup-${{ github.run_id }}
+          path: backups/firestore-backup-*.json
+          retention-days: 90
+          if-no-files-found: error

@@ -12,7 +12,7 @@
 import { useNavigate } from 'react-router-dom'
 import { Check, ChevronDown, ChevronUp, Pencil } from 'lucide-react'
 import type { Animal, EnclosureMovement, MapPin, UserProfile, CustomSpecies } from '../../../types'
-import { isFenceClosed } from '../../../services/map/geometry'
+// isFenceClosed n'est plus utilisé ici — le caller décide via la prop isEnclosed.
 import { healthFreshness, healthDotClass } from '../../../services/map/health'
 import { formatAgo } from '../../../services/map/time'
 import { getSpeciesInfo } from '../../../services/species'
@@ -25,6 +25,14 @@ function sortAnimalsByName<T extends { name: string }>(list: T[]): T[] {
 
 interface Props {
   pin:             MapPin
+  /**
+   * "L'enclos est-il fonctionnel pour recevoir des animaux ?"
+   * - Fence : `isFenceClosed(fence)` (l'ancien comportement)
+   * - Land_plot : true par construction (un polygon défini est toujours un enclos)
+   *
+   * Passé en prop pour permettre la réutilisation du panel sur les deux types.
+   */
+  isEnclosed:      boolean
   isTemp:          boolean
   actionBusy:      boolean
   savingHealth:    boolean
@@ -53,7 +61,7 @@ interface Props {
 
 export function EnclosurePlacementPanel(props: Props) {
   const {
-    pin, isTemp, actionBusy, savingHealth, user,
+    pin, isEnclosed, isTemp, actionBusy, savingHealth, user,
     animals, users, customSpecies, enclosureHistory,
     historyVisible, setHistoryVisible,
     editEnclosureAnimals, setEditEnclosureAnimals,
@@ -71,7 +79,7 @@ export function EnclosurePlacementPanel(props: Props) {
   return (
     <>
       {/* ── Animaux (enclos fermé → assignation, ouvert → conseil) ── */}
-      {isFenceClosed(pin) ? (
+      {isEnclosed ? (
         <div className="rounded-xl border-2 border-forest/30 bg-forest/5 overflow-hidden">
           {/* En-tête */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-forest/20">
@@ -253,7 +261,7 @@ export function EnclosurePlacementPanel(props: Props) {
       )}
 
       {/* Rotation à prévoir — demande Eugénie 21/05/2026 */}
-      {isFenceClosed(pin) && !isTemp && (() => {
+      {isEnclosed && !isTemp && (() => {
         const occupants = animals.filter(a => a.enclosureId === encId).length
         if (occupants === 0) return null
         const due = pin.rotationDueAt
@@ -309,7 +317,7 @@ export function EnclosurePlacementPanel(props: Props) {
       })()}
 
       {/* Historique des rotations (uniquement pour enclos fermés) */}
-      {isFenceClosed(pin) && (
+      {isEnclosed && (
         <div className="rounded-xl bg-cream border border-border/40 overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/40">
             <span className="text-xs font-semibold text-muted uppercase tracking-wider flex items-center gap-1.5">

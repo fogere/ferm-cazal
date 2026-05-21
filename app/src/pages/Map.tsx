@@ -32,6 +32,7 @@ import { WaterStreamPanel } from './map/panels/WaterStreamPanel'
 import { BatteryPanel } from './map/panels/BatteryPanel'
 import { FencePanel } from './map/panels/FencePanel'
 import { EnclosurePlacementPanel } from './map/panels/EnclosurePlacementPanel'
+import { LandPlotPanel } from './map/panels/LandPlotPanel'
 import { BATTERY_STATUS_CFG } from './map/panels/shared'
 import type { MapPin, PinType, UserProfile, FencePreset, Animal } from '../types'
 
@@ -4351,6 +4352,53 @@ export default function MapPage() {
               </button>
             </div>
 
+            {/* ── Bloc espace défini (land_plot) ── S4.4 */}
+            {selected.type === 'land_plot' && (
+              <LandPlotPanel
+                pin={selected}
+                isTemp={isTemp}
+                actionBusy={actionBusy}
+                savingHealth={savingHealth}
+                user={user}
+                animals={animals}
+                users={users}
+                customSpecies={customSpecies}
+                enclosureHistory={enclosureHistory}
+                historyVisible={historyVisible}
+                setHistoryVisible={setHistoryVisible}
+                editEnclosureAnimals={editEnclosureAnimals}
+                setEditEnclosureAnimals={setEditEnclosureAnimals}
+                pendingEnclosureAnimals={pendingEnclosureAnimals}
+                setPendingEnclosureAnimals={setPendingEnclosureAnimals}
+                pendingMoveDate={pendingMoveDate}
+                setPendingMoveDate={setPendingMoveDate}
+                pendingMoveNote={pendingMoveNote}
+                setPendingMoveNote={setPendingMoveNote}
+                onMarkAllHealthy={markAllHealthy}
+                onSaveEnclosureAnimals={saveEnclosureAnimals}
+                onSetRotation={async (pin, days) => {
+                  if (!user) return
+                  setActionBusy(true)
+                  try {
+                    const payload: Record<string, unknown> = {
+                      updatedAt: Date.now(),
+                      updatedBy: user.uid,
+                    }
+                    if (days === null) {
+                      payload.rotationDueAt = deleteField()
+                    } else {
+                      payload.rotationDueAt = Date.now() + days * 86_400_000
+                    }
+                    await updateDoc(doc(db, 'map_pins', pin.id), payload)
+                    setSelected({
+                      ...pin,
+                      rotationDueAt: days === null ? undefined : Date.now() + days * 86_400_000,
+                    })
+                  } finally { setActionBusy(false) }
+                }}
+              />
+            )}
+
             {/* ── Bloc clôture ── */}
             {selected.type === 'fence' && (
               <div className="mb-4 space-y-3">
@@ -4401,6 +4449,7 @@ export default function MapPage() {
 
                 <EnclosurePlacementPanel
                   pin={selected}
+                  isEnclosed={isFenceClosed(selected)}
                   isTemp={isTemp}
                   actionBusy={actionBusy}
                   savingHealth={savingHealth}

@@ -188,6 +188,12 @@ export default function Bugs() {
     return unsub
   }, [])
 
+  // Marquer tous les bug reports actuels comme "vus" — éteint la bannière
+  // "nouveaux bugs" du Dashboard. Clé localStorage partagée avec Dashboard.tsx.
+  useEffect(() => {
+    try { localStorage.setItem('fm_bugs_last_seen', String(Date.now())) } catch { /* quota */ }
+  }, [])
+
   const filtered = useMemo(() => {
     if (filter === 'all') return bugs
     return bugs.filter(b => b.source === filter)

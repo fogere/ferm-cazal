@@ -14,6 +14,38 @@ import { fetchWeather, getWeatherInfo, computeVigilance, computeFireRisk } from 
 import type { WeatherData, Task, Availability, FermeAlert, VigilanceLevel, FireRiskLevel, MapPin, Animal, AnimalCareEntry, Reserve, UserMessage } from '../types'
 import { getVisibleAnnouncements, getReadAnnouncementIds } from '../data/announcements'
 
+// Détection super-admin (même règle que Tasks.tsx / Bugs.tsx) — sert à
+// afficher la bannière "nouveaux bug reports" uniquement à Eugénie/Benoît.
+const SUPER_ADMIN_NAMES = ['eugenie', 'eugénie', 'benoit', 'benoît']
+function normalizeName(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
+}
+function isSuperAdmin(name: string | undefined | null): boolean {
+  if (!name) return false
+  return SUPER_ADMIN_NAMES.includes(normalizeName(name))
+}
+
+// Marquage "vu" des bug reports : timestamp ms stocké en localStorage par
+// device. Mis à jour quand un super-admin arrive sur /bugs (cf. Bugs.tsx)
+// ou clique la bannière depuis le Dashboard.
+const BUGS_LAST_SEEN_LS_KEY = 'fm_bugs_last_seen'
+function readBugsLastSeen(): number {
+  try {
+    const v = localStorage.getItem(BUGS_LAST_SEEN_LS_KEY)
+    return v ? parseInt(v, 10) || 0 : 0
+  } catch { return 0 }
+}
+function writeBugsLastSeen(ts: number) {
+  try { localStorage.setItem(BUGS_LAST_SEEN_LS_KEY, String(ts)) } catch { /* quota */ }
+}
+// Lecture defensive du champ createdAt (Firestore Timestamp OU number ms).
+function bugCreatedAtMs(b: { createdAt?: { toMillis?: () => number } | number | null; capturedAt?: number }): number {
+  const c = b.createdAt
+  if (typeof c === 'number') return c
+  if (c && typeof c.toMillis === 'function') return c.toMillis()
+  return b.capturedAt ?? 0
+}
+
 // Distance haversine en mètres entre deux coordonnées GPS
 function distanceMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
   const R = 6_371_000
@@ -161,6 +193,27 @@ export default function Dashboard() {
 
   const totalMessages  = totalFirestore  + announcementsCount.total
   const unreadMessages = unreadFirestore + announcementsCount.unread
+
+  // Faux Sentry in-app : compte les bug reports créés après le dernier passage
+  // sur /bugs. Affiché uniquement aux super-admins (Eugénie/Benoît), qui sont
+  // chargés de traiter les retours utilisatrices.
+  // Le hook est monté pour tout le monde (lecture autorisée par les rules)
+  // mais ne fait rien si !superAdmin pour éviter des reads inutiles.
+  const superAdmin = isSuperAdmin(profile?.displayName)
+  const [newBugsCount, setNewBugsCount] = useState(0)
+  useEffect(() => {
+    if (!superAdmin) return
+    const unsub = onSnapshot(collection(db, 'bugReports'), snap => {
+      const lastSeen = readBugsLastSeen()
+      let count = 0
+      snap.forEach(d => {
+        const ts = bugCreatedAtMs(d.data() as { createdAt?: number | { toMillis?: () => number }; capturedAt?: number })
+        if (ts > lastSeen) count += 1
+      })
+      setNewBugsCount(count)
+    }, err => console.warn('[dashboard] bugReports:', err.code))
+    return unsub
+  }, [superAdmin])
 
   // Chargement météo (1 fois au montage, avec cache 1h en mémoire)
   const loadWeather = useCallback(async () => {
@@ -521,6 +574,31 @@ export default function Dashboard() {
               </div>
             </Link>
           )
+        )}
+
+        {/* Bannière "nouveaux bug reports" — super-admins uniquement.
+            Le clic marque comme vu immédiatement (au cas où on ne va pas sur /bugs). */}
+        {superAdmin && newBugsCount > 0 && (
+          <Link
+            to="/bugs"
+            onClick={() => writeBugsLastSeen(Date.now())}
+            className="block bg-danger text-white rounded-2xl p-4 shadow-md active:scale-[0.98] transition-transform"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
+                <span className="text-xl">🐞</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold">
+                  {newBugsCount === 1
+                    ? '1 nouveau bug rapporté'
+                    : `${newBugsCount} nouveaux bugs rapportés`}
+                </p>
+                <p className="text-xs text-white/80 mt-0.5">Touche pour les voir</p>
+              </div>
+              <ChevronRight size={18} className="text-white/70 flex-shrink-0" />
+            </div>
+          </Link>
         )}
 
         {/* Disponibilité du jour */}

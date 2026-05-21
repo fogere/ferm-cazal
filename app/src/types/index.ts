@@ -203,13 +203,26 @@ export interface MapPin {
 
   // ── water_stream (cours d'eau tracé en polyline) ──
   // Demande Eugénie 21/05/2026 (V2) : remplacer water_natural (pin ponctuel) par un
-  // vrai tracé linéaire. Phase 1 : tracé + saisonnalité. Phase 2 (à venir) : atténuation
-  // manuelle par segment ("à partir de ce point, -90% de débit").
+  // vrai tracé linéaire.
+  //   Phase 1 : tracé + saisonnalité (streamMode + streamActiveMonths).
+  //   Phase 2 : atténuation manuelle par segment (streamAttenuations).
   //
   // `points` (déjà existant pour fence) sert au tracé.
   streamMode?:          'permanent' | 'seasonal'
   // Si seasonal : mois où l'eau coule (1 = janvier, 12 = décembre). Vide = aucun mois actif.
   streamActiveMonths?:  number[]
+  // Atténuations manuelles : segments où le débit est volontairement réduit
+  // ("à partir de ce point jusqu'à celui-là, -90% à cause de l'infiltration").
+  // `from` et `to` sont des INDICES dans `points[]` (from < to). `ratio` est
+  // le débit RESTANT (0 = à sec, 1 = pleine puissance). Plusieurs atténuations
+  // peuvent se chevaucher ; la résolution prend la plus faible (cas le plus sec).
+  // Démandé par Eugénie 21/05/2026.
+  streamAttenuations?: Array<{
+    id:    string   // uuid local — clé React, et facilite la suppression
+    from:  number   // index inclusif du point de départ
+    to:    number   // index inclusif du point de fin (from < to)
+    ratio: number   // 0..1, débit restant sur ce segment
+  }>
 }
 
 export interface FencePreset {

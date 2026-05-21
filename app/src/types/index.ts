@@ -113,7 +113,7 @@ export interface Battery {
   note: string
 }
 
-export type PinType = 'water_natural' | 'water_manual' | 'battery' | 'zone' | 'fence' | 'note' | 'alert' | 'todo' | 'water_stream'
+export type PinType = 'water_natural' | 'water_manual' | 'battery' | 'zone' | 'fence' | 'note' | 'alert' | 'todo' | 'water_stream' | 'land_plot'
 
 export interface MapPin {
   id: string
@@ -200,6 +200,29 @@ export interface MapPin {
   // `powerOn === false`, la clôture est rendue comme "off" automatiquement (override
   // de electricityIntensity). Demande Nils 21/05/2026.
   connectedBatteryId?: string
+
+  // ── land_plot (espace défini — refonte clôtures/espaces S2) ──
+  // Demande Eugénie 21/05/2026 : un "espace" est un terrain qui nous appartient,
+  // indépendant de la clôture physique qui l'entoure. On peut ajouter/retirer
+  // des clôtures sans casser le placement des animaux ni la couleur d'herbe.
+  //
+  //   `points` (déjà existant) = contour extérieur du land_plot (polygon fermé).
+  //   `currentOccupants` / `occupiedSince` / `rotationHistory` (déjà existants
+  //   sur les fence enclos) sont déplacés sur le land_plot lors de la migration.
+  //
+  // Zones vides intérieures (donut polygon) : Eugénie 21/05 tip n°2 — un grand
+  // parc peut contenir des bouts de terrain qui ne nous appartiennent pas.
+  holes?: Array<Array<{ lat: number; lng: number }>>
+  // Lien parent pour le scindage manuel d'un espace en sous-espaces avec une
+  // clôture intérieure. Les sous-espaces partagent le même parentPlotId pour
+  // que le calcul de la couleur d'herbe regroupe toute la surface d'origine.
+  parentPlotId?: string
+
+  // ── audit migration fence → land_plot (S3) ──
+  // Sur un fence migré : id du land_plot jumeau créé pour récupérer son rôle
+  // d'enclos. Permet à terme de retrouver l'origine, et au cours de la
+  // migration de détecter les fences déjà migrés (idempotence).
+  migratedToPlotId?: string
 
   // ── water_stream (cours d'eau tracé en polyline) ──
   // Demande Eugénie 21/05/2026 (V2) : remplacer water_natural (pin ponctuel) par un

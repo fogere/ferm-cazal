@@ -76,6 +76,9 @@ const PIN_CFG: Record<PinType, { emoji: string; label: string; color: string }> 
   alert:         { emoji: '⚠️', label: 'Alerte',           color: '#DC2626' },
   todo:          { emoji: '🪓', label: 'À faire',          color: '#A16207' },
   water_stream:  { emoji: '🏞️', label: 'Cours d\'eau',     color: '#0284C7' },
+  // land_plot ajouté en S2 — pas encore d'UI dédiée (vient en S4).
+  // Visuel par défaut : vert clair (terrain qui nous appartient).
+  land_plot:     { emoji: '⛰',  label: 'Espace défini',  color: '#52B788' },
 }
 
 // Types disponibles dans le formulaire de pin ponctuel (fence + water_stream ont leurs outils dédiés).

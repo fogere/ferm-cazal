@@ -26,6 +26,54 @@ export interface Announcement {
 export const ANNOUNCEMENTS_READ_LS_KEY = 'fm_announcements_read'
 
 export const ANNOUNCEMENTS: Announcement[] = [
+  // ── 22/05/2026 — REFONTE clôtures vs espaces (S5 du plan, réponse complète) ──
+  {
+    id:        '2026-05-22-refonte-espaces-eugenie',
+    title:     'Refonte clôtures / espaces — c\'est en ligne',
+    forUser:   'Eugenie',
+    createdAt: Date.parse('2026-05-22T10:00:00+02:00'),
+    body: `Coucou Eugénie 👋
+
+Ta grande demande sur la refonte des clôtures (séparer "l'espace qu'on possède" de "la clôture physique") est en ligne. Voilà comment ça marche :
+
+1️⃣ Tes 8 enclos actuels (Cazal, Pré du Castel, Larivière, Riou, Roullotte, Coume, Hugon, poulailler) ont chacun un "espace défini" jumeau. Aucun animal n'a bougé.
+
+2️⃣ Quand tu touches une clôture sur la carte, tu verras maintenant en haut un bouton vert ⛰ "Voir l'espace défini". Touche-le pour accéder à la fiche de l'espace : c'est là que tu places les animaux, que tu vois la rotation, l'historique. Comme avant, mais sur un objet "espace" plutôt que sur la clôture.
+
+3️⃣ Tu peux maintenant DÉPLACER OU SUPPRIMER UNE CLÔTURE sans casser le placement des animaux ! L'espace reste, et les bêtes restent dedans. C'est exactement ce que tu voulais.
+
+4️⃣ Pour DESSINER UN NOUVEL ESPACE (sans clôture autour) : bouton ⛰ "Espace" dans la barre du bas. Trace point par point, touche le 1er point pour fermer (ou bouton "Valider"), nomme-le. Idéal pour un terrain qu'on possède mais où il n'y a pas de fil tendu.
+
+5️⃣ ZONES VIDES INTÉRIEURES (ton tip n°2) : sur la fiche d'un espace, bouton orange "+ Ajouter une zone vide". Trace le contour du bout de terrain qui ne nous appartient PAS (au milieu de l'espace). Ça apparaît en trou dans le visuel et la geofence ne se déclenche pas dedans.
+
+6️⃣ SNAP AUTOMATIQUE (ton tip n°1) : quand tu traces une nouvelle clôture, elle se "colle" automatiquement sur les coins des espaces existants quand tu passes à proximité (rayon ~44 px). Plus de décalage entre les deux tracés.
+
+Ce qui reste tel quel : les pâturages, les animaux, les soins, les notifications. Rien d'autre n'a changé.
+
+Si tu vois un comportement bizarre dans les jours qui viennent, fais une capture d'écran via le bouton 🐞 en bas à droite et explique ce qui te semble pas normal.`,
+  },
+
+  {
+    id:        '2026-05-22-refonte-espaces-broadcast',
+    title:     '🆕 Nouveau système : Espaces définis',
+    forUser:   null,
+    createdAt: Date.parse('2026-05-22T10:00:00+02:00'),
+    body: `Salut tout le monde 👋
+
+Une grosse mise à jour est en ligne aujourd'hui : la séparation entre "espace défini" (terrain qu'on possède) et "clôture physique" (le fil tendu).
+
+Pourquoi : avant, supprimer une clôture cassait le placement des animaux. Maintenant l'espace reste même si la clôture bouge.
+
+Concrètement pour vous :
+• Touchez n'importe quel enclos existant → en haut du panneau, bouton vert ⛰ "Voir l'espace défini" → c'est là que vous placez les animaux et voyez l'historique.
+• Pour tracer un NOUVEL espace (sans clôture) : bouton ⛰ "Espace" dans la barre du bas.
+• Les clôtures restent comme avant (couleurs, type électrique/barbelé, batterie connectée, etc.) — elles sont juste décorrélées du placement des animaux.
+
+Tout l'historique des mouvements, les animaux et les pâturages sont intacts.
+
+Pas de panique si vous voyez le bouton "Voir l'espace défini" : c'est normal, c'est juste la nouvelle façon d'accéder à la fiche enclos.`,
+  },
+
   // ── 22/05/2026 — Phase 2 cours d'eau : atténuation par segment ──
   {
     id:        '2026-05-22-cours-eau-attenuation',

@@ -26,6 +26,39 @@ export interface Announcement {
 export const ANNOUNCEMENTS_READ_LS_KEY = 'fm_announcements_read'
 
 export const ANNOUNCEMENTS: Announcement[] = [
+  // ── 22/05/2026 — Phase 2 cours d'eau : atténuation par segment ──
+  {
+    id:        '2026-05-22-cours-eau-attenuation',
+    title:     'Cours d\'eau — Phase 2 (atténuation par segment)',
+    forUser:   'Eugenie',
+    createdAt: Date.parse('2026-05-22T10:00:00+02:00'),
+    body: `Coucou Eugénie 👋
+
+La deuxième partie de ta demande sur les cours d'eau est en ligne : tu peux maintenant indiquer manuellement qu'un tronçon perd du débit (infiltration, dispersion dans le sol, etc.).
+
+Comment faire :
+1. Touche un cours d'eau sur la carte (le tracé 🏞️ devient sélectionné).
+2. Dans le panneau de droite, en bas : bouton "+ Marquer une atténuation".
+3. Choisis le point de départ et d'arrivée du tronçon atténué (les points du tracé sont numérotés de 1 à N).
+4. Règle le curseur "Débit restant" :
+   - 100% = pleine puissance (= pas d'atténuation, identique à l'absence d'entrée)
+   - 50% = moitié du débit
+   - 10% = quasi à sec (le cas que tu décrivais)
+   - 0% = à sec total
+5. Enregistre.
+
+Sur la carte, le tronçon atténué apparaît :
+- en trait plein opacité réduite (pour les atténuations 50-100%)
+- en pointillé moyen (pour les 10-50%)
+- en pointillé fin (pour 0-10%, quasi à sec)
+
+Tu peux ajouter plusieurs atténuations sur un même cours d'eau (ex: deux endroits différents où ça s'infiltre). Si deux atténuations se chevauchent, c'est la plus restrictive qui s'applique.
+
+Pour modifier ou supprimer : touche le cours d'eau, la liste apparaît dans le panneau avec les boutons "Modifier" / "Supprimer".
+
+Reste à faire (toujours noté) : la refonte espaces vs clôtures. Gros chantier — on en parle ensemble avant code.`,
+  },
+
   // ── 21/05/2026 (fin de soirée) — cours d'eau polyline Phase 1 + suite refonte à venir ──
   {
     id:        '2026-05-21-cours-eau-polyline',

@@ -172,6 +172,35 @@ automatiquement, supprime les plus anciens.
 3. Action : `node` avec arg `scripts/backup-firestore.cjs` et dossier de
    départ = `C:\Users\Administrator\Downloads\projet farm`.
 
+### Migration fence → land_plot (refonte clôtures/espaces — S3 du plan)
+
+Script : `scripts/migrate-fence-to-landplot.cjs`. Sépare le rôle "définition
+d'espace" (terrain qui nous appartient, suivi pâturage, placement animaux)
+du rôle "clôture physique" (visuel, électricité). Demande Eugénie 21/05/2026.
+
+**AVANT de lancer `--execute`** :
+1. **Backup manuel obligatoire** : `node scripts/backup-firestore.cjs`
+2. Vérifier que personne n'utilise l'app (dimanche matin idéal)
+3. Lancer en dry-run d'abord et lire la sortie en entier
+
+```cmd
+# Dry-run (par défaut, aucune écriture)
+cd /d "C:\Users\Administrator\Downloads\projet farm"
+node scripts/migrate-fence-to-landplot.cjs
+
+# Vraie migration (après validation du dry-run)
+node scripts/migrate-fence-to-landplot.cjs --execute
+```
+
+Le script est **idempotent** : si un fence a déjà `migratedToPlotId`, il est
+skippé. Tu peux donc le re-lancer plusieurs fois sans risque.
+
+**Audit post-migration** :
+- Compter `map_pins where type=land_plot` dans Firebase Console
+  (doit = nb de fences avec rôle d'enclos avant migration)
+- Tester l'app : placement animaux, geofence, calendrier pâturage
+- Si quelque chose cloche : restaurer le backup pris avant `--execute`.
+
 ### Export complet vers GCS (optionnel — nécessite gcloud + bucket)
 ```cmd
 gcloud firestore export gs://le-cazal-backup/$(date +%Y%m%d)

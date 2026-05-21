@@ -17,6 +17,18 @@ Règle absolue : **aucune modif qui change un comportement utilisateur**. Que de
 - ARCHITECTURE.md (carte du projet)
 - RUNBOOK.md (commandes de la vie quotidienne)
 - Suppression `AnimalSheetModal.tsx` (orphelin confirmé)
+- **Session S2 (modèle + script de migration)** :
+  - Type `land_plot` ajouté à `PinType` + champs `holes`, `parentPlotId`, `migratedToPlotId` sur `MapPin`
+  - `PIN_CFG.land_plot` ajouté à Map.tsx (visuel par défaut : ⛰ vert clair — sera affiné en S4)
+  - `scripts/migrate-fence-to-landplot.cjs` créé :
+    - Mode **dry-run par défaut**, **--execute** pour appliquer
+    - Crée un land_plot jumeau pour chaque fence (closed + rôle d'enclos actif)
+    - Redirige `animal.enclosureId` + `enclosure_movements.from/toEnclosureId`
+    - Idempotent (skip les fences avec `migratedToPlotId` déjà présent)
+    - Mode `writeBatch` par paquets de 450 writes max (limite Firestore)
+  - Pas de modif des Firestore rules nécessaire (le script utilise un service account)
+  - **Le script n'est PAS encore lancé** — S3 fera ça après backup manuel.
+
 - **Session S1 (refacto Map.tsx avant refonte clôtures/espaces)** — 6 sous-extractions :
   - `pages/map/panels/shared.tsx` (DetailRow + BATTERY_STATUS_CFG)
   - `pages/map/panels/WaterManualPanel.tsx`

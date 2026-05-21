@@ -1225,10 +1225,33 @@ export default function MapPage() {
 
   /* ─── Édition d'une clôture existante (déplacement des poteaux) ─── */
 
+  // S6 : édition unifiée des tracés. Le pin peut être fence, land_plot ou
+  // water_stream — la logique de drag/insert/delete fonctionne pour tous.
+  //
+  // Important — distinguer 2 notions :
+  //   isEditPinClosed = "ce pin se rend en Polygon (fermé visuellement)" → land_plot OU fence closed
+  //   hasDuplicateLastPoint = "le dernier point de points[] est un doublon du premier" → fence closed UNIQUEMENT
+  //
+  // land_plot et water_stream stockent leurs points sans doublon. fence closed
+  // historiquement stocke un doublon (compat avec l'ancien code de coupe ciseau).
+  function isEditPinClosed(pin: MapPin): boolean {
+    if (pin.type === 'land_plot') return true
+    if (pin.type === 'water_stream') return false
+    return isFenceClosed(pin)
+  }
+  function hasDuplicateLastPoint(pin: MapPin): boolean {
+    return pin.type === 'fence' && isFenceClosed(pin)
+  }
+  function editColor(pin: MapPin): string {
+    if (pin.type === 'land_plot')   return '#52B788'  // vert
+    if (pin.type === 'water_stream') return '#0284C7' // bleu
+    return pin.presetColor ?? '#EA580C'               // fence : preset ou orange
+  }
+
   function startEditFence(pin: MapPin) {
     if (!pin.points || pin.points.length < 2) return
     if (isTemp) {
-      alert("L'édition de clôture est réservée aux utilisateurs réguliers.")
+      alert("L'édition du tracé est réservée aux utilisateurs réguliers.")
       return
     }
     setFenceEditPin(pin)
@@ -1251,7 +1274,7 @@ export default function MapPage() {
       const next = prev.map((p, i) => i === idx ? { lat, lng } : p)
       // Maintien de la fermeture : si le pin est un enclos fermé, le dernier
       // point doit rester égal au premier après n'importe quel drag.
-      if (fenceEditPin && isFenceClosed(fenceEditPin) && next.length >= 2) {
+      if (fenceEditPin && hasDuplicateLastPoint(fenceEditPin) && next.length >= 2) {
         if (idx === 0) next[next.length - 1] = { lat, lng }
         else if (idx === next.length - 1) next[0] = { lat, lng }
       }
@@ -1276,18 +1299,22 @@ export default function MapPage() {
   // Supprime le point #idx. Refuse si ça casse la géométrie (< 2 pts ouvert, < 3 pts polygone).
   function removeEditPoint(idx: number) {
     if (!fenceEditPin) return
-    const closed = isFenceClosed(fenceEditPin)
+    const polygon = isEditPinClosed(fenceEditPin)
+    const hasDup  = hasDuplicateLastPoint(fenceEditPin)
     setFenceEditPoints(prev => {
-      const minPts = closed ? 4 : 2  // polygone fermé doit garder 3 sommets distincts + retour
+      // Polygon : min 3 sommets distincts (+1 doublon final si fence closed)
+      // Polyline : min 2 points
+      const minPts = polygon ? (hasDup ? 4 : 3) : 2
       if (prev.length <= minPts) {
-        alert(closed
-          ? "Un enclos fermé doit garder au moins 3 poteaux."
-          : "Une clôture doit garder au moins 2 poteaux.")
+        alert(polygon
+          ? "Un espace ou un enclos fermé doit garder au moins 3 points."
+          : "Une clôture ou un cours d'eau doit garder au moins 2 points.")
         return prev
       }
-      // Si on supprime le 1ᵉʳ et que le polygone est fermé, le nouveau 1ᵉʳ doit devenir le dernier
+      // Si on supprime le 1ᵉʳ et que le polygone est fermé AVEC doublon final (fence),
+      // le nouveau 1ᵉʳ doit devenir le dernier
       let next = prev.filter((_, i) => i !== idx)
-      if (closed && idx === 0 && next.length >= 1) {
+      if (hasDup && idx === 0 && next.length >= 1) {
         next = [...next, { ...next[0] }]
         next.splice(prev.length - 1, 1) // retire l'ancien dernier
       }
@@ -2586,76 +2613,97 @@ export default function MapPage() {
         })}
 
         {/* ── Édition d'une clôture existante : aperçu live + markers draggables ── */}
-        {fenceEditPin && fenceEditPoints.length > 0 && (
-          <>
-            {isFenceClosed(fenceEditPin) ? (
-              <Polygon
-                positions={fenceEditPoints.map(p => [p.lat, p.lng] as [number, number])}
-                pathOptions={{
-                  color: fenceEditPin.presetColor ?? '#EA580C',
-                  weight: 3,
-                  dashArray: '6 4',
-                  opacity: 0.9,
-                  fillColor: fenceEditPin.presetColor ?? '#EA580C',
-                  fillOpacity: 0.1,
-                }}
-                interactive={false}
-              />
-            ) : (
-              <Polyline
-                positions={fenceEditPoints.map(p => [p.lat, p.lng] as [number, number])}
-                pathOptions={{
-                  color: fenceEditPin.presetColor ?? '#EA580C',
-                  weight: 3,
-                  dashArray: '6 4',
-                  opacity: 0.9,
-                }}
-                interactive={false}
-              />
-            )}
-            {fenceEditPoints.map((p, i) => {
-              // Si fermé : on cache le doublon final (qui colle au 1er)
-              const closed = isFenceClosed(fenceEditPin)
-              if (closed && i === fenceEditPoints.length - 1) return null
-              return (
-                <Marker
-                  key={`edit-${i}`}
-                  position={[p.lat, p.lng]}
-                  icon={i === 0 ? FENCE_FIRST_DOT_ICON : FENCE_DOT_ICON}
-                  draggable={true}
-                  eventHandlers={{
-                    dragend: (e) => {
-                      const ll = e.target.getLatLng()
-                      dragEditPoint(i, ll.lat, ll.lng)
-                    },
-                    dblclick: () => removeEditPoint(i),
+        {fenceEditPin && fenceEditPoints.length > 0 && (() => {
+          const editPolygon = isEditPinClosed(fenceEditPin)
+          const editHasDup  = hasDuplicateLastPoint(fenceEditPin)
+          const color       = editColor(fenceEditPin)
+          return (
+            <>
+              {editPolygon ? (
+                <Polygon
+                  positions={fenceEditPoints.map(p => [p.lat, p.lng] as [number, number])}
+                  pathOptions={{
+                    color,
+                    weight: 3,
+                    dashArray: '6 4',
+                    opacity: 0.9,
+                    fillColor: color,
+                    fillOpacity: 0.1,
                   }}
+                  interactive={false}
                 />
-              )
-            })}
+              ) : (
+                <Polyline
+                  positions={fenceEditPoints.map(p => [p.lat, p.lng] as [number, number])}
+                  pathOptions={{
+                    color,
+                    weight: 3,
+                    dashArray: '6 4',
+                    opacity: 0.9,
+                  }}
+                  interactive={false}
+                />
+              )}
+              {fenceEditPoints.map((p, i) => {
+                // Cache le doublon final UNIQUEMENT pour les fences fermés
+                // (land_plot stocke sans doublon, water_stream est ouvert).
+                if (editHasDup && i === fenceEditPoints.length - 1) return null
+                return (
+                  <Marker
+                    key={`edit-${i}`}
+                    position={[p.lat, p.lng]}
+                    icon={i === 0 ? FENCE_FIRST_DOT_ICON : FENCE_DOT_ICON}
+                    draggable={true}
+                    eventHandlers={{
+                      dragend: (e) => {
+                        const ll = e.target.getLatLng()
+                        dragEditPoint(i, ll.lat, ll.lng)
+                      },
+                      dblclick: () => removeEditPoint(i),
+                    }}
+                  />
+                )
+              })}
 
-            {/* Markers ghost au milieu de chaque segment : tap pour insérer un poteau */}
-            {fenceEditPoints.map((p, i) => {
-              const next = fenceEditPoints[i + 1]
-              if (!next) return null
-              // En enclos fermé, le dernier segment relie le dernier point au premier (doublon),
-              // donc l'intermédiaire serait redondant avec le premier ghost. On le skippe.
-              const closed = isFenceClosed(fenceEditPin)
-              if (closed && i === fenceEditPoints.length - 2) return null
-              const mid = { lat: (p.lat + next.lat) / 2, lng: (p.lng + next.lng) / 2 }
-              return (
-                <Marker
-                  key={`edit-mid-${i}`}
-                  position={[mid.lat, mid.lng]}
-                  icon={FENCE_MID_DOT_ICON}
-                  eventHandlers={{
-                    click: () => insertEditPoint(i),
-                  }}
-                />
-              )
-            })}
-          </>
-        )}
+              {/* Markers ghost au milieu de chaque segment : tap pour insérer un point.
+                  Pour land_plot fermé (sans doublon), on AJOUTE un ghost entre dernier et premier
+                  pour permettre l'insertion sur le segment de fermeture invisible. */}
+              {fenceEditPoints.map((p, i) => {
+                const next = fenceEditPoints[i + 1]
+                if (!next) return null
+                // Fence fermé : le dernier segment colle (doublon), on skippe l'intermédiaire
+                if (editHasDup && i === fenceEditPoints.length - 2) return null
+                const mid = { lat: (p.lat + next.lat) / 2, lng: (p.lng + next.lng) / 2 }
+                return (
+                  <Marker
+                    key={`edit-mid-${i}`}
+                    position={[mid.lat, mid.lng]}
+                    icon={FENCE_MID_DOT_ICON}
+                    eventHandlers={{
+                      click: () => insertEditPoint(i),
+                    }}
+                  />
+                )
+              })}
+              {/* Ghost de fermeture pour land_plot : segment dernier ↔ premier */}
+              {editPolygon && !editHasDup && fenceEditPoints.length >= 2 && (() => {
+                const last  = fenceEditPoints[fenceEditPoints.length - 1]
+                const first = fenceEditPoints[0]
+                const mid   = { lat: (last.lat + first.lat) / 2, lng: (last.lng + first.lng) / 2 }
+                return (
+                  <Marker
+                    key="edit-mid-close"
+                    position={[mid.lat, mid.lng]}
+                    icon={FENCE_MID_DOT_ICON}
+                    eventHandlers={{
+                      click: () => insertEditPoint(fenceEditPoints.length - 1),
+                    }}
+                  />
+                )
+              })()}
+            </>
+          )
+        })()}
 
         {/* Indicateur snap (point magnétique) */}
         {fenceMode && fenceSnapTarget && (
@@ -4571,6 +4619,7 @@ export default function MapPage() {
                     setSelected({ ...plot, holes: nextHoles.length > 0 ? nextHoles : undefined })
                   } finally { setActionBusy(false) }
                 }}
+                onStartEditTrace={startEditFence}
               />
             )}
 
@@ -4740,6 +4789,7 @@ export default function MapPage() {
                     setSelected({ ...selected, streamAttenuations: next })
                   } finally { setActionBusy(false) }
                 }}
+                onStartEditTrace={startEditFence}
               />
             )}
 

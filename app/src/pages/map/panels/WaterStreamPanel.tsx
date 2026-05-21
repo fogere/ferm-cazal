@@ -27,9 +27,11 @@ interface Props {
   actionBusy: boolean
   /** Persiste un changement sur le pin et met à jour `selected` côté parent. */
   onPatchAttenuations: (next: NonNullable<MapPin['streamAttenuations']> | undefined) => void | Promise<void>
+  /** Active le mode édition du tracé (drag/insert/delete des points). S6. */
+  onStartEditTrace?: (pin: MapPin) => void
 }
 
-export function WaterStreamPanel({ pin, isTemp, actionBusy, onPatchAttenuations }: Props) {
+export function WaterStreamPanel({ pin, isTemp, actionBusy, onPatchAttenuations, onStartEditTrace }: Props) {
   const points = pin.points ?? []
   const attenuations = pin.streamAttenuations ?? []
   const isSeasonal = pin.streamMode === 'seasonal'
@@ -46,6 +48,18 @@ export function WaterStreamPanel({ pin, isTemp, actionBusy, onPatchAttenuations 
 
   return (
     <div className="mb-4 space-y-3">
+      {/* Bouton édition du tracé — S6 édition unifiée */}
+      {!isTemp && onStartEditTrace && points.length >= 2 && (
+        <button
+          onClick={() => onStartEditTrace(pin)}
+          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl
+                     bg-sky/10 border border-sky/30 text-sky text-sm font-bold
+                     active:bg-sky/20 transition-colors"
+        >
+          ✏️ Modifier le tracé (drag, ajouter, supprimer)
+        </button>
+      )}
+
       <DetailRow
         label="Tracé"
         value={`${points.length} points · ${isSeasonal ? 'Saisonnier' : 'Permanent'}`}

@@ -48,6 +48,8 @@ interface Props {
   onStartAddHole?:        (plot: MapPin) => void
   /** Supprime un hole par son index (0-based). */
   onDeleteHole?:          (plot: MapPin, holeIndex: number) => void | Promise<void>
+  /** Active le mode édition du tracé du contour (drag/insert/delete des points). S6. */
+  onStartEditTrace?:      (plot: MapPin) => void
 }
 
 export function LandPlotPanel(props: Props) {
@@ -71,6 +73,18 @@ export function LandPlotPanel(props: Props) {
           <DetailRow label="Zones vides" value={`${holes.length}`} />
         )}
       </div>
+
+      {/* Bouton édition du contour — S6 édition unifiée */}
+      {!props.isTemp && props.onStartEditTrace && (
+        <button
+          onClick={() => props.onStartEditTrace?.(pin)}
+          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl
+                     bg-meadow/10 border border-meadow/30 text-meadow text-sm font-bold
+                     active:bg-meadow/20 transition-colors"
+        >
+          ✏️ Modifier le contour (drag, ajouter, supprimer)
+        </button>
+      )}
 
       {/* Section placement animaux — réutilise EnclosurePlacementPanel.
           isEnclosed = (points >= 3), toujours true pour un land_plot valide. */}

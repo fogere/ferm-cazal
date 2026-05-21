@@ -17,6 +17,17 @@ Règle absolue : **aucune modif qui change un comportement utilisateur**. Que de
 - ARCHITECTURE.md (carte du projet)
 - RUNBOOK.md (commandes de la vie quotidienne)
 - Suppression `AnimalSheetModal.tsx` (orphelin confirmé)
+- **Session S1 (refacto Map.tsx avant refonte clôtures/espaces)** — 6 sous-extractions :
+  - `pages/map/panels/shared.tsx` (DetailRow + BATTERY_STATUS_CFG)
+  - `pages/map/panels/WaterManualPanel.tsx`
+  - `pages/map/panels/WaterStreamPanel.tsx`
+  - `pages/map/panels/BatteryPanel.tsx`
+  - `pages/map/panels/FencePanel.tsx` (config — sans enclosure)
+  - `pages/map/panels/EnclosurePlacementPanel.tsx` (placement + historique)
+  - `services/map/water.ts` (isWaterOverdue)
+  - `services/map/battery.ts` (isBatteryDue)
+  - `services/map/polygon.ts` (pointInPolygonWithHoles + areaSquareMeters)
+  - Map.tsx : 5347 → 4604 lignes (−743). Behavior-preserving strict.
 
 ### 🛠 À venir, par ordre de risque croissant
 

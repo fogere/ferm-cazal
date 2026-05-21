@@ -17,6 +17,32 @@ Règle absolue : **aucune modif qui change un comportement utilisateur**. Que de
 - ARCHITECTURE.md (carte du projet)
 - RUNBOOK.md (commandes de la vie quotidienne)
 - Suppression `AnimalSheetModal.tsx` (orphelin confirmé)
+- **Session S3 (migration --execute en prod)** :
+  - Backup manuel `backups/firestore-backup-2026-05-21.json` (7.92 MB)
+  - Dry-run + audit OK puis `--execute` : 85 writes appliquées
+  - 8 land_plots créés, 39 animaux redirigés, 30 mouvements redirigés
+  - 8 fences marqués `migratedToPlotId` (audit + idempotence)
+  - Fix critique S2.5+ (commit 68611af) : 3 sites de rendu (label animaux,
+    computeGrazingStatus, formulaire placement) utilisent maintenant
+    effectiveEnclosureId — sans ça les enclos migrés s'affichaient vides
+
+- **Session S4 (UX espaces — pleine refonte côté utilisateur)** :
+  - S4.2 : rendu visuel des land_plots autonomes en Polygon vert clair,
+    tap pour sélection. Les jumeaux (migrés) restent invisibles côté
+    map (couverts par leur fence) — accessibles via S4.5.
+  - S4.3 : nouveau mode "⛰ Espace" dans la barre du bas. Tap pour tracer
+    point par point + auto-fermeture en tap sur 1er point ou bouton
+    "Valider". Modal de saisie du nom → addDoc map_pins type='land_plot'.
+  - S4.4 : LandPlotPanel — header (surface via polygonAreaSquareMeters,
+    nb points, nb holes) + EnclosurePlacementPanel réutilisé via prop
+    `isEnclosed` (toujours true pour un plot valide).
+  - S4.5 : bouton "→ Voir l'espace défini" en tête du FencePanel quand
+    `pin.migratedToPlotId` existe → setSelected(plot jumeau).
+  - S4.6 : outil "+ Zone vide intérieure" (donut polygon). Toolbar orange,
+    tracé point par point, sauvegarde immédiate via `landplot.holes[]`.
+    UI : liste des zones avec bouton Supprimer + bouton "+ Ajouter".
+  - S4.7 : rendu Polygon avec holes via Leaflet `[outer, ...holes]`.
+
 - **Session S2 (modèle + script de migration)** :
   - Type `land_plot` ajouté à `PinType` + champs `holes`, `parentPlotId`, `migratedToPlotId` sur `MapPin`
   - `PIN_CFG.land_plot` ajouté à Map.tsx (visuel par défaut : ⛰ vert clair — sera affiné en S4)

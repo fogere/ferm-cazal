@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { doc, updateDoc, deleteField } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from './useAuth'
+import { useLocationCore } from './useLocationCore'
 
 // Anti-spam Firestore : ~1 écriture / 90 s ET déplacement > 15 m.
 // Le hook ne tourne plus globalement : il est monté uniquement par MapPage,
@@ -30,82 +31,68 @@ function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng:
  * `shareLocation: true`. Throttled à 1 écriture / 90 s et seulement si la position
  * a bougé d'au moins 15 m. Auto-stop après 2 h pour limiter la conso de quota.
  *
- * IMPORTANT — les deps n'incluent PAS `profile.liveLocation` : chaque écriture
- * déclenche un snapshot du profil, et inclure liveLocation re-monterait l'effet
- * (clearWatch + watchPosition), ce qui réinitialise les throttles internes.
+ * Source GPS : `locationCore` (watchPosition partagé). Avant ce hook montait
+ * son propre watchPosition, dupliqué avec useGeofenceAlert et
+ * useOnDemandLocationPublish. Voir services/location/locationCore.ts.
  */
 export function useLiveLocation() {
   const { user, profile } = useAuth()
   const shareLocation = !!profile?.shareLocation
   const hasStaleLocation = !!profile?.liveLocation
+  const myUid = user?.uid
 
+  const lastWriteRef = useRef(0)
+  const lastPosRef   = useRef<{ lat: number; lng: number } | null>(null)
+  const startedAtRef = useRef(0)
+  const stoppedRef   = useRef(false)
+
+  // Reset des refs internes à chaque montage/changement d'utilisateur.
+  // Note : on ne les inclut PAS dans les deps de l'effet pour éviter de
+  // réinitialiser les throttles à chaque écriture Firestore.
   useEffect(() => {
-    if (!user) return
-    if (!('geolocation' in navigator)) return
+    if (!myUid || !shareLocation) return
+    lastWriteRef.current = 0
+    lastPosRef.current   = null
+    startedAtRef.current = Date.now()
+    stoppedRef.current   = false
+  }, [myUid, shareLocation])
 
-    // Si le partage est désactivé, on efface la position si elle traîne encore
-    if (!shareLocation) {
-      if (hasStaleLocation) {
-        updateDoc(doc(db, 'users', user.uid), { liveLocation: deleteField() }).catch(() => {})
-      }
+  // Si le partage est désactivé, nettoyer l'éventuelle position restée en base.
+  useEffect(() => {
+    if (!myUid) return
+    if (!shareLocation && hasStaleLocation) {
+      updateDoc(doc(db, 'users', myUid), { liveLocation: deleteField() }).catch(() => {})
+    }
+  }, [myUid, shareLocation, hasStaleLocation])
+
+  const onPosition = useCallback((u: { lat: number; lng: number; accuracy: number; timestamp: number }) => {
+    if (!myUid || stoppedRef.current) return
+
+    // Auto-stop après 2 h : on désactive le partage en base et on arrête
+    if (Date.now() - startedAtRef.current > AUTO_STOP_MS) {
+      stoppedRef.current = true
+      updateDoc(doc(db, 'users', myUid), {
+        shareLocation: false,
+        liveLocation:  deleteField(),
+      }).catch(() => {})
       return
     }
 
-    let lastWrite = 0
-    let lastPos: { lat: number; lng: number } | null = null
-    const startedAt = Date.now()
-    let stopped = false
-    // Anti-spam logs : un seul warn par code d'erreur par montage (cf. bugReporter ring buffer)
-    const geoLogged = new Set<string>()
-
-    const watchId = navigator.geolocation.watchPosition(
-      pos => {
-        if (stopped) return
-
-        // Auto-stop après 2 h : on désactive le partage en base et on arrête
-        if (Date.now() - startedAt > AUTO_STOP_MS) {
-          stopped = true
-          updateDoc(doc(db, 'users', user.uid), {
-            shareLocation: false,
-            liveLocation:  deleteField(),
-          }).catch(() => {})
-          return
-        }
-
-        const now    = Date.now()
-        const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude }
-        if (lastPos && haversineMeters(lastPos, newPos) < MIN_DISTANCE_M) return
-        if (now - lastWrite < MIN_INTERVAL_MS) return
-        lastWrite = now
-        lastPos   = newPos
-        updateDoc(doc(db, 'users', user.uid), {
-          liveLocation: {
-            lat:       newPos.lat,
-            lng:       newPos.lng,
-            accuracy:  Math.round(pos.coords.accuracy),
-            updatedAt: now,
-          },
-        }).catch(() => {})
+    const now    = Date.now()
+    const newPos = { lat: u.lat, lng: u.lng }
+    if (lastPosRef.current && haversineMeters(lastPosRef.current, newPos) < MIN_DISTANCE_M) return
+    if (now - lastWriteRef.current < MIN_INTERVAL_MS) return
+    lastWriteRef.current = now
+    lastPosRef.current   = newPos
+    updateDoc(doc(db, 'users', myUid), {
+      liveLocation: {
+        lat:       newPos.lat,
+        lng:       newPos.lng,
+        accuracy:  Math.round(u.accuracy),
+        updatedAt: now,
       },
-      err => {
-        const key = String(err.code ?? err.message)
-        if (!geoLogged.has(key)) {
-          geoLogged.add(key)
-          console.warn('[geo]', err.message, '(logué une seule fois/session)')
-        }
-      },
-      // enableHighAccuracy: true — bug Eugénie 21/05/2026 "500 m de rayon aléatoire".
-      // `false` faisait du Wifi/Cell positioning (50-500 m). `true` force le GPS satellite
-      // (5-20 m typique en outdoor). Coût batterie acceptable : partage auto-stop à 2 h.
-      { enableHighAccuracy: true, maximumAge: 30_000, timeout: 30_000 }
-    )
+    }).catch(() => {})
+  }, [myUid])
 
-    return () => {
-      stopped = true
-      navigator.geolocation.clearWatch(watchId)
-    }
-    // Important : on ne dépend QUE de l'état du partage, pas de la dernière position
-    // (sinon chaque écriture re-monte l'effet et casse les throttles internes).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.uid, shareLocation])
+  useLocationCore(onPosition, undefined, !!myUid && shareLocation)
 }

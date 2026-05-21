@@ -24,6 +24,7 @@ import {
   formatAgo, timeAgo, timeUntil,
 } from '../services/map/time'
 import { healthFreshness, healthDotClass } from '../services/map/health'
+import { getFenceVisualState } from '../services/map/fence-visual'
 import type { MapPin, PinType, UserProfile, FencePreset, Animal } from '../types'
 
 /* ─── ferme ─── */
@@ -2099,39 +2100,8 @@ export default function MapPage() {
   }
 
   function getFencePathOptions(pin: MapPin): L.PolylineOptions {
-    let   color   = pin.presetColor ?? '#EA580C'
-    const count   = pin.wireCount   ?? 1
-    const baseW   = Math.max(2, 1.5 + count * 1.5)
-    // Segments issus d'une coupe : un peu plus épais pour bien les voir
-    const weight  = pin.cutFromId ? baseW + 1 : baseW
-    const preset  = fencePresets.find(p => p.id === pin.presetId)
-    let dashArray: string | undefined =
-        preset?.wireStyle === 'barbed' ? '2 6'
-      : preset?.wireStyle === 'ribbon' ? '14 4'
-      : preset?.wireStyle === 'plain'  ? '8 6'
-      : undefined  // electric : ligne continue
-
-    // Intensité du courant — uniquement pour les clôtures électriques (bug Nils 21/05/2026)
-    let opacity = 0.9
-    if (preset?.wireStyle === 'electric') {
-      // Override "off" si la batterie connectée est éteinte (bug Nils 21/05/2026)
-      const battery = pin.connectedBatteryId
-        ? pins.find(p => p.id === pin.connectedBatteryId)
-        : null
-      const batteryOff = battery && battery.powerOn === false
-      const effective = batteryOff ? 'off' : (pin.electricityIntensity ?? 'full')
-
-      if (effective === 'attenuated') {
-        opacity = 0.55
-        dashArray = '6 6'
-      } else if (effective === 'off') {
-        opacity = 0.35
-        dashArray = '3 8'
-        color = '#94A3B8'
-      }
-    }
-
-    return { color, weight, opacity, dashArray }
+    const preset = fencePresets.find(p => p.id === pin.presetId)
+    return getFenceVisualState(pin, preset, pins)
   }
 
   /* ─── render ─── */

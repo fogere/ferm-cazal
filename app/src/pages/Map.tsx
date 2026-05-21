@@ -442,6 +442,7 @@ function MapClickCapture({
   addActive, fenceActive, scissorActive, scissorFenceId, scissorOverridePoints,
   pointerActive, onPointer,
   streamActive, onStreamPoint,
+  plotActive, onPlotPoint, onPlotClose, plotFirstPoint,
   onPin, onFencePoint, onFenceClose, onSelect, onScissorSnap, onSnapHover,
   fencePins, allPins, fenceFirstPoint,
 }: {
@@ -454,6 +455,10 @@ function MapClickCapture({
   onPointer: (lat: number, lng: number) => void
   streamActive: boolean
   onStreamPoint: (lat: number, lng: number) => void
+  plotActive: boolean
+  onPlotPoint: (lat: number, lng: number) => void
+  onPlotClose: () => void
+  plotFirstPoint: { lat: number; lng: number } | null
   onPin: (lat: number, lng: number) => void
   onFencePoint: (lat: number, lng: number) => void
   onFenceClose: () => void
@@ -501,6 +506,21 @@ function MapClickCapture({
       // ── Mode cours d'eau (water_stream) : accumule des points ──
       if (streamActive) {
         onStreamPoint(e.latlng.lat, e.latlng.lng)
+        return
+      }
+      // ── Mode "Définir un espace" (land_plot) : accumule des points,
+      //    ferme automatiquement si on retouche le premier point (≥ 3 points). ──
+      if (plotActive) {
+        if (plotFirstPoint) {
+          const clickPx = map.latLngToContainerPoint(e.latlng)
+          const firstPx = map.latLngToContainerPoint(L.latLng(plotFirstPoint.lat, plotFirstPoint.lng))
+          const d = Math.hypot(clickPx.x - firstPx.x, clickPx.y - firstPx.y)
+          if (d < SNAP_RADIUS_PX) {
+            onPlotClose()
+            return
+          }
+        }
+        onPlotPoint(e.latlng.lat, e.latlng.lng)
         return
       }
       // ── Mode ciseau : snap sur le fil le plus proche ──
@@ -759,6 +779,13 @@ export default function MapPage() {
   const [streamFormVisible,  setStreamFormVisible]  = useState(false)
   const [streamFormName,     setStreamFormName]     = useState('')
   const [streamFormSeasonal, setStreamFormSeasonal] = useState(false)
+  // ── Mode "Définir un espace" (S4.3) ── demande Eugénie 21/05/2026
+  // Trace un land_plot autonome (terrain qui nous appartient). Plus minimal
+  // que fenceMode (pas de presets / fils / GPS auto), proche de streamMode.
+  const [plotMode,           setPlotMode]           = useState(false)
+  const [plotPoints,         setPlotPoints]         = useState<{ lat: number; lng: number }[]>([])
+  const [plotFormVisible,    setPlotFormVisible]    = useState(false)
+  const [plotFormName,       setPlotFormName]       = useState('')
   const [streamFormMonths,   setStreamFormMonths]   = useState<number[]>([])
 
   // Atténuation par segment (Phase 2 cours d'eau, Eugénie) : l'état du
@@ -2079,8 +2106,22 @@ export default function MapPage() {
 
   const overduePins  = new Set(pins.filter(p => isWaterOverdue(p) || isBatteryDue(p)).map(p => p.id))
   const fencePins    = pins.filter(p => p.type === 'fence' && (p.points?.length ?? 0) >= 2)
-  const nonFencePins = pins.filter(p => p.type !== 'fence' || (p.points?.length ?? 0) < 2)
-  const anyModeActive = addMode || fenceMode || scissorMode || pointerMode || streamMode
+  // Ids des land_plots qui ont un fence jumeau (migration S3). On ne les rend
+  // PAS séparément — leur fence jumeau couvre déjà le visuel. Tap sur le fence
+  // mènera vers le land_plot via le lien "Voir l'espace" (S4.6).
+  const twinPlotIds = new Set(
+    pins.filter(p => p.type === 'fence' && p.migratedToPlotId).map(p => p.migratedToPlotId!),
+  )
+  // Land_plots autonomes (créés via le futur mode "Définir un espace") : tracé propre.
+  const landPlotPins = pins.filter(p =>
+    p.type === 'land_plot' && (p.points?.length ?? 0) >= 3 && !twinPlotIds.has(p.id),
+  )
+  const nonFencePins = pins.filter(p =>
+    p.type !== 'fence'
+    && p.type !== 'land_plot'  // les land_plots ne sont jamais des Markers
+    || (p.type === 'fence' && (p.points?.length ?? 0) < 2)
+  )
+  const anyModeActive = addMode || fenceMode || scissorMode || pointerMode || streamMode || plotMode
 
   function toggleMonth(m: number) {
     setForm(f => ({
@@ -2186,6 +2227,15 @@ export default function MapPage() {
           onPointer={sendPointer}
           streamActive={streamMode && !streamFormVisible}
           onStreamPoint={(lat, lng) => setStreamPoints(prev => [...prev, { lat, lng }])}
+          plotActive={plotMode && !plotFormVisible}
+          onPlotPoint={(lat, lng) => setPlotPoints(prev => [...prev, { lat, lng }])}
+          onPlotClose={() => {
+            if (plotPoints.length >= 3) {
+              setPlotFormName('')
+              setPlotFormVisible(true)
+            }
+          }}
+          plotFirstPoint={plotMode && !plotFormVisible && plotPoints.length >= 3 ? plotPoints[0] : null}
           onPin={handleMapClick}
           onFencePoint={handleFencePoint}
           onFenceClose={handleFenceClose}
@@ -2204,6 +2254,32 @@ export default function MapPage() {
         {anyModeActive && !fenceFormVisible && (
           <CursorMarker active={true} type={fenceMode ? 'fence' : form.type} />
         )}
+
+        {/* ── Espaces définis (land_plot) — autonomes uniquement ── */}
+        {/* Les land_plots avec un fence jumeau (migration S3) ne sont pas rendus
+            ici : leur fence jumeau couvre déjà le visuel. */}
+        {landPlotPins.map(pin => {
+          const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
+          return (
+            <Polygon
+              key={pin.id + '-plot'}
+              positions={pin.points!.map(p => [p.lat, p.lng] as [number, number])}
+              pathOptions={{
+                color:       '#52B788',
+                weight:      enc.length > 0 ? 3 : 2,
+                opacity:     0.85,
+                fillColor:   '#52B788',
+                fillOpacity: enc.length > 0 ? 0.18 : 0.10,
+                dashArray:   enc.length > 0 ? undefined : '6 4',
+              }}
+              eventHandlers={{
+                click: () => {
+                  if (!anyModeActive) setSelected(pin)
+                },
+              }}
+            />
+          )
+        })}
 
         {/* ── Clôtures ── */}
         {/* Passe 1 : remplissage enclos fermés — couleur selon la fraîcheur du pâturage */}
@@ -2348,6 +2424,25 @@ export default function MapPage() {
                 key={`stream-draw-${i}`}
                 position={[p.lat, p.lng]}
                 icon={FENCE_DOT_ICON}
+                interactive={false}
+              />
+            ))}
+          </>
+        )}
+
+        {/* Espace en cours de dessin (mode "Définir un espace") */}
+        {plotMode && plotPoints.length > 0 && (
+          <>
+            <Polyline
+              positions={plotPoints.map(p => [p.lat, p.lng] as [number, number])}
+              pathOptions={{ color: '#52B788', weight: 3, dashArray: '8 6', opacity: 0.85 }}
+              interactive={false}
+            />
+            {plotPoints.map((p, i) => (
+              <Marker
+                key={`plot-draw-${i}`}
+                position={[p.lat, p.lng]}
+                icon={i === 0 && plotPoints.length >= 3 ? FENCE_FIRST_DOT_ICON : FENCE_DOT_ICON}
                 interactive={false}
               />
             ))}
@@ -3021,7 +3116,7 @@ export default function MapPage() {
 
 
       {/* ── Boutons flottants (FAB) ── */}
-      {!addMode && !pendingPos && !selected && !fenceMode && !scissorMode && !pointerMode && !streamMode && (
+      {!addMode && !pendingPos && !selected && !fenceMode && !scissorMode && !pointerMode && !streamMode && !plotMode && (
         <div className="absolute bottom-6 right-4 z-[1000] flex flex-col gap-3 items-end">
           <button
             onClick={() => setPointerMode(true)}
@@ -3061,6 +3156,19 @@ export default function MapPage() {
           >
             <span className="text-base leading-none">🏞️</span>
             <span className="text-sm font-semibold">Cours d'eau</span>
+          </button>
+          {/* Bouton "Définir un espace" — refonte clôtures/espaces (S4.3).
+              Trace un land_plot autonome : terrain qui nous appartient,
+              indépendant des clôtures physiques qui peuvent l'entourer. */}
+          <button
+            onClick={() => { setPlotMode(true); setPlotPoints([]) }}
+            className="text-white rounded-2xl px-4 py-3 shadow-lg
+                       active:scale-95 transition-all flex items-center gap-2"
+            style={{ backgroundColor: '#15803d' }}
+            title="Définir un espace (terrain)"
+          >
+            <span className="text-base leading-none">⛰</span>
+            <span className="text-sm font-semibold">Espace</span>
           </button>
           <button
             onClick={() => setAddMode(true)}
@@ -3124,6 +3232,145 @@ export default function MapPage() {
             </button>
           </div>
         </>
+      )}
+
+      {/* ── Barre d'outils : mode "Définir un espace" ── */}
+      {plotMode && !plotFormVisible && (
+        <>
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] w-[92vw] max-w-md
+                          text-white rounded-2xl shadow-xl px-4 py-3 space-y-2"
+               style={{ backgroundColor: '#15803d' }}>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-bold leading-tight">
+                ⛰ Définir un espace
+                <span className="ml-1 text-xs font-semibold opacity-90">
+                  · {plotPoints.length} point{plotPoints.length > 1 ? 's' : ''}
+                </span>
+              </p>
+              <button
+                onClick={() => { setPlotMode(false); setPlotPoints([]) }}
+                className="p-1.5 rounded-lg bg-white/20 active:bg-white/40"
+                aria-label="Annuler"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <p className="text-[11px] opacity-90 leading-snug">
+              Touche la carte point par point pour entourer le terrain qui vous appartient.
+              Touche le 1<sup>er</sup> point (rond vert clair) ou "Valider" pour fermer.
+            </p>
+          </div>
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[1001] flex gap-2">
+            {plotPoints.length > 0 && (
+              <button
+                onClick={() => setPlotPoints(prev => prev.slice(0, -1))}
+                className="bg-card text-charcoal rounded-2xl px-4 py-3 shadow-lg
+                           active:scale-95 transition-all flex items-center gap-2 border border-border"
+              >
+                <Undo2 size={16} />
+                <span className="text-sm font-semibold">Retirer le dernier</span>
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setPlotFormName('')
+                setPlotFormVisible(true)
+              }}
+              disabled={plotPoints.length < 3}
+              className="text-white rounded-2xl px-5 py-3 shadow-xl
+                         active:scale-95 transition-all flex items-center gap-2 disabled:opacity-40"
+              style={{ backgroundColor: '#15803d' }}
+            >
+              <Check size={18} />
+              <span className="text-sm font-bold">Valider l'espace</span>
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* ── Modal : nom de l'espace ── */}
+      {plotFormVisible && (
+        <div className="fixed inset-0 z-[2500] bg-black/50 flex items-end sm:items-center justify-center p-3">
+          <div className="bg-card w-full max-w-md rounded-3xl shadow-xl overflow-hidden flex flex-col">
+            <div className="px-5 pt-5 pb-3 flex items-start justify-between border-b border-border/40">
+              <div>
+                <p className="text-xs font-semibold text-muted uppercase tracking-wider">
+                  ⛰ Nouvel espace défini
+                </p>
+                <p className="text-xs text-muted/80 mt-1">
+                  {plotPoints.length} points tracés
+                </p>
+              </div>
+              <button
+                onClick={() => setPlotFormVisible(false)}
+                className="ml-2 w-8 h-8 rounded-lg bg-cream flex items-center justify-center active:scale-95 flex-shrink-0"
+                aria-label="Retour au tracé"
+              >
+                <X size={16} className="text-muted" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-4">
+              <label className="block">
+                <span className="text-xs font-semibold text-charcoal block mb-1.5">Nom de l'espace *</span>
+                <input
+                  type="text"
+                  autoFocus
+                  value={plotFormName}
+                  onChange={e => setPlotFormName(e.target.value)}
+                  maxLength={60}
+                  className="w-full px-3 py-2 rounded-xl border border-border bg-cream text-sm text-charcoal
+                             focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  placeholder="ex: Pré du haut, Verger, Bois de Larivière…"
+                />
+              </label>
+              <p className="text-[11px] text-muted/80 leading-snug">
+                Cet espace définit un terrain qui vous appartient (suivi pâturage,
+                placement animaux). Les clôtures qui l'entourent restent indépendantes
+                et modifiables sans casser le placement.
+              </p>
+            </div>
+
+            <div className="px-5 py-3 border-t border-border/40 flex gap-2">
+              <button
+                onClick={() => setPlotFormVisible(false)}
+                className="px-4 py-2.5 rounded-xl border border-border text-sm font-semibold text-muted active:bg-cream"
+              >
+                Retour au tracé
+              </button>
+              <button
+                onClick={async () => {
+                  if (!plotFormName.trim() || !user) return
+                  const now = Date.now()
+                  const centerLat = plotPoints.reduce((s, p) => s + p.lat, 0) / plotPoints.length
+                  const centerLng = plotPoints.reduce((s, p) => s + p.lng, 0) / plotPoints.length
+                  await addDoc(collection(db, 'map_pins'), {
+                    name:       plotFormName.trim(),
+                    type:       'land_plot',
+                    note:       '',
+                    lat:        centerLat,
+                    lng:        centerLng,
+                    points:     plotPoints,
+                    status:     'ok',
+                    createdAt:  now,
+                    createdBy:  user.uid,
+                    updatedAt:  now,
+                    updatedBy:  user.uid,
+                  })
+                  setPlotMode(false)
+                  setPlotPoints([])
+                  setPlotFormVisible(false)
+                }}
+                disabled={!plotFormName.trim()}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl
+                           text-white text-sm font-bold active:scale-95 disabled:opacity-40"
+                style={{ backgroundColor: '#15803d' }}
+              >
+                <Check size={15} /> Enregistrer l'espace
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Modal : nom + saisonnalité du cours d'eau ── */}

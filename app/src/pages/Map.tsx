@@ -26,7 +26,7 @@ import { getFenceVisualState } from '../services/map/fence-visual'
 import { getStreamSegments } from '../services/map/stream-visual'
 import { isWaterOverdue } from '../services/map/water'
 import { isBatteryDue } from '../services/map/battery'
-import { enclosureQueryIds } from '../services/map/enclosure'
+import { enclosureQueryIds, effectiveEnclosureId } from '../services/map/enclosure'
 import { WaterManualPanel } from './map/panels/WaterManualPanel'
 import { WaterStreamPanel } from './map/panels/WaterStreamPanel'
 import { BatteryPanel } from './map/panels/BatteryPanel'
@@ -398,9 +398,11 @@ function computeGrazingStatus(
   animals: Animal[],
   movements: EnclosureMovement[],
 ): GrazingStatus {
-  // Agrégation : on regarde TOUS les pins du même groupe (parc d'origine + sous-parcs)
+  // Agrégation : on regarde TOUS les pins du même groupe (parc d'origine + sous-parcs).
+  // S2.5 compat migration : groupIds contient l'enclosureId LOGIQUE (plot.id si migré,
+  // sinon fence.id), pour matcher contre animal.enclosureId / movement.{from,to}EnclosureId.
   const group = getFenceGroup(pin, allFences)
-  const groupIds = new Set(group.map(g => g.id))
+  const groupIds = new Set(group.map(g => effectiveEnclosureId(g)))
 
   // Occupé si AU MOINS un animal est présent dans n'importe quel sous-parc du groupe.
   const hasOccupants = animals.some(a => a.enclosureId && groupIds.has(a.enclosureId))
@@ -2246,9 +2248,9 @@ export default function MapPage() {
         {/* Bug Eugénie 20/05/2026 : ne pas afficher "Vide" en vue large — ça surcharge la carte */}
         {fencePins
           .filter(pin => isFenceClosed(pin) && !(scissorMode && pin.id === scissorFenceId))
-          .filter(pin => mapZoom >= LABEL_ZOOM || animals.some(a => a.enclosureId === pin.id))
+          .filter(pin => mapZoom >= LABEL_ZOOM || animals.some(a => a.enclosureId === effectiveEnclosureId(pin)))
           .map(pin => {
-            const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
+            const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === effectiveEnclosureId(pin)))
             const labelPos = pin.points ? insidePolygonCentroid(pin.points) : { lat: pin.lat, lng: pin.lng }
             return (
               <Marker
@@ -3390,19 +3392,21 @@ export default function MapPage() {
                                 <p className="text-xs text-muted italic">Aucun enclos fermé disponible.</p>
                               ) : (
                                 <div className="space-y-1.5">
-                                  {closedFences.map(fence => (
+                                  {closedFences.map(fence => {
+                                    const fenceEncId = effectiveEnclosureId(fence)
+                                    return (
                                     <button
                                       key={fence.id}
                                       disabled={actionBusy}
                                       onClick={async () => {
                                         setActionBusy(true)
                                         try {
-                                          await updateDoc(doc(db, 'animals', animal.id), { enclosureId: fence.id })
+                                          await updateDoc(doc(db, 'animals', animal.id), { enclosureId: fenceEncId })
                                           setAnimalPanelEditing(null)
                                         } finally { setActionBusy(false) }
                                       }}
                                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-all active:scale-95 ${
-                                        animal.enclosureId === fence.id
+                                        animal.enclosureId === fenceEncId
                                           ? 'border-forest bg-forest/10'
                                           : 'border-border bg-cream'
                                       }`}
@@ -3411,13 +3415,13 @@ export default function MapPage() {
                                            style={{ background: fence.presetColor ?? '#52B788' }} />
                                       <span className="text-sm font-semibold text-charcoal flex-1">{fence.name}</span>
                                       <span className="text-xs text-muted">
-                                        {animals.filter(a => a.enclosureId === fence.id).length} animaux
+                                        {animals.filter(a => a.enclosureId === fenceEncId).length} animaux
                                       </span>
-                                      {animal.enclosureId === fence.id && (
+                                      {animal.enclosureId === fenceEncId && (
                                         <span className="text-forest text-xs font-bold">✓ Ici</span>
                                       )}
                                     </button>
-                                  ))}
+                                  )})}
                                   {/* Option : libérer l'animal */}
                                   {animal.enclosureId && (
                                     <button

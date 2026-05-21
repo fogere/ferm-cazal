@@ -26,6 +26,20 @@ Règle absolue : **aucune modif qui change un comportement utilisateur**. Que de
     computeGrazingStatus, formulaire placement) utilisent maintenant
     effectiveEnclosureId — sans ça les enclos migrés s'affichaient vides
 
+- **Session S5 (finitions refonte clôtures/espaces)** :
+  - S5.1 : `useGeofenceAlert` détecte maintenant sur les `land_plot` (avec
+    exclusion des holes via `pointInPolygonWithHoles`). Fallback rétrocompat
+    pour les fences fermés non migrés.
+  - S5.2 : snap auto du tracé clôture sur les contours land_plot (tip n°1
+    Eugénie). Le `mousemove` et le `click` snappent sur les points outer ET
+    les holes. Rayon SNAP_RADIUS_PX = 44 px.
+  - S5.3 : Grazing.tsx — helper `isEnclosureCandidate` qui sélectionne les
+    pins éligibles à recevoir des animaux (land_plot ≥3 pts + fences fermés
+    non migrés en fallback). Les modales AddMovement et PasteImport sont
+    alimentées par ce filtre au lieu de `pins.filter(p => p.type === 'fence')`.
+  - S5.4 : 2 annonces in-app (Eugénie + broadcast) expliquant le nouveau
+    workflow et rassurant les utilisatrices que rien n'est perdu.
+
 - **Session S4 (UX espaces — pleine refonte côté utilisateur)** :
   - S4.2 : rendu visuel des land_plots autonomes en Polygon vert clair,
     tap pour sélection. Les jumeaux (migrés) restent invisibles côté

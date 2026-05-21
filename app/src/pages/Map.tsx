@@ -31,6 +31,7 @@ import { isBatteryDue } from '../services/map/battery'
 import { WaterManualPanel } from './map/panels/WaterManualPanel'
 import { WaterStreamPanel } from './map/panels/WaterStreamPanel'
 import { BatteryPanel } from './map/panels/BatteryPanel'
+import { FencePanel } from './map/panels/FencePanel'
 import { BATTERY_STATUS_CFG } from './map/panels/shared'
 import type { MapPin, PinType, UserProfile, FencePreset, Animal } from '../types'
 
@@ -4093,77 +4094,15 @@ export default function MapPage() {
             {/* ── Bloc clôture ── */}
             {selected.type === 'fence' && (
               <div className="mb-4 space-y-3">
-                {/* Badge preset */}
-                <div className="rounded-xl p-3 flex items-center gap-3"
-                     style={{
-                       background: (selected.presetColor ?? '#EA580C') + '20',
-                       border: `1px solid ${selected.presetColor ?? '#EA580C'}40`,
-                     }}>
-                  <div className="w-4 h-4 rounded-full flex-shrink-0"
-                       style={{ background: selected.presetColor ?? '#EA580C' }} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate"
-                       style={{ color: selected.presetColor ?? '#EA580C' }}>
-                      {fencePresets.find(p => p.id === selected.presetId)?.name ?? 'Clôture'}
-                    </p>
-                    {fencePresets.find(p => p.id === selected.presetId)?.description && (
-                      <p className="text-xs text-muted truncate">
-                        {fencePresets.find(p => p.id === selected.presetId)!.description}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Compteur de fils */}
-                <div className="rounded-xl p-3 bg-cream border border-border">
-                  <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">Fils électriques</p>
-                  <div className="flex items-center gap-3 mb-3">
-                    <button
-                      onClick={() => updateFenceWireCount(selected, -1)}
-                      disabled={actionBusy || (selected.wireCount ?? 1) <= 1}
-                      className="w-10 h-10 rounded-xl bg-orange-100 text-orange-700 font-bold text-xl
-                                 flex items-center justify-center active:scale-95 disabled:opacity-30 transition-all">
-                      −
-                    </button>
-                    <div className="flex-1 text-center">
-                      <span className="text-3xl font-bold text-charcoal">{selected.wireCount ?? 1}</span>
-                      <span className="text-sm text-muted ml-1">
-                        fil{(selected.wireCount ?? 1) > 1 ? 's' : ''}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => updateFenceWireCount(selected, 1)}
-                      disabled={actionBusy || (selected.wireCount ?? 1) >= 8}
-                      className="w-10 h-10 rounded-xl bg-orange-100 text-orange-700 font-bold text-xl
-                                 flex items-center justify-center active:scale-95 disabled:opacity-30 transition-all">
-                      +
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      key={`volt-${selected.id}`}
-                      type="number"
-                      placeholder="Tension (ex : 6000)"
-                      defaultValue={selected.wireVoltage ?? ''}
-                      onBlur={e => {
-                        const v = e.target.value ? Number(e.target.value) : null
-                        if (v !== (selected.wireVoltage ?? null)) updateFenceVoltage(selected, v)
-                      }}
-                      className="flex-1 px-3 py-2 rounded-xl border border-border bg-white text-sm text-charcoal
-                                 placeholder:text-muted/50 focus:outline-none focus:ring-2 focus:ring-orange-300"
-                    />
-                    <span className="text-xs text-muted font-semibold">V</span>
-                  </div>
-                </div>
-
-                {/* Connexion à une batterie — visible uniquement pour les clôtures électriques.
-                    Bug Nils 21/05/2026 : circuit visible/invisible selon état batterie. */}
-                {(() => {
-                  const preset = fencePresets.find(p => p.id === selected.presetId)
-                  if (preset?.wireStyle !== 'electric') return null
-                  const batteryPins = pins.filter(p => p.type === 'battery')
-                  if (batteryPins.length === 0) return null
-                  const setBattery = async (bid: string | null) => {
+                <FencePanel
+                  pin={selected}
+                  preset={fencePresets.find(p => p.id === selected.presetId)}
+                  isTemp={isTemp}
+                  actionBusy={actionBusy}
+                  batteryPins={pins.filter(p => p.type === 'battery')}
+                  onUpdateWireCount={updateFenceWireCount}
+                  onUpdateVoltage={updateFenceVoltage}
+                  onSetBattery={async (pin, bid) => {
                     if (!user) return
                     setActionBusy(true)
                     try {
@@ -4172,43 +4111,11 @@ export default function MapPage() {
                         updatedBy: user.uid,
                       }
                       payload.connectedBatteryId = bid ?? deleteField()
-                      await updateDoc(doc(db, 'map_pins', selected.id), payload)
-                      setSelected({ ...selected, connectedBatteryId: bid ?? undefined })
+                      await updateDoc(doc(db, 'map_pins', pin.id), payload)
+                      setSelected({ ...pin, connectedBatteryId: bid ?? undefined })
                     } finally { setActionBusy(false) }
-                  }
-                  return (
-                    <div className="rounded-xl p-3 bg-cream border border-border">
-                      <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">
-                        Reliée à une batterie
-                      </p>
-                      <select
-                        value={selected.connectedBatteryId ?? ''}
-                        onChange={e => setBattery(e.target.value || null)}
-                        disabled={isTemp || actionBusy}
-                        className="w-full px-3 py-2 rounded-lg border border-border bg-white text-xs text-charcoal"
-                      >
-                        <option value="">— Aucune —</option>
-                        {batteryPins.map(b => (
-                          <option key={b.id} value={b.id}>
-                            {b.name} {b.powerOn === false ? '(éteinte)' : ''}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="text-[10px] text-muted/80 mt-1.5 leading-tight">
-                        Si la batterie est éteinte, cette clôture s'affiche automatiquement
-                        comme coupée (grisée).
-                      </p>
-                    </div>
-                  )
-                })()}
-
-                {/* Intensité du courant — visible uniquement pour les clôtures électriques.
-                    Bug Nils 21/05/2026 : indiquer visuellement la baisse d'intensité. */}
-                {(() => {
-                  const preset = fencePresets.find(p => p.id === selected.presetId)
-                  if (preset?.wireStyle !== 'electric') return null
-                  const current = selected.electricityIntensity ?? 'full'
-                  const setIntensity = async (level: 'full' | 'attenuated' | 'off') => {
+                  }}
+                  onSetIntensity={async (pin, level) => {
                     if (!user) return
                     setActionBusy(true)
                     try {
@@ -4221,83 +4128,16 @@ export default function MapPage() {
                       } else {
                         payload.electricityIntensity = level
                       }
-                      await updateDoc(doc(db, 'map_pins', selected.id), payload)
+                      await updateDoc(doc(db, 'map_pins', pin.id), payload)
                       setSelected({
-                        ...selected,
+                        ...pin,
                         electricityIntensity: level === 'full' ? undefined : level,
                       })
                     } finally { setActionBusy(false) }
-                  }
-                  const options: Array<['full' | 'attenuated' | 'off', string, string]> = [
-                    ['full',       '⚡ Plein',     'Courant pleine puissance'],
-                    ['attenuated', '⚡ Atténué',   'Courant faible (fin de circuit)'],
-                    ['off',        '⊘ Coupé',      'Pas de courant (débranché)'],
-                  ]
-                  return (
-                    <div className="rounded-xl p-3 bg-cream border border-border">
-                      <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">
-                        Intensité du courant
-                      </p>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        {options.map(([k, label, hint]) => (
-                          <button
-                            key={k}
-                            onClick={() => !isTemp && setIntensity(k)}
-                            disabled={isTemp || actionBusy}
-                            title={hint}
-                            className={`py-2 rounded-lg border text-[11px] font-bold transition-all ${
-                              current === k
-                                ? 'border-orange-500 bg-orange-500 text-white'
-                                : 'border-border bg-card text-muted'
-                            } disabled:opacity-40`}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                      <p className="text-[10px] text-muted/80 mt-1.5 leading-tight">
-                        Visuel sur la carte : trait plein, pointillé moyen, ou pointillé gris/dispersé.
-                      </p>
-                    </div>
-                  )
-                })()}
-
-                {/* Infos tracé */}
-                <div className="rounded-xl p-3 bg-orange-500/10 border border-orange-500/20 flex items-center gap-2">
-                  <Pencil size={16} className="text-orange-600" />
-                  <span className="text-sm font-semibold text-orange-700">
-                    {selected.points?.length ?? 0} points ·{' '}
-                    {isFenceClosed(selected) ? '🏠 Enclos fermé' : 'Clôture ouverte'}
-                    {selected.cutFromId && ' · ✂ segment'}
-                    {selected.fillOnly && ' · ✂ découpé'}
-                  </span>
-                </div>
-
-                {/* Bouton : passer en mode édition du tracé (drag des poteaux) */}
-                {!isTemp && (
-                  <button
-                    onClick={() => startEditFence(selected)}
-                    className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl
-                               bg-forest/10 border border-forest/30 text-forest text-sm font-bold
-                               active:bg-forest/20 transition-colors"
-                  >
-                    <Pencil size={14} /> Modifier le tracé (drag des poteaux)
-                  </button>
-                )}
-
-                {/* Bouton restaurer fil unique (uniquement pour enclos découpé) */}
-                {selected.fillOnly && isFenceClosed(selected) && (
-                  <button
-                    onClick={() => restoreSingleWire(selected)}
-                    disabled={actionBusy}
-                    className="w-full py-3 rounded-xl border-2 border-orange-400 text-orange-700 bg-orange-50
-                               text-sm font-bold active:scale-95 disabled:opacity-50 transition-all
-                               flex items-center justify-center gap-2"
-                  >
-                    <Undo2 size={15} />
-                    {actionBusy ? 'Restauration…' : 'Restaurer fil unique (supprime les coupes)'}
-                  </button>
-                )}
+                  }}
+                  onStartEditFence={startEditFence}
+                  onRestoreSingleWire={restoreSingleWire}
+                />
 
                 {/* ── Animaux (enclos fermé → assignation, ouvert → conseil) ── */}
                 {isFenceClosed(selected) ? (

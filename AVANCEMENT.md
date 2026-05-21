@@ -154,3 +154,40 @@ projet farm/
 ---
 
 *Dernière mise à jour : 15 mai 2026*
+
+---
+
+## SESSION DU 21 MAI 2026 — features bugs Nils + Eugénie
+
+### Carte — clôtures électriques (bug Nils 21/05)
+- **Atténuation visuelle du motif électrique** : sélecteur 3 niveaux (Plein / Atténué / Coupé) dans le panneau d'édition d'une clôture électrique. Plein = ligne continue opacité 0.9. Atténué = pointillé 6/6 opacité 0.55. Coupé = pointillé 3/8 opacité 0.35 couleur grise.
+- **Lien clôture → batterie** : champ `connectedBatteryId`. Si la batterie pointée a `powerOn=false`, toutes les clôtures qui lui sont reliées passent automatiquement en visuel "coupé" (override de leur `electricityIntensity`).
+- **Toggle ON/OFF sur les batteries** (`powerOn`) : un bouton dans le panneau batterie. Quand OFF, le pin batterie affiche un voyant rouge ⊘, et les clôtures connectées passent toutes en visuel "coupé" en temps réel.
+
+### Carte — cours d'eau polyline (bug Eugénie 21/05, Phase 1)
+- **Nouveau type `water_stream`** : tracé polyline (comme une clôture) au lieu d'un pin ponctuel. Outil dédié dans la barre d'actions.
+- **Saisonnalité** : permanent ou saisonnier avec sélection des mois actifs (`streamMode`, `streamActiveMonths`).
+- Les anciens points `water_natural` restent affichés pour migration manuelle (delete + re-create).
+- **Phase 2 prévue (pas faite)** : atténuation manuelle par segment ("à partir de ce point, −90% de débit").
+
+### Carte — refonte clôtures / espaces (bug Eugénie 21/05) — NON FAIT
+- Demande : séparer "définition d'espace" (terrain qui nous appartient) du "tracé de clôture" (physique, amovible). Inclure snap auto et zones vides intérieures.
+- Statut : à arbitrer avec le user — gros chantier impactant placement animaux, geofence, pâturage, historique mouvements.
+
+### Tâches — broadcast pour tous (bug Nils 21/05)
+- Le mode broadcast `'📣 Pour tous'` (existant) est ouvert à tous les regular users (avant : super-admin uniquement). Tout regular peut désormais créer une tâche partagée à tous.
+
+### Refacto + robustesse (session)
+- `getFenceVisualState()` extrait dans `services/map/fence-visual.ts` (helper pur testable, encapsule la logique électricité + batterie). Map.tsx -30 lignes.
+- Logs `geoloc: Timeout expired` throttlés à 1× par session par hook (`useLiveLocation`, `useOnDemandLocationPublish`, `useGeofenceAlert`) — évite la pollution du buffer ring du `bugReporter`.
+
+### Restant prioritaire
+1. Phase 2 cours d'eau (atténuation par segment) — Eugénie
+2. Refonte clôtures/espaces — Eugénie (gros chantier à arbitrer)
+3. Migration des `water_natural` ponctuels existants → `water_stream` polyline
+4. Découpe de Map.tsx (5153 lignes) en sous-composants visuels
+5. `useLocationCore()` unifié pour remplacer les 3 `watchPosition()` parallèles
+
+---
+
+*Dernière mise à jour : 21 mai 2026*

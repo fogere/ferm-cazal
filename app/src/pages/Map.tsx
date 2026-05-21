@@ -498,6 +498,24 @@ function MapClickCapture({
           if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng, isClose: false } }
         }
       }
+      // Points des contours land_plot (S5.2 — tip n°1 Eugénie : la clôture
+      // doit pouvoir suivre le tracé d'un espace défini sans décalage).
+      for (const pin of allPins) {
+        if (pin.type !== 'land_plot') continue
+        for (const v of pin.points ?? []) {
+          const vp = map.latLngToContainerPoint(L.latLng(v.lat, v.lng))
+          const d  = Math.hypot(movePx.x - vp.x, movePx.y - vp.y)
+          if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng, isClose: false } }
+        }
+        // Points des holes (zones vides intérieures)
+        for (const hole of pin.holes ?? []) {
+          for (const v of hole) {
+            const vp = map.latLngToContainerPoint(L.latLng(v.lat, v.lng))
+            const d  = Math.hypot(movePx.x - vp.x, movePx.y - vp.y)
+            if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng, isClose: false } }
+          }
+        }
+      }
       onSnapHover(best)
     },
     mouseout() {
@@ -608,6 +626,22 @@ function MapClickCapture({
             const vp = map.latLngToContainerPoint(L.latLng(v.lat, v.lng))
             const d  = Math.hypot(clickPx.x - vp.x, clickPx.y - vp.y)
             if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng, isClose: false } }
+          }
+        }
+        // Snap aussi sur les contours land_plot (S5.2 — tip n°1 Eugénie)
+        for (const pin of allPins) {
+          if (pin.type !== 'land_plot') continue
+          for (const v of pin.points ?? []) {
+            const vp = map.latLngToContainerPoint(L.latLng(v.lat, v.lng))
+            const d  = Math.hypot(clickPx.x - vp.x, clickPx.y - vp.y)
+            if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng, isClose: false } }
+          }
+          for (const hole of pin.holes ?? []) {
+            for (const v of hole) {
+              const vp = map.latLngToContainerPoint(L.latLng(v.lat, v.lng))
+              const d  = Math.hypot(clickPx.x - vp.x, clickPx.y - vp.y)
+              if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng, isClose: false } }
+            }
           }
         }
         if (best) {

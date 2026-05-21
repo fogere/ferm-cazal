@@ -444,6 +444,7 @@ function MapClickCapture({
   pointerActive, onPointer,
   streamActive, onStreamPoint,
   plotActive, onPlotPoint, onPlotClose, plotFirstPoint,
+  holeActive, onHolePoint, onHoleClose, holeFirstPoint,
   onPin, onFencePoint, onFenceClose, onSelect, onScissorSnap, onSnapHover,
   fencePins, allPins, fenceFirstPoint,
 }: {
@@ -460,6 +461,10 @@ function MapClickCapture({
   onPlotPoint: (lat: number, lng: number) => void
   onPlotClose: () => void
   plotFirstPoint: { lat: number; lng: number } | null
+  holeActive: boolean
+  onHolePoint: (lat: number, lng: number) => void
+  onHoleClose: () => void
+  holeFirstPoint: { lat: number; lng: number } | null
   onPin: (lat: number, lng: number) => void
   onFencePoint: (lat: number, lng: number) => void
   onFenceClose: () => void
@@ -522,6 +527,20 @@ function MapClickCapture({
           }
         }
         onPlotPoint(e.latlng.lat, e.latlng.lng)
+        return
+      }
+      // ── Mode "+ Zone vide intérieure" (hole d'un land_plot) ──
+      if (holeActive) {
+        if (holeFirstPoint) {
+          const clickPx = map.latLngToContainerPoint(e.latlng)
+          const firstPx = map.latLngToContainerPoint(L.latLng(holeFirstPoint.lat, holeFirstPoint.lng))
+          const d = Math.hypot(clickPx.x - firstPx.x, clickPx.y - firstPx.y)
+          if (d < SNAP_RADIUS_PX) {
+            onHoleClose()
+            return
+          }
+        }
+        onHolePoint(e.latlng.lat, e.latlng.lng)
         return
       }
       // ── Mode ciseau : snap sur le fil le plus proche ──
@@ -787,6 +806,13 @@ export default function MapPage() {
   const [plotPoints,         setPlotPoints]         = useState<{ lat: number; lng: number }[]>([])
   const [plotFormVisible,    setPlotFormVisible]    = useState(false)
   const [plotFormName,       setPlotFormName]       = useState('')
+  // ── Mode "+ Zone vide intérieure" (S4.6) ── demande Eugénie tip n°2 21/05/2026
+  // Trace un trou (hole) dans un land_plot existant : bout de terrain qui ne
+  // nous appartient pas au milieu d'un parc. Le polygon résultant est poussé
+  // dans landplot.holes[].
+  const [holeMode,           setHoleMode]           = useState(false)
+  const [holePlotId,         setHolePlotId]         = useState<string | null>(null)
+  const [holePoints,         setHolePoints]         = useState<{ lat: number; lng: number }[]>([])
   const [streamFormMonths,   setStreamFormMonths]   = useState<number[]>([])
 
   // Atténuation par segment (Phase 2 cours d'eau, Eugénie) : l'état du
@@ -2122,7 +2148,7 @@ export default function MapPage() {
     && p.type !== 'land_plot'  // les land_plots ne sont jamais des Markers
     || (p.type === 'fence' && (p.points?.length ?? 0) < 2)
   )
-  const anyModeActive = addMode || fenceMode || scissorMode || pointerMode || streamMode || plotMode
+  const anyModeActive = addMode || fenceMode || scissorMode || pointerMode || streamMode || plotMode || holeMode
 
   function toggleMonth(m: number) {
     setForm(f => ({
@@ -2237,6 +2263,32 @@ export default function MapPage() {
             }
           }}
           plotFirstPoint={plotMode && !plotFormVisible && plotPoints.length >= 3 ? plotPoints[0] : null}
+          holeActive={holeMode}
+          onHolePoint={(lat, lng) => setHolePoints(prev => [...prev, { lat, lng }])}
+          onHoleClose={async () => {
+            // Sauvegarde directe : push le nouveau hole dans landplot.holes[]
+            if (holePoints.length < 3 || !holePlotId || !user) return
+            const plot = pins.find(p => p.id === holePlotId)
+            if (!plot) return
+            const nextHoles = [...(plot.holes ?? []), holePoints]
+            try {
+              await updateDoc(doc(db, 'map_pins', holePlotId), {
+                holes:     nextHoles,
+                updatedAt: Date.now(),
+                updatedBy: user.uid,
+              })
+              if (selected?.id === holePlotId) {
+                setSelected({ ...plot, holes: nextHoles })
+              }
+            } catch (err) {
+              console.error('[holeClose] save failed', err)
+              alert("Erreur lors de l'enregistrement de la zone vide. Réessaye.")
+            }
+            setHoleMode(false)
+            setHolePoints([])
+            setHolePlotId(null)
+          }}
+          holeFirstPoint={holeMode && holePoints.length >= 3 ? holePoints[0] : null}
           onPin={handleMapClick}
           onFencePoint={handleFencePoint}
           onFenceClose={handleFenceClose}
@@ -2258,13 +2310,21 @@ export default function MapPage() {
 
         {/* ── Espaces définis (land_plot) — autonomes uniquement ── */}
         {/* Les land_plots avec un fence jumeau (migration S3) ne sont pas rendus
-            ici : leur fence jumeau couvre déjà le visuel. */}
+            ici : leur fence jumeau couvre déjà le visuel.
+            Les holes (zones vides intérieures) sont rendus comme polygons imbriqués —
+            Leaflet supporte le format [outer, ...holes] pour découper le fill. */}
         {landPlotPins.map(pin => {
           const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
+          const outer = pin.points!.map(p => [p.lat, p.lng] as [number, number])
+          const holesPos = (pin.holes ?? [])
+            .filter(h => h.length >= 3)
+            .map(h => h.map(p => [p.lat, p.lng] as [number, number]))
+          // Leaflet : positions[0] = outer, positions[1..n] = holes
+          const positions = holesPos.length > 0 ? [outer, ...holesPos] : outer
           return (
             <Polygon
               key={pin.id + '-plot'}
-              positions={pin.points!.map(p => [p.lat, p.lng] as [number, number])}
+              positions={positions}
               pathOptions={{
                 color:       '#52B788',
                 weight:      enc.length > 0 ? 3 : 2,
@@ -2444,6 +2504,25 @@ export default function MapPage() {
                 key={`plot-draw-${i}`}
                 position={[p.lat, p.lng]}
                 icon={i === 0 && plotPoints.length >= 3 ? FENCE_FIRST_DOT_ICON : FENCE_DOT_ICON}
+                interactive={false}
+              />
+            ))}
+          </>
+        )}
+
+        {/* Zone vide en cours de dessin (mode hole) — orange pour distinguer */}
+        {holeMode && holePoints.length > 0 && (
+          <>
+            <Polyline
+              positions={holePoints.map(p => [p.lat, p.lng] as [number, number])}
+              pathOptions={{ color: '#EA580C', weight: 3, dashArray: '6 4', opacity: 0.85 }}
+              interactive={false}
+            />
+            {holePoints.map((p, i) => (
+              <Marker
+                key={`hole-draw-${i}`}
+                position={[p.lat, p.lng]}
+                icon={i === 0 && holePoints.length >= 3 ? FENCE_FIRST_DOT_ICON : FENCE_DOT_ICON}
                 interactive={false}
               />
             ))}
@@ -3285,6 +3364,47 @@ export default function MapPage() {
               <Check size={18} />
               <span className="text-sm font-bold">Valider l'espace</span>
             </button>
+          </div>
+        </>
+      )}
+
+      {/* ── Barre d'outils : mode "+ Zone vide intérieure" (S4.6) ── */}
+      {holeMode && (
+        <>
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] w-[92vw] max-w-md
+                          text-white rounded-2xl shadow-xl px-4 py-3 space-y-2"
+               style={{ backgroundColor: '#EA580C' }}>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-bold leading-tight">
+                ⛶ Zone vide intérieure
+                <span className="ml-1 text-xs font-semibold opacity-90">
+                  · {holePoints.length} point{holePoints.length > 1 ? 's' : ''}
+                </span>
+              </p>
+              <button
+                onClick={() => { setHoleMode(false); setHolePoints([]); setHolePlotId(null) }}
+                className="p-1.5 rounded-lg bg-white/20 active:bg-white/40"
+                aria-label="Annuler"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <p className="text-[11px] opacity-90 leading-snug">
+              Trace le contour du bout de terrain qui ne vous appartient PAS
+              à l'intérieur de l'espace. Touche le 1<sup>er</sup> point pour fermer.
+            </p>
+          </div>
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[1001] flex gap-2">
+            {holePoints.length > 0 && (
+              <button
+                onClick={() => setHolePoints(prev => prev.slice(0, -1))}
+                className="bg-card text-charcoal rounded-2xl px-4 py-3 shadow-lg
+                           active:scale-95 transition-all flex items-center gap-2 border border-border"
+              >
+                <Undo2 size={16} />
+                <span className="text-sm font-semibold">Retirer le dernier</span>
+              </button>
+            )}
           </div>
         </>
       )}
@@ -4394,6 +4514,27 @@ export default function MapPage() {
                       ...pin,
                       rotationDueAt: days === null ? undefined : Date.now() + days * 86_400_000,
                     })
+                  } finally { setActionBusy(false) }
+                }}
+                onStartAddHole={(plot) => {
+                  // Active holeMode et mémorise le plot cible.
+                  setHolePlotId(plot.id)
+                  setHolePoints([])
+                  setHoleMode(true)
+                  // Ferme le panel pour libérer la vue carte pendant le tracé.
+                  setSelected(null)
+                }}
+                onDeleteHole={async (plot, holeIndex) => {
+                  if (!user) return
+                  const nextHoles = (plot.holes ?? []).filter((_, i) => i !== holeIndex)
+                  setActionBusy(true)
+                  try {
+                    await updateDoc(doc(db, 'map_pins', plot.id), {
+                      holes:     nextHoles.length > 0 ? nextHoles : deleteField(),
+                      updatedAt: Date.now(),
+                      updatedBy: user.uid,
+                    })
+                    setSelected({ ...plot, holes: nextHoles.length > 0 ? nextHoles : undefined })
                   } finally { setActionBusy(false) }
                 }}
               />

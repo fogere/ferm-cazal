@@ -44,6 +44,10 @@ interface Props {
   onMarkAllHealthy:       (list: Animal[]) => void | Promise<void>
   onSaveEnclosureAnimals: (plotId: string) => void | Promise<void>
   onSetRotation:          (pin: MapPin, days: number | null) => void | Promise<void>
+  /** Active le mode "+ Zone vide intérieure" pour ce land_plot (S4.6). */
+  onStartAddHole?:        (plot: MapPin) => void
+  /** Supprime un hole par son index (0-based). */
+  onDeleteHole?:          (plot: MapPin, holeIndex: number) => void | Promise<void>
 }
 
 export function LandPlotPanel(props: Props) {
@@ -75,17 +79,43 @@ export function LandPlotPanel(props: Props) {
         isEnclosed={isEnclosed}
       />
 
-      {/* Zones vides intérieures — UI dédiée à venir en S4.5.
-          Pour l'instant on indique juste si l'espace en a, sans permettre l'édition. */}
-      {props.isTemp ? null : (
-        <div className="rounded-xl p-3 bg-cream border border-border/40">
-          <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-1.5">
-            Zones vides intérieures
+      {/* Zones vides intérieures (S4.6) — bouts de terrain qui ne nous
+          appartiennent pas au milieu de l'espace. Bug Eugénie 21/05 tip n°2. */}
+      {!props.isTemp && (
+        <div className="rounded-xl p-3 bg-cream border border-border/40 space-y-2">
+          <p className="text-xs font-semibold text-muted uppercase tracking-wider">
+            Zones vides intérieures ({holes.length})
           </p>
-          <p className="text-[11px] text-muted leading-snug">
-            {holes.length === 0
-              ? "Aucune zone vide. L'outil pour en ajouter (bouts de terrain qui ne vous appartiennent pas au milieu d'un espace) arrivera dans une prochaine mise à jour."
-              : `Cet espace contient ${holes.length} zone${holes.length > 1 ? 's' : ''} vide${holes.length > 1 ? 's' : ''}. L'outil d'édition arrivera dans une prochaine mise à jour.`}
+          {holes.length > 0 && props.onDeleteHole && (
+            <ul className="space-y-1">
+              {holes.map((h, i) => (
+                <li key={i} className="flex items-center justify-between text-xs bg-white border border-border/40 rounded-lg px-2 py-1.5">
+                  <span className="text-charcoal">
+                    Zone {i + 1} · {h.length} points
+                  </span>
+                  <button
+                    onClick={() => props.onDeleteHole?.(pin, i)}
+                    disabled={props.actionBusy}
+                    className="text-[10px] font-semibold text-danger bg-danger/5 border border-danger/30 px-2 py-0.5 rounded active:bg-danger/10 disabled:opacity-40"
+                  >
+                    Supprimer
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {props.onStartAddHole && isEnclosed && (
+            <button
+              onClick={() => props.onStartAddHole?.(pin)}
+              disabled={props.actionBusy}
+              className="w-full py-2 rounded-lg border-2 border-dashed border-orange-500/40 text-orange-700 text-xs font-bold active:bg-orange-500/10 disabled:opacity-40"
+            >
+              + Ajouter une zone vide
+            </button>
+          )}
+          <p className="text-[10px] text-muted/80 leading-tight">
+            Une zone vide retire ce bout de terrain de la surface de l'espace
+            et empêche le geofence d'y déclencher.
           </p>
         </div>
       )}

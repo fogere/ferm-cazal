@@ -1,0 +1,179 @@
+// Algorithme de scindage : découpe un polygon par une polyline qui le traverse.
+// Sert au scindage automatique d'un land_plot par une clôture (S7 refonte
+// clôtures/espaces, demande Eugénie 21/05/2026).
+//
+// Pur — pas de DOM, pas d'I/O. Testable unitairement.
+//
+// Cas géré (cas favorable) :
+//   - exactement 2 intersections entre la polyline et le contour du polygon
+//   - chaque intersection sur un EDGE DIFFÉRENT du polygon
+//
+// Cas non gérés (retour null avec une raison) :
+//   - 0/1 intersection : la clôture ne traverse pas vraiment
+//   - ≥3 intersections : clôture en zigzag ou multi-traversées
+//   - 2 intersections sur le MÊME edge : cas dégénéré
+//   - aire d'un enfant trop faible : refus pour éviter polygons cassés
+
+import type { LatLng } from './geometry'
+import { polygonAreaSquareMeters } from './polygon'
+
+export interface SplitResult {
+  /** Premier sous-polygon (contour). */
+  p1:   LatLng[]
+  /** Deuxième sous-polygon (contour). */
+  p2:   LatLng[]
+  /** Les 2 points d'intersection clôture↔bord, dans l'ordre du tracé clôture. */
+  cut:  [LatLng, LatLng]
+}
+
+export interface SplitError {
+  /** Code identifiant la raison du refus, pour message UX. */
+  code:
+    | 'no-intersection'           // la clôture ne touche jamais le contour
+    | 'single-intersection'       // un seul point de contact (touche sans traverser)
+    | 'too-many-intersections'    // ≥3 — clôture trop complexe
+    | 'same-edge'                 // les 2 intersections tombent sur le même edge
+    | 'degenerate'                // un des polygons résultants a une aire ≈ 0
+  message: string
+}
+
+const EPSILON = 1e-9
+
+/**
+ * Intersection de 2 segments [a, b] et [c, d] en coordonnées 2D (lat/lng).
+ * Renvoie le point d'intersection STRICTEMENT à l'intérieur des deux segments
+ * (0 < t < 1, 0 < u < 1), ou null sinon. Les contacts aux extrémités sont
+ * volontairement exclus pour éviter les ambiguïtés au scindage.
+ */
+function segmentIntersection(a: LatLng, b: LatLng, c: LatLng, d: LatLng): LatLng | null {
+  const x1 = a.lng, y1 = a.lat
+  const x2 = b.lng, y2 = b.lat
+  const x3 = c.lng, y3 = c.lat
+  const x4 = d.lng, y4 = d.lat
+
+  const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+  if (Math.abs(denom) < EPSILON) return null // parallèles
+
+  const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+  const u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / denom
+
+  // Exclusion stricte des extrémités (≤ epsilon ou ≥ 1-epsilon)
+  if (t <= EPSILON || t >= 1 - EPSILON) return null
+  if (u <= EPSILON || u >= 1 - EPSILON) return null
+
+  return {
+    lng: x1 + t * (x2 - x1),
+    lat: y1 + t * (y2 - y1),
+  }
+}
+
+/**
+ * Découpe un polygon (fermé, points sans doublon final) par une polyline.
+ *
+ * @param polygon contour du polygon, ordre quelconque (CW ou CCW)
+ * @param polyline tracé de la clôture, ouverte
+ * @returns SplitResult si scindage possible, sinon SplitError
+ */
+export function splitPolygonByPolyline(
+  polygon: LatLng[],
+  polyline: LatLng[],
+): SplitResult | SplitError {
+  if (polygon.length < 3 || polyline.length < 2) {
+    return { code: 'no-intersection', message: 'Tracé insuffisant.' }
+  }
+
+  // 1. Trouver toutes les intersections polyline ↔ contour polygon.
+  //    Pour chaque intersection on retient : point + edge polygon (index) +
+  //    edge polyline (index) + position le long de la polyline (j + u).
+  type Hit = {
+    point:    LatLng
+    polyEdge: number   // index i tel que segment = polygon[i]→polygon[(i+1)%N]
+    lineEdge: number   // index j tel que segment = polyline[j]→polyline[j+1]
+    lineT:    number   // position absolue sur la polyline : lineEdge + u
+  }
+  const hits: Hit[] = []
+
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i]
+    const b = polygon[(i + 1) % polygon.length]
+    for (let j = 0; j < polyline.length - 1; j++) {
+      const c = polyline[j]
+      const d = polyline[j + 1]
+      const p = segmentIntersection(a, b, c, d)
+      if (p) {
+        // recalculer u pour le t le long de la polyline (juste pour ordering)
+        // u peut être recalculé à partir du point trouvé
+        const dx = d.lng - c.lng
+        const dy = d.lat - c.lat
+        const len = Math.hypot(dx, dy)
+        const u = len < EPSILON ? 0 : Math.hypot(p.lng - c.lng, p.lat - c.lat) / len
+        hits.push({ point: p, polyEdge: i, lineEdge: j, lineT: j + u })
+      }
+    }
+  }
+
+  // 2. Filtrer le nombre d'intersections
+  if (hits.length === 0) {
+    return { code: 'no-intersection', message: "La clôture ne traverse pas l'espace." }
+  }
+  if (hits.length === 1) {
+    return { code: 'single-intersection', message: "La clôture touche l'espace mais ne le traverse pas." }
+  }
+  if (hits.length > 2) {
+    return { code: 'too-many-intersections', message: `La clôture traverse l'espace ${hits.length} fois — trop complexe pour scinder automatiquement.` }
+  }
+
+  // 3. Trier les 2 intersections selon leur position sur la polyline (ordre du tracé)
+  hits.sort((a, b) => a.lineT - b.lineT)
+  const [h1, h2] = hits
+
+  // 4. Refus si les 2 hits tombent sur le MÊME edge du polygon
+  if (h1.polyEdge === h2.polyEdge) {
+    return { code: 'same-edge', message: 'Les 2 points de contact sont sur le même bord — la clôture fait une boucle au bord et ne scinde pas vraiment.' }
+  }
+
+  // 5. Extraire le segment de polyline entre h1 et h2 (en ordre du tracé)
+  //    pathBetween = [h1.point, polyline[h1.lineEdge+1..h2.lineEdge], h2.point]
+  const pathBetween: LatLng[] = [h1.point]
+  for (let j = h1.lineEdge + 1; j <= h2.lineEdge; j++) {
+    pathBetween.push(polyline[j])
+  }
+  pathBetween.push(h2.point)
+
+  // 6. Construire les 2 sous-polygons
+  //    P1 = h1 → polygon[h1.polyEdge+1 .. h2.polyEdge] → h2 → reverse(pathBetween) sans extrémités
+  //    P2 = h2 → polygon[h2.polyEdge+1 .. wrap .. h1.polyEdge] → h1 → pathBetween sans extrémités
+  const N = polygon.length
+  const arcForward: LatLng[] = []
+  for (let k = h1.polyEdge + 1; ; k = (k + 1) % N) {
+    arcForward.push(polygon[k % N])
+    if (k % N === h2.polyEdge) break
+  }
+  const arcBackward: LatLng[] = []
+  for (let k = h2.polyEdge + 1; ; k = (k + 1) % N) {
+    arcBackward.push(polygon[k % N])
+    if (k % N === h1.polyEdge) break
+  }
+
+  // Le chemin entre h1 et h2 le long de la clôture (points intermédiaires uniquement)
+  const innerCut = pathBetween.slice(1, -1)
+
+  // P1 : h1 → arcForward (de h1.polyEdge+1 à h2.polyEdge) → h2 → innerCut reverse → retour h1 (implicite)
+  const p1: LatLng[] = [h1.point, ...arcForward, h2.point, ...innerCut.slice().reverse()]
+  // P2 : h2 → arcBackward (de h2.polyEdge+1 à h1.polyEdge wrap) → h1 → innerCut
+  const p2: LatLng[] = [h2.point, ...arcBackward, h1.point, ...innerCut]
+
+  // 7. Garde-fous : aire minimale 1 m² pour éviter des polygons dégénérés
+  const a1 = polygonAreaSquareMeters({ outer: p1, holes: [] })
+  const a2 = polygonAreaSquareMeters({ outer: p2, holes: [] })
+  if (a1 < 1 || a2 < 1) {
+    return { code: 'degenerate', message: 'Un des deux espaces résultants serait trop petit. Vérifie le tracé.' }
+  }
+
+  return { p1, p2, cut: [h1.point, h2.point] }
+}
+
+/** Type guard pratique pour discriminer SplitResult vs SplitError. */
+export function isSplitSuccess(r: SplitResult | SplitError): r is SplitResult {
+  return 'p1' in r
+}

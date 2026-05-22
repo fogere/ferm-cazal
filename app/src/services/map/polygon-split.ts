@@ -225,6 +225,53 @@ export function detectPlotSplit<T extends { points?: LatLng[] }>(
   return null
 }
 
+/**
+ * Diagnostic : si aucun candidat n'est scindable, renvoie le plot dont la
+ * clôture s'est le plus rapprochée d'un scindage réussi, avec l'erreur
+ * correspondante. Sert au feedback utilisateur (bug Nils 22/05/2026,
+ * problème 4 : "j'ai tout essayé pour couper en 2, ça veut pas, je sais pas
+ * pourquoi"). Avant : `null` silencieux et la clôture se créait par-dessus.
+ *
+ * Priorité (du plus informatif au moins) :
+ *   1. degenerate            (le tracé est presque bon, juste trop fin)
+ *   2. same-edge             (les 2 points touchent le même bord)
+ *   3. too-many-intersections (zigzag)
+ *   4. single-intersection   (touche mais ne traverse pas)
+ *   5. no-intersection       → ignoré : la clôture ne touche aucun plot, pas
+ *                              de feedback à donner.
+ *
+ * @returns le plot + erreur du meilleur "near-miss", ou null si vraiment
+ *          aucun plot n'a été touché.
+ */
+export function diagnoseSplitFailure<T extends { points?: LatLng[]; name?: string }>(
+  polyline:   LatLng[],
+  candidates: T[],
+): { plot: T; error: SplitError } | null {
+  if (polyline.length < 2) return null
+
+  const priority: Record<SplitError['code'], number> = {
+    'degenerate':              1,
+    'same-edge':               2,
+    'too-many-intersections':  3,
+    'single-intersection':     4,
+    'no-intersection':         5,
+  }
+
+  let best: { plot: T; error: SplitError } | null = null
+
+  for (const plot of candidates) {
+    if (!plot.points || plot.points.length < 3) continue
+    const r = splitPolygonByPolyline(plot.points, polyline)
+    if (isSplitSuccess(r)) continue  // déjà géré par detectPlotSplit
+    if (r.code === 'no-intersection') continue
+    if (!best || priority[r.code] < priority[best.error.code]) {
+      best = { plot, error: r }
+    }
+  }
+
+  return best
+}
+
 function bboxArea(points: LatLng[]): number {
   let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity
   for (const p of points) {

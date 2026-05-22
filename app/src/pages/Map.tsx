@@ -27,7 +27,7 @@ import { getStreamSegments } from '../services/map/stream-visual'
 import { isWaterOverdue } from '../services/map/water'
 import { isBatteryDue } from '../services/map/battery'
 import { enclosureQueryIds, effectiveEnclosureId } from '../services/map/enclosure'
-import { detectPlotSplit, type SplitResult } from '../services/map/polygon-split'
+import { detectPlotSplit, diagnoseSplitFailure, type SplitResult } from '../services/map/polygon-split'
 import { WaterManualPanel } from './map/panels/WaterManualPanel'
 import { WaterStreamPanel } from './map/panels/WaterStreamPanel'
 import { BatteryPanel } from './map/panels/BatteryPanel'
@@ -255,10 +255,12 @@ function makePointerIcon(color: string, name: string): L.DivIcon {
   })
 }
 
-// P1/P2 (22/05/2026) : taille de hitbox tactile.
-// Visuel inchangé (point 10/14 px) ; hitbox 44×44 invisible autour = cible
-// doigt confortable sans encombrer la carte visuellement.
-const EDIT_HITBOX_PX = 44
+// P1/P2 (22/05/2026, bugs Nils) : taille de hitbox tactile.
+// Visuel inchangé (point 10/14 px) ; hitbox invisible autour = cible
+// doigt confortable. La priorité de clic entre "+" ghost et poteau réel est
+// résolue côté map par FenceEditHitDetector (le plus proche gagne, style
+// Blender) — donc on peut se permettre des hitbox larges sans conflit.
+const EDIT_HITBOX_PX = 60
 const HITBOX_WRAP_STYLE = `width:${EDIT_HITBOX_PX}px;height:${EDIT_HITBOX_PX}px;display:flex;align-items:center;justify-content:center;`
 
 // Petits points sur la clôture en cours de dessin
@@ -277,6 +279,19 @@ const FENCE_FIRST_DOT_ICON = L.divIcon({
   className: '',
   iconSize:   [EDIT_HITBOX_PX, EDIT_HITBOX_PX],
   iconAnchor: [EDIT_HITBOX_PX / 2, EDIT_HITBOX_PX / 2],
+})
+
+// P7 (Nils 22/05/2026) : anneau de sélection autour d'un poteau pour la
+// fonction "Changer le fil sur cette portion". Rendu PAR-DESSUS le poteau
+// normal (zIndexOffset léger), non-interactif (les clics passent au poteau
+// sous-jacent puis au FenceEditHitDetector).
+const SELECTED_POST_RING_ICON = L.divIcon({
+  html: `<div style="width:32px;height:32px;border-radius:50%;
+    border:3px solid #A855F7;background:rgba(168,85,247,0.18);
+    box-shadow:0 0 0 2px white, 0 1px 4px rgba(0,0,0,0.3);"></div>`,
+  className: '',
+  iconSize:   [32, 32],
+  iconAnchor: [16, 16],
 })
 
 // Point intermédiaire ghost (au milieu d'un segment, en mode édition).
@@ -446,6 +461,17 @@ const GRAZING_FILL: Record<GrazingStatus, { color: string; opacity: number }> = 
 
 // Rayon de tolérance en pixels — adapté doigt sur mobile
 const SNAP_RADIUS_PX = 44
+// P6 (Nils 22/05/2026) : rayon dédié à la sélection d'un FIL de clôture par
+// clic. Plus serré que SNAP_RADIUS_PX parce que le fil ne fait que 3-8 px de
+// large visuellement — un rayon de 44 attrapait tout clic en plein milieu
+// d'un enclos fermé. 22 px = largeur visible + ~18 px de marge "Blender".
+const FENCE_SELECT_RADIUS_PX = 22
+// P5 (Nils 22/05/2026) : rayon spécifique pour la FERMETURE AUTOMATIQUE d'un
+// parc en cours de dessin (retour au 1er poteau). Plus serré que
+// SNAP_RADIUS_PX (44) pour ne plus fermer accidentellement les petits parcs.
+// L'utilisatrice qui veut vraiment fermer tape sur le 1er poteau (cible
+// verte = isClose visible) OU utilise le bouton "Fermer le parc".
+const FENCE_CLOSE_RADIUS_PX = 24
 
 function MapClickCapture({
   addActive, fenceActive, scissorActive, scissorFenceId, scissorOverridePoints,
@@ -492,11 +518,13 @@ function MapClickCapture({
       let best: { lat: number; lng: number; isClose: boolean } | null = null
       let bestDist = SNAP_RADIUS_PX
 
-      // Premier point de la clôture courante (fermeture)
+      // Premier point de la clôture courante (fermeture) — rayon serré
+      // (FENCE_CLOSE_RADIUS_PX) pour ne plus fermer accidentellement les
+      // petits parcs (P5, Nils 22/05/2026).
       if (fenceFirstPoint) {
         const fp = map.latLngToContainerPoint(L.latLng(fenceFirstPoint.lat, fenceFirstPoint.lng))
         const d  = Math.hypot(movePx.x - fp.x, movePx.y - fp.y)
-        if (d < bestDist) { bestDist = d; best = { ...fenceFirstPoint, isClose: true } }
+        if (d < FENCE_CLOSE_RADIUS_PX) { bestDist = d; best = { ...fenceFirstPoint, isClose: true } }
       }
       // Points existants des clôtures sauvegardées
       for (const pin of fencePins) {
@@ -624,10 +652,13 @@ function MapClickCapture({
         const clickPx = map.latLngToContainerPoint(e.latlng)
         let best: { lat: number; lng: number; isClose: boolean } | null = null
         let bestDist = SNAP_RADIUS_PX
+        // P5 (Nils 22/05/2026) : rayon de fermeture serré
+        // (FENCE_CLOSE_RADIUS_PX) — le tap doit être franchement sur le 1ᵉʳ
+        // poteau pour fermer. Aligné avec le mousemove ci-dessus.
         if (fenceFirstPoint) {
           const fp = map.latLngToContainerPoint(L.latLng(fenceFirstPoint.lat, fenceFirstPoint.lng))
           const d  = Math.hypot(clickPx.x - fp.x, clickPx.y - fp.y)
-          if (d < bestDist) { bestDist = d; best = { ...fenceFirstPoint, isClose: true } }
+          if (d < FENCE_CLOSE_RADIUS_PX) { bestDist = d; best = { ...fenceFirstPoint, isClose: true } }
         }
         for (const pin of fencePins) {
           for (const v of pin.points ?? []) {
@@ -678,15 +709,20 @@ function MapClickCapture({
         if (d < bestDist) { bestDist = d; bestPin = pin }
       }
 
-      // 2. Fil de clôture (proximité segment) — si aucun pin dans le rayon
+      // 2. Fil de clôture (proximité segment) — si aucun pin dans le rayon.
+      //    P6 (Nils 22/05/2026) : rayon dédié plus serré que SNAP_RADIUS_PX,
+      //    pour ne plus "tomber sur le fil" en cliquant en plein milieu d'un
+      //    enclos fermé (le fil mesure 3-8 px de large visuellement, donc
+      //    largeur réelle + ~18 px de marge Blender = 22 px suffit).
       if (!bestPin) {
+        let bestFenceDist = FENCE_SELECT_RADIUS_PX
         for (const pin of fencePins) {
           if (!pin.points || pin.points.length < 2) continue
           for (let i = 0; i < pin.points.length - 1; i++) {
             const a = map.latLngToContainerPoint(L.latLng(pin.points[i].lat,   pin.points[i].lng))
             const b = map.latLngToContainerPoint(L.latLng(pin.points[i+1].lat, pin.points[i+1].lng))
             const d = distToSegmentPx(clickPx.x, clickPx.y, a.x, a.y, b.x, b.y)
-            if (d < bestDist) { bestDist = d; bestPin = pin }
+            if (d < bestFenceDist) { bestFenceDist = d; bestPin = pin }
           }
         }
       }
@@ -698,6 +734,72 @@ function MapClickCapture({
       // land_plot (Polygon onClick direct), soit sur rien.
 
       if (bestPin) onSelect(bestPin)
+    },
+  })
+  return null
+}
+
+/**
+ * Hit-detection style Blender pour le mode édition d'un tracé : à chaque clic,
+ * on calcule la distance pixel du clic à TOUTES les cibles (poteaux réels + "+"
+ * ghosts) et la plus proche gagne. Évite que la hitbox d'un poteau réel masque
+ * un "+" plus proche du doigt (bug Nils 22/05/2026, problèmes 1+2).
+ *
+ * Les ghosts "+" passent en `interactive={false}` côté Marker → leurs clics
+ * traversent jusqu'à la map, ce composant intercepte et arbitre. Les poteaux
+ * réels restent interactifs pour conserver drag + dblclick natifs ; quand le
+ * clic atterrit sur eux et qu'aucun "+" n'est plus proche, ce détecteur ne
+ * fait rien (le Marker gère).
+ */
+function FenceEditHitDetector({
+  editPin, points, isClosed, hasDup, onInsert, onRealClick,
+}: {
+  editPin: MapPin | null
+  points: { lat: number; lng: number }[]
+  isClosed: boolean
+  hasDup: boolean
+  onInsert: (afterIdx: number) => void
+  onRealClick: (idx: number) => void
+}) {
+  const map = useMap()
+  useMapEvents({
+    click(e) {
+      if (!editPin || points.length < 2) return
+      const clickPx = map.latLngToContainerPoint(e.latlng)
+      let bestDist  = EDIT_HITBOX_PX
+      let bestKind: 'real' | 'mid' | null = null
+      let bestMidIdx  = -1
+      let bestRealIdx = -1
+
+      // 1. Poteaux réels (skip doublon final pour les fences fermés)
+      for (let i = 0; i < points.length; i++) {
+        if (hasDup && i === points.length - 1) continue
+        const px = map.latLngToContainerPoint(L.latLng(points[i].lat, points[i].lng))
+        const d  = Math.hypot(clickPx.x - px.x, clickPx.y - px.y)
+        if (d < bestDist) { bestDist = d; bestKind = 'real'; bestRealIdx = i }
+      }
+
+      // 2. "+" intermédiaires entre points[i] et points[i+1]
+      for (let i = 0; i < points.length - 1; i++) {
+        if (hasDup && i === points.length - 2) continue
+        const a = points[i], b = points[i + 1]
+        const px = map.latLngToContainerPoint(L.latLng((a.lat + b.lat) / 2, (a.lng + b.lng) / 2))
+        const d  = Math.hypot(clickPx.x - px.x, clickPx.y - px.y)
+        if (d < bestDist) { bestDist = d; bestKind = 'mid'; bestMidIdx = i }
+      }
+
+      // 3. "+" de fermeture (land_plot fermé sans doublon : segment dernier → premier)
+      if (isClosed && !hasDup && points.length >= 2) {
+        const last  = points[points.length - 1]
+        const first = points[0]
+        const px = map.latLngToContainerPoint(L.latLng((last.lat + first.lat) / 2, (last.lng + first.lng) / 2))
+        const d  = Math.hypot(clickPx.x - px.x, clickPx.y - px.y)
+        if (d < bestDist) { bestDist = d; bestKind = 'mid'; bestMidIdx = points.length - 1 }
+      }
+
+      if (bestKind === 'mid' && bestMidIdx >= 0) onInsert(bestMidIdx)
+      else if (bestKind === 'real' && bestRealIdx >= 0) onRealClick(bestRealIdx)
+      // aucun → no-op
     },
   })
   return null
@@ -868,6 +970,16 @@ export default function MapPage() {
   const [fenceEditPin,    setFenceEditPin]    = useState<MapPin | null>(null)
   const [fenceEditPoints, setFenceEditPoints] = useState<{ lat: number; lng: number }[]>([])
   const [fenceEditSaving, setFenceEditSaving] = useState(false)
+
+  // P7 (Nils 22/05/2026) : sélection d'une portion entre 2 poteaux dans le
+  // mode édition. Permet de changer le fil utilisé sur cette portion sans
+  // passer par le mode ciseau séparé. Quand start ET end sont définis, le
+  // bouton "Changer le fil" apparaît dans le toolbar d'édition.
+  const [editRangeStart, setEditRangeStart] = useState<number | null>(null)
+  const [editRangeEnd,   setEditRangeEnd]   = useState<number | null>(null)
+  // Modal de choix du preset pour la portion sélectionnée.
+  const [editRangePresetVisible, setEditRangePresetVisible] = useState(false)
+  const [editRangeApplying,      setEditRangeApplying]      = useState(false)
 
   // S7 — scindage automatique d'un land_plot par une clôture.
   // Quand `saveFence()` détecte que le tracé traverse un espace existant, on
@@ -1278,6 +1390,8 @@ export default function MapPage() {
   function cancelEditFence() {
     setFenceEditPin(null)
     setFenceEditPoints([])
+    setEditRangeStart(null)
+    setEditRangeEnd(null)
   }
 
   // Déplace le point #idx vers (lat, lng). Si le polygone est fermé
@@ -1299,6 +1413,10 @@ export default function MapPage() {
   // Demande Eugénie 21/05/2026 : "ajouter un poteau entre 2 poteaux existants pour être plus précis".
   function insertEditPoint(afterIdx: number) {
     if (!fenceEditPin) return
+    // P7 : décale les bornes de la sélection portion pour rester cohérent
+    // avec les nouveaux indices.
+    setEditRangeStart(s => (s !== null && s > afterIdx) ? s + 1 : s)
+    setEditRangeEnd  (e => (e !== null && e > afterIdx) ? e + 1 : e)
     setFenceEditPoints(prev => {
       const a = prev[afterIdx]
       const b = prev[afterIdx + 1]
@@ -1314,6 +1432,10 @@ export default function MapPage() {
     if (!fenceEditPin) return
     const polygon = isEditPinClosed(fenceEditPin)
     const hasDup  = hasDuplicateLastPoint(fenceEditPin)
+    // P7 : la suppression d'un poteau décale les indices → invalide la
+    // sélection portion en cours.
+    setEditRangeStart(null)
+    setEditRangeEnd(null)
     setFenceEditPoints(prev => {
       // Polygon : min 3 sommets distincts (+1 doublon final si fence closed)
       // Polyline : min 2 points
@@ -1351,6 +1473,8 @@ export default function MapPage() {
       })
       setFenceEditPin(null)
       setFenceEditPoints([])
+      setEditRangeStart(null)
+      setEditRangeEnd(null)
     } catch (err) {
       console.error('[saveEditFence]', err)
       alert("Échec enregistrement. Réessaye dans un instant.")
@@ -1358,6 +1482,44 @@ export default function MapPage() {
       setFenceEditSaving(false)
     }
   }
+
+  // P7 (Nils 22/05/2026) : sélection d'une portion de poteaux en mode édition.
+  // Clic sur un poteau réel (single-tap) → toggle start/end. Logique séquentielle :
+  //   - aucun start          → start = idx
+  //   - start, pas end       → si re-tap sur start, on annule ; sinon end = idx
+  //   - start && end définis → on repart de zéro : start = idx, end = null
+  function handleEditPostClick(idx: number) {
+    if (!fenceEditPin) return
+    // Ignore le doublon final pour les fences fermés (jamais cliquable visuellement)
+    if (hasDuplicateLastPoint(fenceEditPin) && idx === fenceEditPoints.length - 1) return
+
+    if (editRangeStart === null) {
+      setEditRangeStart(idx)
+      setEditRangeEnd(null)
+      return
+    }
+    if (editRangeEnd === null) {
+      if (idx === editRangeStart) {
+        setEditRangeStart(null)  // annule la sélection
+      } else {
+        setEditRangeEnd(idx)
+      }
+      return
+    }
+    // Range complet → reset et redémarre avec ce clic
+    setEditRangeStart(idx)
+    setEditRangeEnd(null)
+  }
+
+  function clearEditRange() {
+    setEditRangeStart(null)
+    setEditRangeEnd(null)
+  }
+
+  // Indices ordonnés (start ≤ end) — utile pour la visualisation et le split
+  const editRangeOrdered = (editRangeStart !== null && editRangeEnd !== null)
+    ? { iA: Math.min(editRangeStart, editRangeEnd), iB: Math.max(editRangeStart, editRangeEnd) }
+    : null
 
   /* ─── mode auto : capture poteau via GPS haute précision ─── */
 
@@ -1822,6 +1984,96 @@ export default function MapPage() {
     } finally { setSaving(false) }
   }
 
+  // P7 (Nils 22/05/2026) : applique un nouveau preset à une portion [iA..iB]
+  // de la clôture en cours d'édition. Logique identique à `splitFence()`
+  // mais paramétrée (pas de `scissorMode`) et basée sur les points en cours
+  // d'édition (donc inclut les drags/inserts non encore sauvés).
+  //
+  // Effet :
+  //   - Fence ouverte : original supprimé, 2-3 nouveaux segments créés
+  //                     dont le segment central porte le nouveau preset.
+  //   - Fence fermée  : original → fillOnly (gardé comme polygon pour les
+  //                     données dérivées), segments de contour créés et
+  //                     liés via cutFromId.
+  async function applyPresetToRange(
+    fence:     MapPin,
+    points:    { lat: number; lng: number }[],
+    iA:        number,
+    iB:        number,
+    newPreset: FencePreset,
+  ) {
+    if (!user) return
+    if (iA >= iB) return
+    if (iB >= points.length) return
+    setEditRangeApplying(true)
+    try {
+      const now = Date.now()
+      const closed = isFenceClosed(fence)
+      const parentId = fence.id
+
+      type Seg = { points: { lat: number; lng: number }[]; useNewPreset: boolean }
+      const segs: Seg[] = []
+      if (iA > 0)              segs.push({ points: points.slice(0, iA + 1), useNewPreset: false })
+                               segs.push({ points: points.slice(iA, iB + 1), useNewPreset: true  })
+      if (iB < points.length - 1) segs.push({ points: points.slice(iB),     useNewPreset: false })
+
+      if (closed) {
+        // Fence fermée : original conservé en fillOnly. On met à jour ses
+        // points avec la version éditée (consistance des données dérivées).
+        await updateDoc(doc(db, 'map_pins', parentId), {
+          fillOnly:  true,
+          points,
+          updatedAt: now,
+          updatedBy: user.uid,
+        })
+      } else {
+        // Fence ouverte : supprimer l'original avant de créer les segments
+        await deleteDoc(doc(db, 'map_pins', parentId))
+      }
+
+      const inheritedParent = closed ? null : (fence.cutFromId ?? null)
+
+      for (const seg of segs) {
+        if (seg.points.length < 2) continue
+        const cLat = seg.points.reduce((s, p) => s + p.lat, 0) / seg.points.length
+        const cLng = seg.points.reduce((s, p) => s + p.lng, 0) / seg.points.length
+        const docData: Record<string, unknown> = {
+          name:        fence.name,
+          type:        'fence',
+          note:        closed ? '' : (fence.note ?? ''),
+          lat:         cLat,
+          lng:         cLng,
+          points:      seg.points,
+          presetId:    seg.useNewPreset ? newPreset.id    : (fence.presetId    ?? null),
+          presetColor: seg.useNewPreset ? newPreset.color : (fence.presetColor ?? '#EA580C'),
+          wireCount:   fence.wireCount ?? 1,
+          status:      'ok',
+          createdAt:   now,
+          createdBy:   user.uid,
+          updatedAt:   now,
+        }
+        // Pour fence fermée : cutFromId pointe vers le parent (fillOnly) pour
+        // que le groupe de pâturage reste cohérent. Pour fence ouverte :
+        // hérite du cutFromId du parent si présent (segment-enfant d'un enclos).
+        if (closed) docData.cutFromId = parentId
+        else if (inheritedParent) docData.cutFromId = inheritedParent
+        await addDoc(collection(db, 'map_pins'), docData)
+      }
+
+      // Sortie propre du mode édition après application
+      setFenceEditPin(null)
+      setFenceEditPoints([])
+      setEditRangeStart(null)
+      setEditRangeEnd(null)
+      setEditRangePresetVisible(false)
+    } catch (err) {
+      console.error('[applyPresetToRange]', err)
+      alert("Échec du changement de fil. Réessaye dans un instant.")
+    } finally {
+      setEditRangeApplying(false)
+    }
+  }
+
   async function updateFenceVoltage(pin: MapPin, voltage: number | null) {
     if (!user) return
     await updateDoc(doc(db, 'map_pins', pin.id), {
@@ -1864,6 +2116,19 @@ export default function MapPage() {
       cancelFence()
       setPendingSplit({ plot: split.plot, split: split.split, payload })
       return
+    }
+
+    // P4 (Nils 22/05/2026) : si la clôture touche un espace mais ne le scinde
+    // pas (zigzag, même bord, polygone résultant trop petit…), on explique
+    // pourquoi au lieu de créer silencieusement la clôture par-dessus.
+    const nearMiss = diagnoseSplitFailure(fencePoints, splitCandidates)
+    if (nearMiss) {
+      const proceed = confirm(
+        `Impossible de scinder l'espace "${nearMiss.plot.name ?? 'sans nom'}" :\n\n` +
+        nearMiss.error.message + '\n\n' +
+        'Créer quand même la clôture par-dessus l\'espace ?',
+      )
+      if (!proceed) return  // l'utilisatrice peut continuer à dessiner / annuler
     }
 
     cancelFence()  // ferme tout de suite
@@ -2490,6 +2755,14 @@ export default function MapPage() {
           allPins={pins}
           fenceFirstPoint={fenceMode && fenceMethod === 'manual' && fencePoints.length >= 2 ? fencePoints[0] : null}
         />
+        <FenceEditHitDetector
+          editPin={fenceEditPin}
+          points={fenceEditPoints}
+          isClosed={fenceEditPin ? isEditPinClosed(fenceEditPin) : false}
+          hasDup={fenceEditPin ? hasDuplicateLastPoint(fenceEditPin) : false}
+          onInsert={insertEditPoint}
+          onRealClick={handleEditPostClick}
+        />
         <FlyHome trigger={flyTrigger} />
         <FlyToTarget target={flyTarget} />
         <ZoomTracker onZoom={setMapZoom} />
@@ -2716,7 +2989,10 @@ export default function MapPage() {
                 dashArray: seg.dashArray,
               }}
               eventHandlers={{
-                click: () => setSelected(pin),
+                // P3 (Nils 22/05/2026) : aligné sur landPlotPins — pendant un
+                // mode actif (édition d'un tracé, ajout, etc.), pas de
+                // sélection d'autre pin pour ne pas casser la concentration.
+                click: () => { if (!anyModeActive) setSelected(pin) },
               }}
             />
           ))
@@ -2778,9 +3054,37 @@ export default function MapPage() {
                 )
               })}
 
+              {/* P7 : anneaux violets sur les poteaux inclus dans la portion
+                  sélectionnée (start, end, et tous ceux entre les deux pour
+                  une fence ouverte ; pour une fence fermée on prend le chemin
+                  le plus court). Le rendu est passif (interactive=false) :
+                  les clics passent au poteau sous-jacent puis au détecteur. */}
+              {fenceEditPoints.map((p, i) => {
+                if (editHasDup && i === fenceEditPoints.length - 1) return null
+                const inRange = (() => {
+                  if (editRangeStart === null) return false
+                  if (editRangeEnd === null) return i === editRangeStart
+                  const iA = Math.min(editRangeStart, editRangeEnd)
+                  const iB = Math.max(editRangeStart, editRangeEnd)
+                  return i >= iA && i <= iB
+                })()
+                if (!inRange) return null
+                return (
+                  <Marker
+                    key={`edit-sel-${i}`}
+                    position={[p.lat, p.lng]}
+                    icon={SELECTED_POST_RING_ICON}
+                    interactive={false}
+                    zIndexOffset={150}
+                  />
+                )
+              })}
+
               {/* Markers ghost au milieu de chaque segment : tap pour insérer un point.
                   Pour land_plot fermé (sans doublon), on AJOUTE un ghost entre dernier et premier
-                  pour permettre l'insertion sur le segment de fermeture invisible. */}
+                  pour permettre l'insertion sur le segment de fermeture invisible.
+                  P1+P2 (Nils 22/05/2026) : non-interactifs côté Marker — l'insertion est
+                  déclenchée par FenceEditHitDetector (priorité Blender à la proximité). */}
               {fenceEditPoints.map((p, i) => {
                 const next = fenceEditPoints[i + 1]
                 if (!next) return null
@@ -2792,9 +3096,7 @@ export default function MapPage() {
                     key={`edit-mid-${i}`}
                     position={[mid.lat, mid.lng]}
                     icon={FENCE_MID_DOT_ICON}
-                    eventHandlers={{
-                      click: () => insertEditPoint(i),
-                    }}
+                    interactive={false}
                   />
                 )
               })}
@@ -2808,9 +3110,7 @@ export default function MapPage() {
                     key="edit-mid-close"
                     position={[mid.lat, mid.lng]}
                     icon={FENCE_MID_DOT_ICON}
-                    eventHandlers={{
-                      click: () => insertEditPoint(fenceEditPoints.length - 1),
-                    }}
+                    interactive={false}
                   />
                 )
               })()}
@@ -3016,12 +3316,26 @@ export default function MapPage() {
               <Undo2 size={14} />
             </button>
           )}
+          {/* P5 (Nils 22/05/2026) : bouton explicite "Fermer le parc" en
+              manuel — aligné avec le mode auto. Avant, seul l'auto-snap sur
+              le 1er poteau fermait la clôture, ce qui forçait l'utilisatrice
+              à dessiner large sous peine de fermer accidentellement. */}
+          {fencePoints.length >= 3 && (
+            <button
+              onClick={handleFenceClose}
+              className="px-2.5 py-1.5 rounded-lg bg-white/25 text-white text-xs font-bold
+                         active:scale-95 transition-all whitespace-nowrap"
+              title="Boucler la clôture en revenant au 1ᵉʳ poteau (enclos fermé)"
+            >
+              🔒 Fermer
+            </button>
+          )}
           {fencePoints.length >= 2 && (
             <button
               onClick={() => setFenceFormVisible(true)}
               className="px-3 py-1.5 rounded-lg bg-white text-orange-600 text-xs font-bold
                          active:scale-95 transition-all whitespace-nowrap"
-              title="Valider le tracé tel quel (ouvert ou fermé selon les points)"
+              title="Valider le tracé tel quel (clôture ouverte, en ligne)"
             >
               Terminer →
             </button>
@@ -3199,8 +3513,43 @@ export default function MapPage() {
             <strong>Glisse</strong> un poteau pour le repositionner.
             <strong> Touche un + vert</strong> entre 2 poteaux pour en insérer un nouveau.
             <strong> Double-tap</strong> sur un poteau pour le supprimer.
-            Les changements ne sont pris en compte qu'au «&nbsp;Valider&nbsp;».
+            <strong> Tape 2 poteaux</strong> pour sélectionner la portion entre les deux et lui changer le fil.
           </p>
+          {/* P7 (Nils 22/05/2026) : panneau sélection portion + action de
+              changement de fil. Apparaît quand l'utilisatrice a tapé au moins
+              un poteau ; le bouton "Changer le fil" est actif quand les 2
+              bornes sont définies. */}
+          {(editRangeStart !== null) && fenceEditPin?.type === 'fence' && (() => {
+            const completeRange = editRangeOrdered !== null
+            const count = completeRange ? (editRangeOrdered.iB - editRangeOrdered.iA + 1) : 1
+            return (
+              <div className="rounded-xl bg-white/15 p-2.5 space-y-2">
+                <p className="text-[11px] font-semibold leading-tight">
+                  🎯 Sélection :{' '}
+                  {completeRange
+                    ? <>poteaux <strong>{editRangeOrdered.iA + 1}</strong> à <strong>{editRangeOrdered.iB + 1}</strong> ({count} poteaux)</>
+                    : <>poteau <strong>{(editRangeStart ?? 0) + 1}</strong> (tape un 2ᵉ poteau pour finir la portion)</>}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setEditRangePresetVisible(true)}
+                    disabled={!completeRange || editRangeApplying}
+                    className="flex-1 py-2 rounded-lg bg-white text-charcoal text-xs font-bold
+                               active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed
+                               flex items-center justify-center gap-1.5"
+                  >
+                    🎨 Changer le fil
+                  </button>
+                  <button
+                    onClick={clearEditRange}
+                    className="px-2.5 py-2 rounded-lg bg-white/20 text-xs font-semibold active:bg-white/30"
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
           <div className="flex gap-2">
             <button
               onClick={saveEditFence}
@@ -4331,6 +4680,60 @@ export default function MapPage() {
                     {preset.description && <p className="text-xs text-muted truncate">{preset.description}</p>}
                   </div>
                   <span className="text-xs font-semibold text-muted/70">Choisir →</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════
+          P7 (Nils 22/05/2026) : modal choix du fil pour la portion sélectionnée
+          en mode édition. Délibérément simplifiée — pas de "création de
+          nouveau preset", l'utilisatrice y a accès en démarrant un nouveau
+          tracé. Ici on choisit parmi les presets existants.
+      ══════════════════════════════════════════ */}
+      {editRangePresetVisible && fenceEditPin && editRangeOrdered && (
+        <div className="absolute inset-0 z-[2000] flex flex-col justify-end">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+               onClick={() => !editRangeApplying && setEditRangePresetVisible(false)} />
+          <div className="relative bg-card rounded-t-3xl px-5 pt-5 pb-10 shadow-2xl max-h-[75vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-charcoal text-lg font-bold m-0 flex items-center gap-2">
+                🎨 Nouveau fil — poteaux {editRangeOrdered.iA + 1} à {editRangeOrdered.iB + 1}
+              </h2>
+              <button
+                onClick={() => setEditRangePresetVisible(false)}
+                disabled={editRangeApplying}
+                className="p-2 rounded-xl text-muted active:bg-cream disabled:opacity-40"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <p className="text-xs text-muted mb-4 leading-relaxed">
+              Choisis le type de fil à appliquer sur la portion. Les autres
+              portions de la clôture gardent leur fil actuel.
+            </p>
+            <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+              {fencePresets.map(preset => (
+                <button
+                  key={preset.id}
+                  disabled={editRangeApplying}
+                  onClick={() => {
+                    applyPresetToRange(fenceEditPin, fenceEditPoints, editRangeOrdered.iA, editRangeOrdered.iB, preset)
+                  }}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all
+                             active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ borderColor: preset.color + '40', background: preset.color + '10' }}
+                >
+                  <div className="w-6 h-6 rounded-full flex-shrink-0 shadow-md" style={{ background: preset.color }} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-charcoal truncate">{preset.name}</p>
+                    {preset.description && <p className="text-xs text-muted truncate">{preset.description}</p>}
+                  </div>
+                  <span className="text-xs font-semibold text-muted/70">
+                    {editRangeApplying ? '…' : 'Appliquer →'}
+                  </span>
                 </button>
               ))}
             </div>

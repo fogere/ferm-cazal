@@ -28,6 +28,7 @@ import { isWaterOverdue } from '../services/map/water'
 import { isBatteryDue } from '../services/map/battery'
 import { enclosureQueryIds, effectiveEnclosureId } from '../services/map/enclosure'
 import { detectPlotSplit, diagnoseSplitFailure, type SplitResult } from '../services/map/polygon-split'
+import { healthFreshness } from '../services/map/health'
 import { WaterManualPanel } from './map/panels/WaterManualPanel'
 import { WaterStreamPanel } from './map/panels/WaterStreamPanel'
 import { BatteryPanel } from './map/panels/BatteryPanel'
@@ -325,23 +326,44 @@ const LABEL_ZOOM_LOW  = 13  // zoom bas : juste un nombre total minuscule
 // Bug Nils 22/05/2026 : en-dessous de LABEL_ZOOM_LOW les labels sont masqués
 // pour éviter la surcharge visuelle ("trop d'emoji trop d'indication").
 
+// Couleurs santé alignées sur services/map/health.ts → healthDotClass()
+const HEALTH_COLOR: Record<'ok' | 'warn' | 'stale' | 'never', string> = {
+  ok:    '#52B788', // meadow
+  warn:  '#F59E0B', // sun
+  stale: '#DC2626', // danger
+  never: '#9CA3AF', // muted
+}
+
 function makeEnclosureLabelIcon(
   enclosureAnimals: Animal[],
   zoom: number,
   customSpecies: import('../types').CustomSpecies[] = [],
   rotationDueAt?: number,
 ): L.DivIcon {
+  // Bug Chacha 19/05/2026 (bug.json #3) : "avoir des indications visibles de
+  // quand a été identifié en bonne santé la dernière fois un animal". Les
+  // pastilles colorées 🟢🟡🔴 apparaissent maintenant DIRECTEMENT sur la map
+  // (avant : uniquement dans la fiche animal ou le panneau enclos ouvert).
+  const freshness = enclosureAnimals.map(a => healthFreshness(a.lastCheckedHealthy))
+  const warnCount  = freshness.filter(f => f === 'warn').length
+  const staleCount = freshness.filter(f => f === 'stale' || f === 'never').length
+
   // Couleurs depuis CSS vars → s'adaptent automatiquement light/dark
   let inner: string
   if (enclosureAnimals.length === 0) {
     inner = '<em style="color:var(--color-muted);font-size:10px">Vide</em>'
   } else if (zoom >= LABEL_ZOOM) {
-    inner = enclosureAnimals.map(a => {
+    // Zoom haut — 1 ligne par animal + pastille santé colorée à droite du nom
+    inner = enclosureAnimals.map((a, i) => {
       const { emoji } = getSpeciesInfo(a.species, customSpecies)
-      return `<div style="font-size:10px;font-weight:600;white-space:nowrap;line-height:1.6;color:var(--color-charcoal)">${emoji} ${a.name}</div>`
+      const dot = HEALTH_COLOR[freshness[i]]
+      return `<div style="font-size:10px;font-weight:600;white-space:nowrap;line-height:1.6;color:var(--color-charcoal);display:flex;align-items:center;gap:4px;justify-content:center">
+        <span>${emoji} ${a.name}</span>
+        <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${dot};box-shadow:0 0 0 1px white"></span>
+      </div>`
     }).join('')
   } else if (zoom >= LABEL_ZOOM_MED) {
-    // Zoom moyen — comptage par espèce
+    // Zoom moyen — comptage par espèce + indicateur agrégé santé
     const counts = new Map<string, number>()
     for (const a of enclosureAnimals) counts.set(a.species, (counts.get(a.species) ?? 0) + 1)
     const parts: string[] = []
@@ -349,11 +371,23 @@ function makeEnclosureLabelIcon(
       const { emoji } = getSpeciesInfo(sp, customSpecies)
       parts.push(`${n} ${emoji}`)
     }
-    inner = `<strong style="font-size:13px;white-space:nowrap;color:var(--color-charcoal)">${parts.join(' · ')}</strong>`
+    let healthTag = ''
+    if (staleCount > 0) {
+      healthTag = ` · <span style="color:${HEALTH_COLOR.stale};font-weight:bold">⚠${staleCount}</span>`
+    } else if (warnCount > 0) {
+      healthTag = ` · <span style="color:${HEALTH_COLOR.warn};font-weight:bold">⚠${warnCount}</span>`
+    }
+    inner = `<strong style="font-size:13px;white-space:nowrap;color:var(--color-charcoal)">${parts.join(' · ')}${healthTag}</strong>`
   } else {
-    // Zoom bas — un seul petit chiffre, neutre. Évite l'empilement d'emojis sur
-    // la vue large (bug Nils 22/05).
-    inner = `<strong style="font-size:11px;color:var(--color-charcoal)">${enclosureAnimals.length}</strong>`
+    // Zoom bas — chiffre + pastille si au moins 1 animal en alerte santé.
+    // Sinon juste le compteur. Évite l'empilement d'emojis sur la vue large.
+    const dotColor = staleCount > 0 ? HEALTH_COLOR.stale
+      : warnCount > 0 ? HEALTH_COLOR.warn
+      : null
+    const dot = dotColor
+      ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor};margin-left:3px;vertical-align:middle"></span>`
+      : ''
+    inner = `<strong style="font-size:11px;color:var(--color-charcoal)">${enclosureAnimals.length}${dot}</strong>`
   }
 
   // Badge "rotation à prévoir" — orange à J-7, rouge à échéance dépassée.

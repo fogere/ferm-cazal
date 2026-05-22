@@ -177,3 +177,45 @@ export function splitPolygonByPolyline(
 export function isSplitSuccess(r: SplitResult | SplitError): r is SplitResult {
   return 'p1' in r
 }
+
+/**
+ * Scanne une liste de candidats land_plot et renvoie le premier qui est
+ * scindable par la polyline donnée. Utilisé à la création d'une clôture
+ * pour proposer le découpage automatique (S7.2).
+ *
+ * Tri par bbox décroissant : si la clôture traverse plusieurs land_plots
+ * (cas rare, plots imbriqués), on privilégie le plus grand. La bbox suffit
+ * pour l'ordre — pas besoin de calculer l'aire exacte ici.
+ *
+ * @param polyline tracé de la clôture
+ * @param candidates land_plots actifs candidats (le caller filtre déjà ceux
+ *                   marqués inactifs ou sans points)
+ * @returns le plot scindable + son SplitResult, ou null si aucun
+ */
+export function detectPlotSplit<T extends { points?: LatLng[] }>(
+  polyline:   LatLng[],
+  candidates: T[],
+): { plot: T; split: SplitResult } | null {
+  if (polyline.length < 2) return null
+
+  const ranked = [...candidates]
+    .filter(c => (c.points?.length ?? 0) >= 3)
+    .sort((a, b) => bboxArea(b.points!) - bboxArea(a.points!))
+
+  for (const plot of ranked) {
+    const r = splitPolygonByPolyline(plot.points!, polyline)
+    if (isSplitSuccess(r)) return { plot, split: r }
+  }
+  return null
+}
+
+function bboxArea(points: LatLng[]): number {
+  let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity
+  for (const p of points) {
+    if (p.lat < minLat) minLat = p.lat
+    if (p.lat > maxLat) maxLat = p.lat
+    if (p.lng < minLng) minLng = p.lng
+    if (p.lng > maxLng) maxLng = p.lng
+  }
+  return (maxLat - minLat) * (maxLng - minLng)
+}

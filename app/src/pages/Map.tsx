@@ -27,12 +27,14 @@ import { getStreamSegments } from '../services/map/stream-visual'
 import { isWaterOverdue } from '../services/map/water'
 import { isBatteryDue } from '../services/map/battery'
 import { enclosureQueryIds, effectiveEnclosureId } from '../services/map/enclosure'
+import { detectPlotSplit, type SplitResult } from '../services/map/polygon-split'
 import { WaterManualPanel } from './map/panels/WaterManualPanel'
 import { WaterStreamPanel } from './map/panels/WaterStreamPanel'
 import { BatteryPanel } from './map/panels/BatteryPanel'
 import { FencePanel } from './map/panels/FencePanel'
 import { EnclosurePlacementPanel } from './map/panels/EnclosurePlacementPanel'
 import { LandPlotPanel } from './map/panels/LandPlotPanel'
+import { ScindageModal, type ScindageChoice } from './map/panels/ScindageModal'
 import { BATTERY_STATUS_CFG } from './map/panels/shared'
 import type { MapPin, PinType, UserProfile, FencePreset, Animal } from '../types'
 
@@ -865,6 +867,16 @@ export default function MapPage() {
   const [fenceEditPin,    setFenceEditPin]    = useState<MapPin | null>(null)
   const [fenceEditPoints, setFenceEditPoints] = useState<{ lat: number; lng: number }[]>([])
   const [fenceEditSaving, setFenceEditSaving] = useState(false)
+
+  // S7 — scindage automatique d'un land_plot par une clôture.
+  // Quand `saveFence()` détecte que le tracé traverse un espace existant, on
+  // n'écrit pas la clôture tout de suite : on stocke le contexte ici et on
+  // ouvre la modal de découpage (placement animaux + confirmation).
+  const [pendingSplit, setPendingSplit] = useState<{
+    plot:    MapPin
+    split:   SplitResult
+    payload: Record<string, unknown>  // doc fence prêt à addDoc (sans id)
+  } | null>(null)
 
   // Mode auto (placement poteau-par-poteau via GPS haute précision).
   // 'idle'       : en attente d'un clic "Capturer"
@@ -1822,7 +1834,7 @@ export default function MapPage() {
     const now = Date.now()
     const centerLat = fencePoints.reduce((s, p) => s + p.lat, 0) / fencePoints.length
     const centerLng = fencePoints.reduce((s, p) => s + p.lng, 0) / fencePoints.length
-    const payload = {
+    const payload: Record<string, unknown> = {
       name:        fenceName.trim(),
       type:        'fence',
       note:        fenceNote.trim(),
@@ -1838,6 +1850,21 @@ export default function MapPage() {
       createdBy:   user.uid,
       updatedAt:   now,
     }
+
+    // S7 — détection de scindage : si le tracé traverse un land_plot actif
+    // de part en part, on bascule sur la modal de découpage au lieu d'écrire
+    // la clôture telle quelle. Le caller (la modal) reprendra la main pour
+    // créer atomiquement les 2 enfants + la clôture.
+    const splitCandidates = pins.filter(p =>
+      p.type === 'land_plot' && !p.inactive && (p.points?.length ?? 0) >= 3,
+    )
+    const split = detectPlotSplit(fencePoints, splitCandidates)
+    if (split) {
+      cancelFence()
+      setPendingSplit({ plot: split.plot, split: split.split, payload })
+      return
+    }
+
     cancelFence()  // ferme tout de suite
     setSaving(true)
     try {
@@ -1848,6 +1875,96 @@ export default function MapPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  // S7.4 — exécute le scindage : crée 2 land_plots enfants, marque le parent
+  // inactif, écrit la clôture avec splitsPlotId, redirige les animaux selon
+  // le choix de l'utilisatrice. Tout en 1 writeBatch atomique.
+  async function confirmSplit(choice: ScindageChoice) {
+    if (!user || !pendingSplit) return
+    const { plot: parent, split, payload } = pendingSplit
+    const now = Date.now()
+
+    // Pré-génère les 3 ids client-side pour pouvoir les référencer entre eux
+    // dans le même batch (splitsPlotId, parentPlotId, animal.enclosureId).
+    const child1Ref = doc(collection(db, 'map_pins'))
+    const child2Ref = doc(collection(db, 'map_pins'))
+    const fenceRef  = doc(collection(db, 'map_pins'))
+
+    const centroid = (pts: { lat: number; lng: number }[]) => ({
+      lat: pts.reduce((s, p) => s + p.lat, 0) / pts.length,
+      lng: pts.reduce((s, p) => s + p.lng, 0) / pts.length,
+    })
+    const c1 = centroid(split.p1)
+    const c2 = centroid(split.p2)
+
+    const batch = writeBatch(db)
+
+    // Enfant 1 — hérite du parent (preset visuel, etc. n'ont pas de sens sur
+    // land_plot, on garde juste l'essentiel pour le placement animaux).
+    batch.set(child1Ref, {
+      name:         choice.name1,
+      type:         'land_plot',
+      lat:          c1.lat,
+      lng:          c1.lng,
+      points:       split.p1,
+      parentPlotId: parent.id,
+      createdAt:    now,
+      createdBy:    user.uid,
+      updatedAt:    now,
+    })
+    // Enfant 2
+    batch.set(child2Ref, {
+      name:         choice.name2,
+      type:         'land_plot',
+      lat:          c2.lat,
+      lng:          c2.lng,
+      points:       split.p2,
+      parentPlotId: parent.id,
+      createdAt:    now,
+      createdBy:    user.uid,
+      updatedAt:    now,
+    })
+    // Parent → inactif (gardé pour la fusion auto à S8)
+    batch.update(doc(db, 'map_pins', parent.id), {
+      inactive:        true,
+      updatedAt:       now,
+      updatedBy:       user.uid,
+    })
+    // Clôture qui a scindé — porte splitsPlotId pour permettre la fusion S8
+    batch.set(fenceRef, {
+      ...payload,
+      splitsPlotId: parent.id,
+      updatedAt:    now,
+    })
+
+    // Redirection des animaux qui étaient placés dans le parent
+    for (const [animalId, target] of Object.entries(choice.animalChoice)) {
+      const newEnclosureId = target === 'p1' ? child1Ref.id : child2Ref.id
+      batch.update(doc(db, 'animals', animalId), { enclosureId: newEnclosureId })
+    }
+
+    setSaving(true)
+    try {
+      await batch.commit()
+      setPendingSplit(null)
+    } catch (err) {
+      console.error('[confirmSplit]', err)
+      const code = (err as { code?: string })?.code
+      alert(code === 'permission-denied'
+        ? 'Permissions insuffisantes : ta session a peut-être expiré.'
+        : 'Erreur lors du découpage. Réessayez quand la connexion est meilleure.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Annule le découpage : la clôture n'est PAS créée. L'utilisatrice doit
+  // refaire son tracé si elle veut continuer. (On préfère cette approche à
+  // une création silencieuse de la clôture sans scinder — l'intention de
+  // tracer une clôture qui traverse un espace est ambiguë.)
+  function cancelSplit() {
+    setPendingSplit(null)
   }
 
   /* ─── enregistrer pin standard ─── */
@@ -2195,14 +2312,15 @@ export default function MapPage() {
   const overduePins  = new Set(pins.filter(p => isWaterOverdue(p) || isBatteryDue(p)).map(p => p.id))
   const fencePins    = pins.filter(p => p.type === 'fence' && (p.points?.length ?? 0) >= 2)
   // Ids des land_plots qui ont un fence jumeau (migration S3). On ne les rend
-  // PAS séparément — leur fence jumeau couvre déjà le visuel. Tap sur le fence
-  // mènera vers le land_plot via le lien "Voir l'espace" (S4.6).
-  const twinPlotIds = new Set(
-    pins.filter(p => p.type === 'fence' && p.migratedToPlotId).map(p => p.migratedToPlotId!),
-  )
-  // Land_plots autonomes (créés via le futur mode "Définir un espace") : tracé propre.
+  // S9 : avant on filtrait les jumeaux migrés pour les rendre via leur fence.
+  // Désormais une clôture n'est jamais un espace, donc tous les land_plots
+  // (y compris les jumeaux S3) doivent se dessiner eux-mêmes. Demande Nils
+  // 22/05/2026 : "lorsque on referme une clôture ça crée une zone, on veut
+  // pas du tout ça". Les plots scindés (S7) restent masqués via `inactive`.
   const landPlotPins = pins.filter(p =>
-    p.type === 'land_plot' && (p.points?.length ?? 0) >= 3 && !twinPlotIds.has(p.id),
+    p.type === 'land_plot'
+    && (p.points?.length ?? 0) >= 3
+    && !p.inactive,
   )
   const nonFencePins = pins.filter(p =>
     p.type !== 'fence'
@@ -2382,16 +2500,20 @@ export default function MapPage() {
             .map(h => h.map(p => [p.lat, p.lng] as [number, number]))
           // Leaflet : positions[0] = outer, positions[1..n] = holes
           const positions = holesPos.length > 0 ? [outer, ...holesPos] : outer
+          // S9 : le fill couleur d'herbe (algo vert → jaune selon fraîcheur du
+          // pâturage) est désormais porté par les land_plot, pas par les fences.
+          const status = computeGrazingStatus(pin, fencePins, animals, allMovements)
+          const fill = GRAZING_FILL[status]
           return (
             <Polygon
               key={pin.id + '-plot'}
               positions={positions}
               pathOptions={{
-                color:       '#52B788',
+                color:       '#52B788',                         // contour vert : identifie l'espace
                 weight:      enc.length > 0 ? 3 : 2,
                 opacity:     0.85,
-                fillColor:   '#52B788',
-                fillOpacity: enc.length > 0 ? 0.18 : 0.10,
+                fillColor:   fill.color,                        // fill = couleur d'herbe (algo)
+                fillOpacity: fill.opacity,
                 dashArray:   enc.length > 0 ? undefined : '6 4',
               }}
               eventHandlers={{
@@ -2403,36 +2525,12 @@ export default function MapPage() {
           )
         })}
 
-        {/* ── Clôtures ── */}
-        {/* Passe 1 : remplissage enclos fermés — couleur selon la fraîcheur du pâturage */}
+        {/* ── Clôtures ──
+            S9 : une clôture est TOUJOURS une polyline, peu importe son état
+            (ouverte, bouclée, ex-enclos). Le rôle d'espace appartient
+            uniquement aux land_plot. Demande Nils 22/05/2026. */}
         {fencePins
-          .filter(pin => isFenceClosed(pin) && !(scissorMode && pin.id === scissorFenceId))
-          .map(pin => {
-            const status = computeGrazingStatus(pin, fencePins, animals, allMovements)
-            const fill = GRAZING_FILL[status]
-            return (
-              <Polygon
-                key={pin.id + '-fill'}
-                positions={pin.points!.map(p => [p.lat, p.lng] as [number, number])}
-                pathOptions={{ stroke: false, weight: 0, opacity: 0, fill: true, fillColor: fill.color, fillOpacity: fill.opacity }}
-                interactive={false}
-              />
-            )
-          })}
-        {/* Passe 2 : contour des enclos fermés (sauf fillOnly — leur contour est dans des segments séparés) */}
-        {fencePins
-          .filter(pin => isFenceClosed(pin) && !pin.fillOnly && !(scissorMode && pin.id === scissorFenceId))
-          .map(pin => (
-            <Polyline
-              key={pin.id + '-stroke'}
-              positions={pin.points!.map(p => [p.lat, p.lng] as [number, number])}
-              pathOptions={getFencePathOptions(pin)}
-              interactive={false}
-            />
-          ))}
-        {/* Passe 3 : clôtures ouvertes + segments de coupe — toujours par-dessus */}
-        {fencePins
-          .filter(pin => !isFenceClosed(pin) && !(scissorMode && pin.id === scissorFenceId))
+          .filter(pin => !pin.fillOnly && !(scissorMode && pin.id === scissorFenceId))
           .map(pin => (
             <Polyline
               key={pin.id}
@@ -2442,13 +2540,13 @@ export default function MapPage() {
             />
           ))}
 
-        {/* Labels animaux dans les enclos fermés — position GARANTIE à l'intérieur du polygone */}
-        {/* Bug Eugénie 20/05/2026 : ne pas afficher "Vide" en vue large — ça surcharge la carte */}
-        {fencePins
-          .filter(pin => isFenceClosed(pin) && !(scissorMode && pin.id === scissorFenceId))
-          .filter(pin => mapZoom >= LABEL_ZOOM || animals.some(a => a.enclosureId === effectiveEnclosureId(pin)))
+        {/* Labels animaux dans les espaces (land_plot) — position GARANTIE à l'intérieur du polygone.
+            S9 : les labels appartiennent désormais aux land_plot, pas aux fences fermés.
+            Bug Eugénie 20/05/2026 : ne pas afficher "Vide" en vue large — ça surcharge la carte. */}
+        {landPlotPins
+          .filter(pin => mapZoom >= LABEL_ZOOM || animals.some(a => a.enclosureId === pin.id))
           .map(pin => {
-            const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === effectiveEnclosureId(pin)))
+            const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
             const labelPos = pin.points ? insidePolygonCentroid(pin.points) : { lat: pin.lat, lng: pin.lng }
             return (
               <Marker
@@ -3779,24 +3877,24 @@ export default function MapPage() {
               </button>
             </div>
 
-            {/* Liste des enclos disponibles */}
+            {/* Liste des espaces disponibles (S9 : land_plot uniquement, plus de fence-as-enclosure) */}
             {(() => {
-              const closedFences = fencePins.filter(p => isFenceClosed(p))
+              const availablePlots = landPlotPins
               return (
                 <>
-                  {closedFences.length === 0 && (
+                  {availablePlots.length === 0 && (
                     <div className="bg-sun/10 border border-sun/30 rounded-xl p-4 mb-4 text-center">
-                      <p className="text-sm font-semibold text-earth mb-1">Aucun enclos fermé sur la carte</p>
+                      <p className="text-sm font-semibold text-earth mb-1">Aucun espace défini sur la carte</p>
                       <p className="text-xs text-muted">
-                        Dessinez une clôture et fermez-la en rapprochant le dernier point
-                        du premier point vert — un enclos apparaîtra automatiquement.
+                        Crée un espace via le mode ⛰ Espace dans la barre du bas
+                        pour pouvoir y placer des animaux.
                       </p>
                     </div>
                   )}
 
                   <div className="space-y-3">
                     {animals.map(animal => {
-                      const currentFence = fencePins.find(p => p.id === animal.enclosureId)
+                      const currentPlot = availablePlots.find(p => p.id === animal.enclosureId)
                       const isEditing = animalPanelEditing === animal.id
 
                       return (
@@ -3814,8 +3912,8 @@ export default function MapPage() {
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm font-bold text-charcoal">{animal.name}</p>
                                 <p className="text-xs text-muted">
-                                  {currentFence
-                                    ? <span className="text-forest font-semibold">📍 {currentFence.name}</span>
+                                  {currentPlot
+                                    ? <span className="text-forest font-semibold">📍 {currentPlot.name}</span>
                                     : <span className="text-sun font-semibold">⚠ Non placé</span>}
                                 </p>
                               </div>
@@ -3832,46 +3930,43 @@ export default function MapPage() {
                             </button>
                           </div>
 
-                          {/* Sélecteur d'enclos */}
+                          {/* Sélecteur d'espace */}
                           {isEditing && (
                             <div className="border-t border-border px-4 py-3 bg-white space-y-2">
                               <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">
-                                Choisir un enclos
+                                Choisir un espace
                               </p>
-                              {closedFences.length === 0 ? (
-                                <p className="text-xs text-muted italic">Aucun enclos fermé disponible.</p>
+                              {availablePlots.length === 0 ? (
+                                <p className="text-xs text-muted italic">Aucun espace défini disponible.</p>
                               ) : (
                                 <div className="space-y-1.5">
-                                  {closedFences.map(fence => {
-                                    const fenceEncId = effectiveEnclosureId(fence)
-                                    return (
+                                  {availablePlots.map(plot => (
                                     <button
-                                      key={fence.id}
+                                      key={plot.id}
                                       disabled={actionBusy}
                                       onClick={async () => {
                                         setActionBusy(true)
                                         try {
-                                          await updateDoc(doc(db, 'animals', animal.id), { enclosureId: fenceEncId })
+                                          await updateDoc(doc(db, 'animals', animal.id), { enclosureId: plot.id })
                                           setAnimalPanelEditing(null)
                                         } finally { setActionBusy(false) }
                                       }}
                                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-all active:scale-95 ${
-                                        animal.enclosureId === fenceEncId
+                                        animal.enclosureId === plot.id
                                           ? 'border-forest bg-forest/10'
                                           : 'border-border bg-cream'
                                       }`}
                                     >
-                                      <div className="w-3 h-3 rounded-full flex-shrink-0"
-                                           style={{ background: fence.presetColor ?? '#52B788' }} />
-                                      <span className="text-sm font-semibold text-charcoal flex-1">{fence.name}</span>
+                                      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: '#52B788' }} />
+                                      <span className="text-sm font-semibold text-charcoal flex-1">{plot.name}</span>
                                       <span className="text-xs text-muted">
-                                        {animals.filter(a => a.enclosureId === fenceEncId).length} animaux
+                                        {animals.filter(a => a.enclosureId === plot.id).length} animaux
                                       </span>
-                                      {animal.enclosureId === fenceEncId && (
+                                      {animal.enclosureId === plot.id && (
                                         <span className="text-forest text-xs font-bold">✓ Ici</span>
                                       )}
                                     </button>
-                                  )})}
+                                  ))}
                                   {/* Option : libérer l'animal */}
                                   {animal.enclosureId && (
                                     <button
@@ -4504,6 +4599,20 @@ export default function MapPage() {
       )}
 
       {/* ══════════════════════════════════════════
+          Modal : découpage automatique d'un espace par la clôture (S7)
+      ══════════════════════════════════════════ */}
+      {pendingSplit && (
+        <ScindageModal
+          parent={pendingSplit.plot}
+          split={pendingSplit.split}
+          animals={animals.filter(a => a.enclosureId === pendingSplit.plot.id)}
+          saving={saving}
+          onCancel={cancelSplit}
+          onConfirm={confirmSplit}
+        />
+      )}
+
+      {/* ══════════════════════════════════════════
           Sheet : détail épingle
       ══════════════════════════════════════════ */}
       {selected && (
@@ -4681,7 +4790,7 @@ export default function MapPage() {
 
                 <EnclosurePlacementPanel
                   pin={selected}
-                  isEnclosed={isFenceClosed(selected)}
+                  isEnclosed={false}
                   isTemp={isTemp}
                   actionBusy={actionBusy}
                   savingHealth={savingHealth}

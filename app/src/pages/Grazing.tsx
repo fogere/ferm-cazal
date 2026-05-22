@@ -25,19 +25,17 @@ function fmtDate(ts: number): string {
 }
 
 /**
- * Pin éligible à recevoir des animaux dans Grazing (refonte clôtures/espaces S5).
- * - Cible principale : land_plot avec ≥3 points (porteur du rôle d'enclos depuis S3).
- * - Fallback rétrocompat : fence fermé non migré (ne devrait plus exister après S3,
- *   mais on couvre le cas où un user en créerait un avant qu'on aie tout migré).
+ * Pin éligible à recevoir des animaux dans Grazing (refonte clôtures/espaces).
+ * Depuis S9 : uniquement les land_plot. Une clôture, même refermée, n'est
+ * jamais un espace — les fences fermés non-migrés (cas rare post-S3) ne
+ * peuvent plus recevoir d'animaux. Demande Nils 22/05/2026.
+ * Les plots scindés (S7, marqués inactive) sont exclus : ce sont leurs
+ * 2 enfants qui reçoivent les animaux.
  */
 function isEnclosureCandidate(pin: MapPin): boolean {
-  if (pin.type === 'land_plot' && (pin.points?.length ?? 0) >= 3) return true
-  if (pin.type === 'fence' && !pin.migratedToPlotId && (pin.points?.length ?? 0) >= 3) {
-    const a = pin.points![0]
-    const b = pin.points![pin.points!.length - 1]
-    return Math.abs(a.lat - b.lat) < 1e-9 && Math.abs(a.lng - b.lng) < 1e-9
-  }
-  return false
+  return pin.type === 'land_plot'
+    && (pin.points?.length ?? 0) >= 3
+    && !pin.inactive
 }
 
 /**

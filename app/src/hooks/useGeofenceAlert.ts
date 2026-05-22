@@ -5,7 +5,6 @@ import {
 import { db } from '../firebase'
 import { useAuth } from './useAuth'
 import { pointInPolygonWithHoles } from '../services/map/polygon'
-import { effectiveEnclosureId } from '../services/map/enclosure'
 import { useLocationCore } from './useLocationCore'
 import type { Animal, MapPin } from '../types'
 
@@ -27,10 +26,9 @@ import type { Animal, MapPin } from '../types'
  * son propre watchPosition, dupliqué avec useLiveLocation et
  * useOnDemandLocationPublish. Voir services/location/locationCore.ts.
  *
- * S5.1 : la détection se fait sur les `land_plot` (refonte clôtures/espaces)
- * avec exclusion des holes via `pointInPolygonWithHoles`. Les fences fermés
- * sans `migratedToPlotId` (rétrocompat — devraient être 0 après S3) sont
- * inclus en fallback pour ne casser aucun cas.
+ * S9 (22/05/2026) : la détection se fait UNIQUEMENT sur les `land_plot`
+ * actifs. Une clôture, même refermée, n'est jamais un espace : pas de
+ * geofence sur les fences. Exclusion des holes via pointInPolygonWithHoles.
  */
 
 const STALE_AFTER_MS  = 12 * 60 * 60 * 1000 // 12 h sans check → animal "à vérifier"
@@ -38,16 +36,10 @@ const RENOTIFY_MIN_MS = 6  * 60 * 60 * 1000 // anti-spam : 6 h entre 2 notifs po
 const REFRESH_MS      = 5  * 60 * 1000      // refresh cache enclos/animaux toutes les 5 min
 const POS_CHECK_MS    = 60_000              // throttle des checks de position : 1× / minute
 
-function isClosedFence(pin: MapPin): boolean {
-  if (pin.type !== 'fence') return false
-  if (!pin.points || pin.points.length < 3) return false
-  const a = pin.points[0]
-  const b = pin.points[pin.points.length - 1]
-  return Math.abs(a.lat - b.lat) < 1e-9 && Math.abs(a.lng - b.lng) < 1e-9
-}
-
 function isValidLandPlot(pin: MapPin): boolean {
-  return pin.type === 'land_plot' && (pin.points?.length ?? 0) >= 3
+  return pin.type === 'land_plot'
+    && (pin.points?.length ?? 0) >= 3
+    && !pin.inactive
 }
 
 export function useGeofenceAlert() {
@@ -63,8 +55,7 @@ export function useGeofenceAlert() {
   const notifiedMap   = useRef<Record<string, number>>({})
 
   // Charge / rafraîchit les enclos candidats au geofence + les animaux du cheptel.
-  // Candidats = land_plots valides + fences fermés sans migratedToPlotId
-  // (rétrocompat — un user qui aurait créé un fence enclos avant migration).
+  // Candidats = land_plots valides actifs uniquement (S9 : plus de fallback fence).
   async function refreshCache() {
     try {
       const [pinsSnap, animalsSnap] = await Promise.all([
@@ -72,9 +63,7 @@ export function useGeofenceAlert() {
         getDocs(collection(db, 'animals')),
       ])
       const allPins = pinsSnap.docs.map(d => ({ id: d.id, ...d.data() } as MapPin))
-      const plots = allPins.filter(isValidLandPlot)
-      const orphanFences = allPins.filter(p => isClosedFence(p) && !p.migratedToPlotId)
-      enclosuresRef.current = [...plots, ...orphanFences]
+      enclosuresRef.current = allPins.filter(isValidLandPlot)
       animalsRef.current = animalsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Animal))
     } catch (e) {
       console.warn('[geofence] refresh:', e)
@@ -120,12 +109,9 @@ export function useGeofenceAlert() {
     insideEnclosure.current = candidate.id
 
     // Animaux à vérifier : jamais checkés OU check de plus de 12 h.
-    // effectiveEnclosureId : pour un land_plot, renvoie son id (= ce que
-    // animal.enclosureId pointe après migration S3). Pour un fence non migré,
-    // renvoie son id (rétrocompat).
-    const encId = effectiveEnclosureId(candidate)
+    // Le candidate est un land_plot, donc son id est l'enclosureId attendu.
     const stale = animalsRef.current.filter(a =>
-      a.enclosureId === encId &&
+      a.enclosureId === candidate.id &&
       (!a.lastCheckedHealthy || now - a.lastCheckedHealthy > STALE_AFTER_MS),
     )
     if (stale.length === 0) return

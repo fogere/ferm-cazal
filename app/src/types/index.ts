@@ -217,6 +217,14 @@ export interface MapPin {
   // clôture intérieure. Les sous-espaces partagent le même parentPlotId pour
   // que le calcul de la couleur d'herbe regroupe toute la surface d'origine.
   parentPlotId?: string
+  // S7 — marqueur du land_plot parent une fois scindé : il reste en DB pour
+  // permettre la fusion automatique au retrait de la clôture (S8), mais ne
+  // reçoit plus d'animaux directement. Les 2 enfants prennent le relais.
+  inactive?: boolean
+  // S7 — sur la clôture qui a scindé un land_plot : id du plot parent
+  // scindé. Au retrait de cette clôture (S8) on remonte au parent et on
+  // fusionne ses enfants.
+  splitsPlotId?: string
 
   // ── audit migration fence → land_plot (S3) ──
   // Sur un fence migré : id du land_plot jumeau créé pour récupérer son rôle

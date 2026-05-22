@@ -26,6 +26,53 @@ Règle absolue : **aucune modif qui change un comportement utilisateur**. Que de
     computeGrazingStatus, formulaire placement) utilisent maintenant
     effectiveEnclosureId — sans ça les enclos migrés s'affichaient vides
 
+- **Session S9 (clôture ≠ espace — séparation stricte)** — bug Nils
+  22/05/2026 : refermer une clôture créait visuellement une zone (couleur
+  d'herbe, animaux possibles dessus). Corrigé : une clôture est désormais
+  toujours une polyline, peu importe son état. Le rôle d'espace est exclusif
+  aux land_plot.
+  - Map.tsx — passe de remplissage couleur d'herbe (`computeGrazingStatus`)
+    déplacée des fences fermés vers les `landPlotPins`. Le contour vert
+    `#52B788` reste comme marqueur d'identité de l'espace.
+  - Filtre `twinPlotIds` retiré : les land_plots migrés en S3 se rendent
+    eux-mêmes (la clôture jumelle ne porte plus le fill).
+  - Labels animaux (`makeEnclosureLabelIcon`) déplacés des fences fermés
+    vers les `landPlotPins`.
+  - `isEnclosed={isFenceClosed(selected)}` → `isEnclosed={false}` pour les
+    panneaux fence (un fence n'est jamais un enclos).
+  - `useGeofenceAlert` : retrait du fallback fence-fermé-non-migré. Seuls
+    les `land_plot` actifs déclenchent les notifications.
+  - `Grazing.tsx isEnclosureCandidate` : retrait du fallback fence-fermé.
+    Seuls les `land_plot` peuvent recevoir des animaux dans AddMovement /
+    PasteImport.
+  - Sélecteur "Déplacer animal" du panneau global animaux : passe de
+    `closedFences` à `landPlotPins` (espaces uniquement).
+  - Message du `EnclosurePlacementPanel` pour fence ouvert : mis à jour
+    pour expliquer qu'on crée un espace ⛰ au lieu de fermer la clôture.
+
+- **Session S7 (scindage automatique d'un espace par une clôture)** —
+  réponse à la précision Eugénie/Nils 21/05 : une clôture qui traverse un
+  land_plot doit le découper en 2 sous-espaces indépendants (couleur d'herbe
+  propre à chaque, animaux ciblés sur l'un ou l'autre). Fusion auto au
+  retrait de la clôture = S8.
+  - S7.1 : `services/map/polygon-split.ts` — algo pur `splitPolygonByPolyline`
+    (2 intersections sur edges différents, refus des cas dégénérés) +
+    helper `detectPlotSplit` qui scanne les candidats land_plot.
+  - S7.2 : branchement dans `saveFence()` — quand le tracé de la clôture
+    traverse un plot actif, on stash `pendingSplit` au lieu d'écrire la
+    clôture telle quelle.
+  - S7.3 : `pages/map/panels/ScindageModal.tsx` — aperçu SVG des 2
+    sous-polygons + 2 inputs pour nommer + répartition des animaux du parent
+    entre les 2 enfants (toggle 1/2 par animal + boutons "Tous en X").
+  - S7.4 : `confirmSplit()` — 1 writeBatch atomique qui crée 2 land_plots
+    enfants (`parentPlotId = parent.id`), marque le parent `inactive: true`,
+    écrit la clôture avec `splitsPlotId = parent.id`, redirige les animaux
+    selon le choix de l'utilisatrice.
+  - Type `MapPin` : ajout des champs `inactive?: boolean` (parent scindé,
+    masqué visuellement mais conservé pour la fusion S8) et `splitsPlotId?:
+    string` (sur la clôture scindante).
+  - Rendu : `landPlotPins` filtre `!p.inactive` pour ne pas dessiner le parent.
+
 - **Session S5 (finitions refonte clôtures/espaces)** :
   - S5.1 : `useGeofenceAlert` détecte maintenant sur les `land_plot` (avec
     exclusion des holes via `pointInPolygonWithHoles`). Fallback rétrocompat

@@ -254,8 +254,9 @@ export function EnclosurePlacementPanel(props: Props) {
         <div className="rounded-xl p-3 bg-cream border border-dashed border-border flex items-center gap-2">
           <span className="text-base">💡</span>
           <p className="text-xs text-muted leading-relaxed">
-            <strong>Clôture ouverte.</strong> Fermez-la en rapprochant le dernier point
-            du point vert de départ pour créer un enclos et y placer des animaux.
+            <strong>Clôture.</strong> Pour placer des animaux, crée un espace ⛰
+            qui suit ta clôture. Une clôture peut aussi scinder un espace existant
+            en 2 sous-espaces.
           </p>
         </div>
       )}

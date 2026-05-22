@@ -16,7 +16,7 @@ import { useLiveLocation } from '../hooks/useLiveLocation'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'
 import { getSpeciesInfo } from '../services/species'
 import {
-  pointInPolygon, insidePolygonCentroid, distToSegmentPx, isFenceClosed,
+  insidePolygonCentroid, distToSegmentPx, isFenceClosed,
 } from '../services/map/geometry'
 import {
   dateInputToTs as dateInputToTsLocal,
@@ -255,34 +255,40 @@ function makePointerIcon(color: string, name: string): L.DivIcon {
   })
 }
 
+// P1/P2 (22/05/2026) : taille de hitbox tactile.
+// Visuel inchangé (point 10/14 px) ; hitbox 44×44 invisible autour = cible
+// doigt confortable sans encombrer la carte visuellement.
+const EDIT_HITBOX_PX = 44
+const HITBOX_WRAP_STYLE = `width:${EDIT_HITBOX_PX}px;height:${EDIT_HITBOX_PX}px;display:flex;align-items:center;justify-content:center;`
+
 // Petits points sur la clôture en cours de dessin
 const FENCE_DOT_ICON = L.divIcon({
-  html: `<div style="background:#EA580C;width:10px;height:10px;border-radius:50%;
-    border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.35);"></div>`,
+  html: `<div style="${HITBOX_WRAP_STYLE}"><div style="background:#EA580C;width:10px;height:10px;border-radius:50%;
+    border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.35);"></div></div>`,
   className: '',
-  iconSize: [10, 10],
-  iconAnchor: [5, 5],
+  iconSize:   [EDIT_HITBOX_PX, EDIT_HITBOX_PX],
+  iconAnchor: [EDIT_HITBOX_PX / 2, EDIT_HITBOX_PX / 2],
 })
 
 // Premier point de la clôture (cible de fermeture)
 const FENCE_FIRST_DOT_ICON = L.divIcon({
-  html: `<div style="background:#22C55E;width:14px;height:14px;border-radius:50%;
-    border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.35);"></div>`,
+  html: `<div style="${HITBOX_WRAP_STYLE}"><div style="background:#22C55E;width:14px;height:14px;border-radius:50%;
+    border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.35);"></div></div>`,
   className: '',
-  iconSize: [14, 14],
-  iconAnchor: [7, 7],
+  iconSize:   [EDIT_HITBOX_PX, EDIT_HITBOX_PX],
+  iconAnchor: [EDIT_HITBOX_PX / 2, EDIT_HITBOX_PX / 2],
 })
 
 // Point intermédiaire ghost (au milieu d'un segment, en mode édition).
 // Eugénie clique dessus pour insérer un vrai poteau à cet emplacement.
 const FENCE_MID_DOT_ICON = L.divIcon({
-  html: `<div style="background:#22C55E;width:14px;height:14px;border-radius:50%;
+  html: `<div style="${HITBOX_WRAP_STYLE}"><div style="background:#22C55E;width:14px;height:14px;border-radius:50%;
     border:2px dashed white;opacity:0.55;box-shadow:0 1px 4px rgba(0,0,0,0.25);
     display:flex;align-items:center;justify-content:center;
-    color:white;font-size:10px;font-weight:bold;line-height:1;">+</div>`,
+    color:white;font-size:10px;font-weight:bold;line-height:1;">+</div></div>`,
   className: '',
-  iconSize: [14, 14],
-  iconAnchor: [7, 7],
+  iconSize:   [EDIT_HITBOX_PX, EDIT_HITBOX_PX],
+  iconAnchor: [EDIT_HITBOX_PX / 2, EDIT_HITBOX_PX / 2],
 })
 
 function makeSnapIcon(isClose: boolean): L.DivIcon {
@@ -685,16 +691,11 @@ function MapClickCapture({
         }
       }
 
-      // 3. Intérieur des polygones fermés — DERNIER recours (clic en zone vide d'un enclos)
-      if (!bestPin) {
-        for (const pin of fencePins) {
-          if (!pin.points || !isFenceClosed(pin)) continue
-          if (pointInPolygon(e.latlng.lat, e.latlng.lng, pin.points)) {
-            bestPin = pin
-            break
-          }
-        }
-      }
+      // S9 (22/05/2026) : on a retiré le fallback "clic à l'intérieur d'un
+      // fence fermé = sélectionne le fence". Une clôture est juste un tracé,
+      // sa hitbox est la proximité du fil (étape 2). Cliquer au milieu d'un
+      // anneau ne doit plus tomber sur la clôture — soit on tombe sur un
+      // land_plot (Polygon onClick direct), soit sur rien.
 
       if (bestPin) onSelect(bestPin)
     },
@@ -2327,7 +2328,12 @@ export default function MapPage() {
     && p.type !== 'land_plot'  // les land_plots ne sont jamais des Markers
     || (p.type === 'fence' && (p.points?.length ?? 0) < 2)
   )
-  const anyModeActive = addMode || fenceMode || scissorMode || pointerMode || streamMode || plotMode || holeMode
+  // P3 : pendant l'édition d'un tracé (fenceEditPin actif), on ne veut AUCUNE
+  // interaction avec les autres pins de la carte — l'utilisatrice se concentre
+  // uniquement sur ses points. Inclus dans anyModeActive pour désactiver tous
+  // les onClick gardés par ce guard.
+  const inTraceEdit = fenceEditPin !== null
+  const anyModeActive = addMode || fenceMode || scissorMode || pointerMode || streamMode || plotMode || holeMode || inTraceEdit
 
   function toggleMonth(m: number) {
     setForm(f => ({
@@ -2471,7 +2477,13 @@ export default function MapPage() {
           onPin={handleMapClick}
           onFencePoint={handleFencePoint}
           onFenceClose={handleFenceClose}
-          onSelect={pin => { setSelected(pin); setAddMode(false); setFenceMode(false); setEditOccupants(false); setEditEnclosureAnimals(false) }}
+          onSelect={pin => {
+            // P3 : pendant l'édition d'un tracé, on bloque toute sélection
+            // d'autres pins. L'utilisatrice se concentre uniquement sur ses
+            // points (drag/insert/delete). Pour sortir, elle valide ou annule.
+            if (fenceEditPin) return
+            setSelected(pin); setAddMode(false); setFenceMode(false); setEditOccupants(false); setEditEnclosureAnimals(false)
+          }}
           onScissorSnap={handleScissorSnap}
           onSnapHover={setFenceSnapTarget}
           fencePins={fencePins}
@@ -2752,6 +2764,9 @@ export default function MapPage() {
                     position={[p.lat, p.lng]}
                     icon={i === 0 ? FENCE_FIRST_DOT_ICON : FENCE_DOT_ICON}
                     draggable={true}
+                    // P2 : vrais poteaux au-dessus des ghosts (mid-dots) en cas
+                    // de chevauchement hitbox → le doigt tape sur le poteau réel.
+                    zIndexOffset={200}
                     eventHandlers={{
                       dragend: (e) => {
                         const ll = e.target.getLatLng()
@@ -3006,8 +3021,9 @@ export default function MapPage() {
               onClick={() => setFenceFormVisible(true)}
               className="px-3 py-1.5 rounded-lg bg-white text-orange-600 text-xs font-bold
                          active:scale-95 transition-all whitespace-nowrap"
+              title="Valider le tracé tel quel (ouvert ou fermé selon les points)"
             >
-              Nommer →
+              Terminer →
             </button>
           )}
           <button
@@ -3059,6 +3075,16 @@ export default function MapPage() {
                   >
                     <Undo2 size={12} /> Signaler erreur
                   </button>
+                  {/* P5 : permettre une clôture ouverte (ligne) en mode auto.
+                       Disponible dès 2 poteaux, sans obligation de retour au 1er. */}
+                  {fencePoints.length >= 2 && (
+                    <button
+                      onClick={() => setFenceFormVisible(true)}
+                      className="flex-1 py-2 rounded-lg bg-white/30 text-white text-xs font-bold active:scale-95"
+                    >
+                      Terminer (ouvert)
+                    </button>
+                  )}
                   {fencePoints.length >= 3 && (
                     <button
                       onClick={() => { handleFenceClose() }}

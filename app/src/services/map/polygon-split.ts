@@ -38,12 +38,17 @@ export interface SplitError {
 }
 
 const EPSILON = 1e-9
+// Tolérance géométrique pour dédupliquer 2 intersections au même point physique.
+// ~1e-7° ≈ 1 cm — bien en dessous de la précision du snap (mètres).
+const GEO_EPSILON = 1e-7
 
 /**
  * Intersection de 2 segments [a, b] et [c, d] en coordonnées 2D (lat/lng).
- * Renvoie le point d'intersection STRICTEMENT à l'intérieur des deux segments
- * (0 < t < 1, 0 < u < 1), ou null sinon. Les contacts aux extrémités sont
- * volontairement exclus pour éviter les ambiguïtés au scindage.
+ * Renvoie le point d'intersection si t ∈ [0,1] ET u ∈ [0,1] (extrémités incluses),
+ * ou null sinon. Les contacts aux extrémités sont autorisés — c'est le cas
+ * typique quand l'utilisatrice snap son 1er ou dernier point de clôture sur
+ * le contour d'un land_plot. Les éventuels doublons (1 intersection comptée
+ * 2× car au sommet d'un polygon) sont éliminés par dédup en aval.
  */
 function segmentIntersection(a: LatLng, b: LatLng, c: LatLng, d: LatLng): LatLng | null {
   const x1 = a.lng, y1 = a.lat
@@ -57,9 +62,9 @@ function segmentIntersection(a: LatLng, b: LatLng, c: LatLng, d: LatLng): LatLng
   const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
   const u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / denom
 
-  // Exclusion stricte des extrémités (≤ epsilon ou ≥ 1-epsilon)
-  if (t <= EPSILON || t >= 1 - EPSILON) return null
-  if (u <= EPSILON || u >= 1 - EPSILON) return null
+  // Extrémités tolérées (snap auto). On accepte t ∈ [−ε, 1+ε] et idem u.
+  if (t < -EPSILON || t > 1 + EPSILON) return null
+  if (u < -EPSILON || u > 1 + EPSILON) return null
 
   return {
     lng: x1 + t * (x2 - x1),
@@ -112,20 +117,31 @@ export function splitPolygonByPolyline(
     }
   }
 
-  // 2. Filtrer le nombre d'intersections
-  if (hits.length === 0) {
-    return { code: 'no-intersection', message: "La clôture ne traverse pas l'espace." }
-  }
-  if (hits.length === 1) {
-    return { code: 'single-intersection', message: "La clôture touche l'espace mais ne le traverse pas." }
-  }
-  if (hits.length > 2) {
-    return { code: 'too-many-intersections', message: `La clôture traverse l'espace ${hits.length} fois — trop complexe pour scinder automatiquement.` }
+  // 2. Trier puis dédupliquer : si la polyline touche un SOMMET du polygon,
+  //    on a 2 hits sur les 2 edges adjacents au même point géométrique. On
+  //    fusionne ces doublons (distance < GEO_EPSILON) en gardant le premier.
+  hits.sort((a, b) => a.lineT - b.lineT)
+  const dedup: Hit[] = []
+  for (const h of hits) {
+    const prev = dedup[dedup.length - 1]
+    if (prev && Math.hypot(h.point.lng - prev.point.lng, h.point.lat - prev.point.lat) < GEO_EPSILON) {
+      continue
+    }
+    dedup.push(h)
   }
 
-  // 3. Trier les 2 intersections selon leur position sur la polyline (ordre du tracé)
-  hits.sort((a, b) => a.lineT - b.lineT)
-  const [h1, h2] = hits
+  // 3. Filtrer le nombre d'intersections après dedup
+  if (dedup.length === 0) {
+    return { code: 'no-intersection', message: "La clôture ne traverse pas l'espace." }
+  }
+  if (dedup.length === 1) {
+    return { code: 'single-intersection', message: "La clôture touche l'espace mais ne le traverse pas." }
+  }
+  if (dedup.length > 2) {
+    return { code: 'too-many-intersections', message: `La clôture traverse l'espace ${dedup.length} fois — trop complexe pour scinder automatiquement.` }
+  }
+
+  const [h1, h2] = dedup
 
   // 4. Refus si les 2 hits tombent sur le MÊME edge du polygon
   if (h1.polyEdge === h2.polyEdge) {

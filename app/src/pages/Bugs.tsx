@@ -149,6 +149,7 @@ export default function Bugs() {
 
   async function sendReply() {
     if (!replyTarget || !user || !profile) return
+    if (isTemp) return // user_messages.create réservé aux réguliers
     if (!replyTarget.reportedBy) {
       setReplyError("Ce bug n'a pas d'auteur identifié, impossible de répondre.")
       return
@@ -220,6 +221,7 @@ export default function Bugs() {
   }
 
   async function handleDelete(id: string) {
+    if (isTemp) return // bugReports.delete réservé aux réguliers
     try {
       await deleteDoc(doc(db, 'bugReports', id))
     } catch {

@@ -1290,8 +1290,30 @@ export default function MapPage() {
     setRenameValue('')
   }, [selected?.id])
 
+  /**
+   * Garde anti-temp pour la défense en profondeur (audit Nils 23/05/2026).
+   * Toutes les écritures Firestore réservées aux réguliers (map_pins, config,
+   * etc.) doivent passer ce garde AVANT le batch — sinon Firestore refuse et
+   * remonte un `unhandledrejection` "Missing or insufficient permissions"
+   * dans la console utilisatrice (cf. bug.json #5 Chacha).
+   *
+   * Note : la plupart des UI sont déjà cachées aux temps via `!isTemp`. Ce
+   * garde est une ceinture+bretelles pour les chemins de code qui pourraient
+   * exposer une action (drag, callbacks, etc.) sans vérification visuelle.
+   */
+  function assertRegularUser(): boolean {
+    if (isTemp) {
+      // Silent : pas d'alert (l'UI ne devrait jamais déclencher ça pour un temp).
+      // Si ça arrive c'est un bug UI, on l'arrête côté backend avant la requête.
+      console.debug('[isTemp] action régulière bloquée — vérifier l\'UI exposante')
+      return false
+    }
+    return true
+  }
+
   // Commit du rename : update Firestore + selected local pour feedback immédiat.
   async function commitRename() {
+    if (!assertRegularUser()) return
     if (!selected || !user) return
     const next = renameValue.trim()
     if (!next || next === selected.name) {
@@ -1363,6 +1385,7 @@ export default function MapPage() {
   }, [selected?.id])
 
   async function uploadPinPhoto(file: File) {
+    if (!assertRegularUser()) return
     if (!user || !selected) return
     setPhotoUploading(true)
     try {
@@ -1391,6 +1414,7 @@ export default function MapPage() {
   }
 
   async function deletePinPhoto(photoId: string) {
+    if (!assertRegularUser()) return
     const photo = pinPhotos.find(p => p.id === photoId)
     await deleteDoc(doc(db, 'pin_photos', photoId))
     if (photoViewer?.id === photoId) setPhotoViewer(null)
@@ -1558,6 +1582,7 @@ export default function MapPage() {
   }
 
   async function saveEditFence() {
+    if (!assertRegularUser()) return
     if (!fenceEditPin || !user) return
     setFenceEditSaving(true)
     try {
@@ -1902,6 +1927,7 @@ export default function MapPage() {
   }
 
   async function saveNewPreset() {
+    if (!assertRegularUser()) return
     if (!user || !newPresetName.trim()) return
     setSaving(true)
     try {
@@ -1941,6 +1967,7 @@ export default function MapPage() {
   }
 
   async function confirmDeletePreset() {
+    if (!assertRegularUser()) return
     if (!deletingPreset) return
     setSaving(true)
     try {
@@ -1956,6 +1983,7 @@ export default function MapPage() {
   }
 
   async function updateFenceWireCount(pin: MapPin, delta: number) {
+    if (!assertRegularUser()) return
     if (!user) return
     const next = Math.max(1, Math.min(8, (pin.wireCount ?? 1) + delta))
     setActionBusy(true)
@@ -1999,6 +2027,7 @@ export default function MapPage() {
   }
 
   async function splitFence() {
+    if (!assertRegularUser()) return
     if (!user || !scissorFenceId || scissorIndexA === null || scissorIndexB === null || !scissorPreset) return
     const originalFence = pins.find(p => p.id === scissorFenceId)
     if (!originalFence) return
@@ -2102,6 +2131,7 @@ export default function MapPage() {
     iB:        number,
     newPreset: FencePreset,
   ) {
+    if (!assertRegularUser()) return
     if (!user) return
     if (iA >= iB) return
     if (iB >= points.length) return
@@ -2175,6 +2205,7 @@ export default function MapPage() {
   }
 
   async function updateFenceVoltage(pin: MapPin, voltage: number | null) {
+    if (!assertRegularUser()) return
     if (!user) return
     await updateDoc(doc(db, 'map_pins', pin.id), {
       wireVoltage: voltage ?? null, updatedAt: Date.now(), updatedBy: user.uid,
@@ -2182,6 +2213,7 @@ export default function MapPage() {
   }
 
   async function saveFence() {
+    if (!assertRegularUser()) return
     if (!user || !fenceName.trim() || fencePoints.length < 2) return
     // Snapshot des données + fermeture UI immédiate
     const now = Date.now()
@@ -2247,6 +2279,7 @@ export default function MapPage() {
   // inactif, écrit la clôture avec splitsPlotId, redirige les animaux selon
   // le choix de l'utilisatrice. Tout en 1 writeBatch atomique.
   async function confirmSplit(choice: ScindageChoice) {
+    if (!assertRegularUser()) return
     if (!user || !pendingSplit) return
     const { plot: parent, split, payload } = pendingSplit
     const now = Date.now()
@@ -2336,6 +2369,7 @@ export default function MapPage() {
   /* ─── enregistrer pin standard ─── */
 
   async function savePin(e: React.FormEvent) {
+    if (!assertRegularUser()) return
     e.preventDefault()
     if (!pendingPos || !form.name.trim() || !user) return
     setSaving(true)
@@ -2406,6 +2440,7 @@ export default function MapPage() {
   /* ─── eau manuelle : remplir ─── */
 
   async function fillWaterPoint(pin: MapPin) {
+    if (!assertRegularUser()) return
     if (!user) return
     setActionBusy(true)
     try {
@@ -2428,6 +2463,7 @@ export default function MapPage() {
   /* ─── eau naturelle : changer statut ─── */
 
   async function setWaterNaturalStatus(pin: MapPin, waterStatus: string) {
+    if (!assertRegularUser()) return
     if (!user) return
     setActionBusy(true)
     try {
@@ -2443,6 +2479,7 @@ export default function MapPage() {
   /* ─── batterie : vérifier ─── */
 
   async function checkBattery(pin: MapPin) {
+    if (!assertRegularUser()) return
     if (!user) return
     setActionBusy(true)
     try {
@@ -2461,6 +2498,7 @@ export default function MapPage() {
   /* ─── batterie : changer statut ─── */
 
   async function setBatteryStatus(pin: MapPin, status: string) {
+    if (!assertRegularUser()) return
     if (!user) return
     setActionBusy(true)
     try {
@@ -2480,6 +2518,7 @@ export default function MapPage() {
   /* ─── zone : changer occupants ─── */
 
   async function saveOccupants(pin: MapPin) {
+    if (!assertRegularUser()) return
     if (!user) return
     setActionBusy(true)
     try {
@@ -2599,6 +2638,7 @@ export default function MapPage() {
   }
 
   async function restoreSingleWire(enclosurePin: MapPin) {
+    if (!assertRegularUser()) return
     if (!user) return
     setActionBusy(true)
     try {
@@ -2615,6 +2655,7 @@ export default function MapPage() {
   }
 
   async function saveEnclosureAnimals(fenceId: string) {
+    if (!assertRegularUser()) return
     if (!user) return
     // Fermeture UI immédiate — pas d'attente perçue
     setEditEnclosureAnimals(false)

@@ -363,7 +363,7 @@ function HealthPanel({ animal, photos, isTemp, currentUid }: {
   const [perm, setPerm] = useState(true)
 
   async function addCondition() {
-    if (!label.trim() || !currentUid) return
+    if (!label.trim() || !currentUid || isTemp) return
     const cond: AnimalCondition = {
       id:           `cond_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       label:        label.trim(),
@@ -380,11 +380,13 @@ function HealthPanel({ animal, photos, isTemp, currentUid }: {
   }
 
   async function resolve(id: string) {
+    if (isTemp) return
     await updateDoc(doc(db, 'animals', animal.id), {
       conditions: conditions.map(c => c.id === id ? { ...c, resolvedAt: Date.now() } : c),
     } as never)
   }
   async function remove(id: string) {
+    if (isTemp) return
     if (!window.confirm('Supprimer définitivement cette condition ?')) return
     await updateDoc(doc(db, 'animals', animal.id), {
       conditions: conditions.filter(c => c.id !== id),
@@ -584,7 +586,7 @@ function CarePanel({ animal, careEntries, users, isTemp, currentUid }: {
   }
 
   async function repeat(e: AnimalCareEntry) {
-    if (!currentUid || !e.recurrenceDays) return
+    if (!currentUid || !e.recurrenceDays || isTemp) return
     const today = Date.now()
     await addDoc(collection(db, 'animal_care'), {
       animalId:       e.animalId,

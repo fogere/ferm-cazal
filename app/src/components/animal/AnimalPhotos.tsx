@@ -101,6 +101,7 @@ export default function AnimalPhotos({ animalId, photos, isTemp, currentUid }: P
   }
 
   async function toggleTag(p: AnimalPhoto, tag: string) {
+    if (isTemp) return // update animal_photos.tags réservé aux réguliers
     const existing = p.tags ?? []
     const has = existing.includes(tag)
     const next = has ? existing.filter(t => t !== tag) : [...existing, tag]
@@ -109,6 +110,7 @@ export default function AnimalPhotos({ animalId, photos, isTemp, currentUid }: P
   }
 
   async function addCustomTag(p: AnimalPhoto) {
+    if (isTemp) return // update animal_photos.tags réservé aux réguliers
     const t = tagDraft.trim().toLowerCase().replace(/\s+/g, '_')
     if (!t) return
     const existing = p.tags ?? []

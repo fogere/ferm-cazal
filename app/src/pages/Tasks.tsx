@@ -279,6 +279,8 @@ export default function Tasks() {
   }
 
   async function deleteTask(id: string) {
+    // Audit Nils 23/05/2026 : delete tasks réservé aux réguliers (rules Firestore).
+    if (isTemp) return
     setConfirmDeleteId(null)
     await deleteDoc(doc(db, 'tasks', id))
   }
@@ -291,6 +293,8 @@ export default function Tasks() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!form.title.trim() || !user) return
+    // Audit Nils 23/05/2026 : création task réservée aux réguliers (rules Firestore).
+    if (isTemp) return
     setSaving(true)
     try {
       // 3 modes :

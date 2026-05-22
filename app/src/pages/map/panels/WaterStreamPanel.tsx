@@ -12,9 +12,9 @@ import { useState } from 'react'
 import type { MapPin } from '../../../types'
 import { DetailRow } from './shared'
 
-// Copié à l'identique de Map.tsx pour rester behavior-preserving en S1.
-// ⚠ Bug existant : ce tableau est indexé 0-11 alors que streamActiveMonths
-// stocke 1-12 → MONTHS_FR[m] est décalé de 1. À fixer hors S1.
+// streamActiveMonths stocke 1-12 (janvier=1) alors que ce tableau est indexé
+// 0-11 → on convertit via -1. Bug fixé par Nils 23/05/2026 (off-by-one signalé
+// en commentaire depuis la refacto S1).
 const MONTHS_FR = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc']
 
 function newId(): string {
@@ -65,7 +65,7 @@ export function WaterStreamPanel({ pin, isTemp, actionBusy, onPatchAttenuations,
         value={`${points.length} points · ${isSeasonal ? 'Saisonnier' : 'Permanent'}`}
       />
       {isSeasonal && months.length > 0 && (
-        <DetailRow label="Mois actifs" value={months.map(m => MONTHS_FR[m]).join(', ')} />
+        <DetailRow label="Mois actifs" value={months.map(m => MONTHS_FR[m - 1]).join(', ')} />
       )}
 
       {/* Liste des atténuations existantes */}

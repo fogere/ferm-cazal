@@ -190,4 +190,51 @@ projet farm/
 
 ---
 
-*Dernière mise à jour : 21 mai 2026*
+## SESSION DU 22 MAI 2026 — fixes UX mode édition tracé (P1-P7 Nils)
+
+### Carte — détection de clic en mode édition (P1+P2)
+- Nouveau composant `FenceEditHitDetector` qui calcule la distance pixel du clic à chaque cible (poteau réel + "+" ghost) et la plus proche gagne (priorité Blender). Avant : priorité statique par z-index qui masquait systématiquement les "+" dans la zone de chevauchement des hitbox.
+- `EDIT_HITBOX_PX` bumpé de 44 → 60 px (cible plus confortable au doigt, sans conflit grâce au détecteur).
+- Ghosts "+" passent en `interactive={false}` → leurs clics traversent au map-level handler.
+
+### Carte — guard mode édition sur water_stream (P3)
+- Les segments `Polyline` water_stream gardés par `if (!anyModeActive)` (aligné avec landPlotPins). Avant : clic sur cours d'eau en mode édition → `setSelected(stream)` → l'utilisateur sortait du mode édition contre son gré.
+
+### Carte — diagnostic explicite quand le scindage espace échoue (P4)
+- Nouvelle fonction `diagnoseSplitFailure()` dans `services/map/polygon-split.ts` : retourne le land_plot avec le near-miss le plus informatif (priorité degenerate → same-edge → too-many → single).
+- Branchée dans `saveFence()` : si la clôture touche un espace mais ne le scinde pas, `confirm()` explique pourquoi et propose de créer la clôture par-dessus quand même. Avant : refus silencieux → "j'ai tout essayé, ça veut pas, je sais pas pourquoi".
+
+### Carte — fermeture explicite des clôtures en mode manuel (P5)
+- Nouveau `FENCE_CLOSE_RADIUS_PX = 24` (vs SNAP_RADIUS_PX = 44) : l'auto-fermeture exige désormais un tap franc sur le 1ᵉʳ poteau. Plus de fermeture accidentelle des petits parcs.
+- Nouveau bouton explicite **🔒 Fermer** dans le toolbar manuel quand ≥ 3 points (mirror du mode auto).
+- Tooltip "Terminer →" clarifié : *"clôture ouverte, en ligne"*.
+
+### Carte — rayon de sélection des fils plus serré (P6)
+- Nouveau `FENCE_SELECT_RADIUS_PX = 22` (vs 44) pour la proximité segment d'une clôture. Avant : cliquer en plein centre d'un enclos fermé tombait sur le fil. Les pins (eau, batterie, todo…) gardent leur rayon généreux de 44 px.
+
+### Carte — changer le fil sur une portion en mode édition (P7) — FEATURE
+- Nouvelle UX : en mode édition d'une clôture, tap sur 2 poteaux → portion sélectionnée (anneaux violets), bouton **🎨 Changer le fil**.
+- Modal de choix de preset → `applyPresetToRange()` écrit Firestore avec la même mécanique que `splitFence` (parent → `fillOnly` ou supprimé selon fermé/ouvert).
+- Remplace fonctionnellement le ciseau pour le cas le plus fréquent ("de ce poteau-ci à ce poteau-là, utilise tel fil"). Le ciseau reste accessible si on veut couper à un endroit précis (entre 2 poteaux).
+- Détails techniques :
+  - State : `editRangeStart`, `editRangeEnd`, `editRangePresetVisible`, `editRangeApplying`
+  - Visuel : `SELECTED_POST_RING_ICON` rendu par-dessus les poteaux sélectionnés (`interactive=false`, `zIndexOffset=150`)
+  - Indices auto-recalibrés quand un "+" est inséré (shift +1 sur les bornes > afterIdx). Invalidés (clear) quand un poteau est supprimé via dblclick.
+
+### Communication
+- 1 annonce broadcast publiée (id `2026-05-22-edition-trace-fixes`) résumant les 7 améliorations pour les utilisatrices.
+
+### Déploiement
+- 3 commits poussés sur main : `dc10580` (fixes P1-P7), `7998b20` (annonce). Pré-existant non poussé : `d294db2`.
+- Hosting déployé 2× (le-cazal.web.app). HTTP 200 confirmé post-deploy.
+
+### Restant prioritaire (inchangé)
+1. ~~Phase 2 cours d'eau (atténuation par segment)~~ — fait dans une session précédente
+2. ~~Refonte clôtures/espaces~~ — fait dans une session précédente (S2-S9)
+3. Migration des `water_natural` ponctuels existants → `water_stream` polyline (le user le fait à la main)
+4. Découpe de Map.tsx (5500+ lignes désormais) en sous-composants visuels
+5. `useLocationCore()` unifié pour remplacer les 3 `watchPosition()` parallèles
+
+---
+
+*Dernière mise à jour : 22 mai 2026 (soir)*

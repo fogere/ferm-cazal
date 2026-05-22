@@ -92,6 +92,11 @@ export default function BugReportButton() {
     posX: number; posY: number
     movedFar: boolean
   } | null>(null)
+  // Bug Eugénie 22/05/2026 : un drag doit empêcher le `onClick` qui suit
+  // d'ouvrir la modal. Avant on faisait preventDefault dans pointerUp mais
+  // ça ne suffisait pas dans tous les navigateurs. On utilise un ref qui
+  // bloque le prochain click et se reset auto.
+  const suppressNextClickRef = useRef(false)
 
   // Si on redimensionne, on garde le bouton dans l'écran
   useEffect(() => {
@@ -130,17 +135,26 @@ export default function BugReportButton() {
     dragStateRef.current = null
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* ignoré */ }
     if (s?.movedFar) {
-      // Drag terminé : on sauvegarde la position et on consomme l'event
+      // Drag terminé : on sauvegarde la position et on bloque le click qui suit
       try { localStorage.setItem(POS_KEY, JSON.stringify(pos)) } catch { /* ignoré */ }
       setDragging(false)
-      e.preventDefault()
-      // Empêche le onClick qui suivrait sur certains navigateurs
-      e.stopPropagation()
-    } else {
-      // Vrai clic : ouvre le modal
-      setOpen(true)
+      suppressNextClickRef.current = true
     }
+    // Note : on n'ouvre PAS la modal ici (bug Eugénie 22/05). Si on ouvrait
+    // dans pointerUp, React démontait le bouton avant que l'event `click`
+    // synthétique ne se dispatche, et celui-ci atterrissait alors sur le
+    // backdrop de la modal qui venait d'apparaître → re-fermeture immédiate.
+    // L'ouverture est faite dans onClick ci-dessous, qui fire APRÈS pointerUp
+    // sur le bouton encore monté.
   }, [pos])
+
+  const onClick = useCallback(() => {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false
+      return
+    }
+    setOpen(true)
+  }, [])
 
   const SR = getSpeechRecognition()
   const voiceAvailable = SR !== null
@@ -248,6 +262,7 @@ export default function BugReportButton() {
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onClick={onClick}
           aria-label="Signaler un bug (glisser pour déplacer)"
           className={`fixed z-[9000] w-12 h-12 rounded-full bg-danger text-white
                       shadow-2xl flex items-center justify-center select-none

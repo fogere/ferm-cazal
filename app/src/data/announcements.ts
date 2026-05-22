@@ -26,6 +26,31 @@ export interface Announcement {
 export const ANNOUNCEMENTS_READ_LS_KEY = 'fm_announcements_read'
 
 export const ANNOUNCEMENTS: Announcement[] = [
+  // ── 22/05/2026 (soir) — fixes UX mode édition (P1-P7 Nils) ──
+  {
+    id:        '2026-05-22-edition-trace-fixes',
+    title:     '✏️ Mode édition tracé — 7 améliorations',
+    forUser:   null,
+    createdAt: Date.parse('2026-05-22T18:00:00+02:00'),
+    body: `Salut tout le monde 👋
+
+Nils avait remonté plusieurs petits points qui rendaient le mode édition d'un tracé (clôture, espace, cours d'eau) pas hyper agréable. Tout est corrigé d'un coup :
+
+🎯 **Cibles plus précises** : quand un poteau et un "+" sont collés, c'est désormais celui dont ton doigt est le plus proche qui réagit (avant, le poteau gagnait toujours, même si tu visais le "+"). Hitbox des points augmentée pour viser plus facile.
+
+🛡️ **Édition isolée** : pendant que tu modifies un tracé, tu peux cliquer où tu veux sans risque — les pins (eau, batterie…) et les autres tracés ne te font plus sortir du mode.
+
+💬 **Découpage espace : message clair** : quand tu traces une clôture qui essaie de couper un espace en 2 mais que ça ne marche pas, l'appli t'explique POURQUOI (la clôture zigzage, les 2 bouts sont sur le même bord, etc.) au lieu de juste créer le tracé sans rien faire.
+
+📏 **Clôture ouverte sans pièges** : avant, dès que tu approchais ton tracé du 1er poteau, ça fermait tout seul même si tu voulais une ligne ouverte. Maintenant il faut taper franchement dessus. Et un nouveau bouton 🔒 Fermer apparaît dans la barre du haut quand tu as ≥ 3 points si tu veux fermer explicitement.
+
+🎯 **Clic au milieu d'un enclos** : ça ne tombe plus sur le fil de la clôture par erreur. Tu peux cliquer en plein centre sans rien sélectionner.
+
+🎨 **Changer le fil sur une portion (nouveau)** : en mode édition d'une clôture, tape 2 poteaux pour sélectionner la portion entre les deux (anneaux violets). Un bouton "🎨 Changer le fil" apparaît — choisis un type de fil et hop, cette portion change, le reste garde l'ancien. Plus besoin de passer par les ciseaux pour ce cas typique.
+
+C'est en ligne. Comme d'hab, si tu vois un truc bizarre, capture d'écran via le bouton 🐞.`,
+  },
+
   // ── 22/05/2026 — REFONTE clôtures vs espaces (S5 du plan, réponse complète) ──
   {
     id:        '2026-05-22-refonte-espaces-eugenie',

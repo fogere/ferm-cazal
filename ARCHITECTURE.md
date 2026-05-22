@@ -129,7 +129,7 @@ Toutes les interfaces Firestore. Lecture rapide recommandée avant toute évolut
 - `MapPin` (union `PinType`), `WaterPoint`, `Battery`
 - `EnclosureMovement` (historique pâturage)
 - `CustomSpecies`
-- `TempUser`, `TempAccessCode`
+- `TempAccessCode`
 
 ### Service worker (`app/src/sw.ts`)
 - **Workbox** : précache du shell + tuiles IGN/OSM (CacheFirst, cap 5 Go), météo (NetworkFirst).

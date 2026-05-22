@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Plus, X, Pencil, Check, Download,
-  Users, PawPrint, FileSpreadsheet, KeyRound, Copy, ClipboardCheck,
+  PawPrint, FileSpreadsheet, KeyRound, Copy, ClipboardCheck,
   Stethoscope, ChevronDown, ChevronRight, Calendar, Camera, Trash2,
 } from 'lucide-react'
 import { compressImage } from '../services/image'
@@ -15,7 +15,7 @@ import { useAuth, formatCode } from '../hooks/useAuth'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'
 import { getSpeciesInfo, listAllSpecies, slugifySpecies } from '../services/species'
 import { dateInputToTs, tsToDateInput } from '../services/map/time'
-import type { TempUser, TempAccessCode, Animal, AnimalSpecies, AnimalCareEntry, AnimalCareType, AnimalGender, AnimalCondition, AnimalPhoto, CustomSpecies, Reserve } from '../types'
+import type { TempAccessCode, Animal, AnimalSpecies, AnimalCareEntry, AnimalCareType, AnimalGender, AnimalCondition, AnimalPhoto, CustomSpecies, Reserve } from '../types'
 
 // Alias local pour ne pas avoir à renommer les ~30 appels existants
 const todayInputValue = tsToDateInput
@@ -143,11 +143,6 @@ export default function Admin() {
   const navigate = useNavigate()
   const { user } = useAuth()
 
-  /* Utilisateurs temporaires */
-  const [tempUsers,   setTempUsers]   = useState<TempUser[]>([])
-  const [newName,     setNewName]     = useState('')
-  const [addingUser,  setAddingUser]  = useState(false)
-
   /* Groupes animaux */
   const [groups,       setGroups]       = useState<AnimalGroup[]>(DEFAULT_GROUPS)
   const [editingGroup, setEditingGroup] = useState<number | null>(null)
@@ -224,16 +219,6 @@ export default function Admin() {
   const [creatingCode,   setCreatingCode]   = useState(false)
   const [lastCreated,    setLastCreated]    = useState<{ code: string; name: string } | null>(null)
   const [copiedCode,     setCopiedCode]     = useState(false)
-
-  /* Chargement tempUsers */
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'tempUsers'), snap => {
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as TempUser))
-      items.sort((a, b) => a.displayName.localeCompare(b.displayName, 'fr'))
-      setTempUsers(items)
-    })
-    return unsub
-  }, [])
 
   /* Chargement codes d'accès temporaires */
   useEffect(() => {
@@ -319,28 +304,6 @@ export default function Admin() {
     })
     return unsub
   }, [])
-
-  /* Actions tempUsers */
-
-  async function addTempUser() {
-    if (!newName.trim() || !user) return
-    await addDoc(collection(db, 'tempUsers'), {
-      displayName: newName.trim(),
-      active:      true,
-      addedBy:     user.uid,
-      addedAt:     Date.now(),
-    })
-    setNewName('')
-    setAddingUser(false)
-  }
-
-  async function toggleActive(tu: TempUser) {
-    await updateDoc(doc(db, 'tempUsers', tu.id), { active: !tu.active })
-  }
-
-  async function removeTempUser(id: string) {
-    await deleteDoc(doc(db, 'tempUsers', id))
-  }
 
   /* Actions animaux */
 
@@ -834,7 +797,7 @@ export default function Admin() {
       const collections = [
         'users', 'tasks', 'alerts', 'map_pins', 'animals',
         'animal_care', 'rainfall', 'reserves', 'enclosure_movements',
-        'pin_photos', 'tempUsers',
+        'pin_photos',
       ]
       const backup: Record<string, Record<string, unknown>[]> = {}
       for (const col of collections) {
@@ -883,94 +846,6 @@ export default function Admin() {
       </div>
 
       <div className="px-4 space-y-4 mt-2">
-
-        {/* ─── Utilisateurs temporaires ─── */}
-        {/* Bug Nils 22/05/2026 : section masquée — redondante avec les codes d'accès
-            temporaires plus bas qui créent déjà une aide occasionnelle réelle (avec login).
-            État conservé pour ne pas perdre les données Firestore existantes ;
-            si tu veux supprimer définitivement, retire les useState/useEffect tempUsers. */}
-        {false && (
-        <div className="bg-card rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Users size={16} className="text-forest" />
-              <p className="text-xs font-semibold text-muted uppercase tracking-wider">
-                Aide occasionnelle
-              </p>
-            </div>
-            {!addingUser && (
-              <button
-                onClick={() => setAddingUser(true)}
-                className="flex items-center gap-1 text-forest text-sm font-semibold active:opacity-70"
-              >
-                <Plus size={16} /> Ajouter
-              </button>
-            )}
-          </div>
-
-          {addingUser && (
-            <div className="flex gap-2 mb-3">
-              <input
-                value={newName}
-                onChange={e => setNewName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && addTempUser()}
-                placeholder="Prénom"
-                autoFocus
-                className="flex-1 border border-border rounded-xl px-3 py-2 text-sm bg-cream focus:outline-none focus:border-forest"
-              />
-              <button
-                onClick={addTempUser}
-                className="px-3 py-2 bg-forest text-white rounded-xl text-sm font-semibold active:opacity-80"
-              >
-                OK
-              </button>
-              <button
-                onClick={() => { setAddingUser(false); setNewName('') }}
-                className="px-3 py-2 text-muted rounded-xl text-sm border border-border active:bg-cream"
-              >
-                ✕
-              </button>
-            </div>
-          )}
-
-          {tempUsers.length === 0 ? (
-            <p className="text-muted text-sm py-3 text-center italic">
-              Aucune aide occasionnelle enregistrée
-            </p>
-          ) : (
-            <ul className="space-y-0.5">
-              {tempUsers.map(tu => (
-                <li key={tu.id} className="flex items-center gap-3 py-2.5 border-b border-border/40 last:border-0">
-                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${tu.active ? 'bg-meadow' : 'bg-border'}`} />
-                  <span className={`flex-1 text-sm font-medium ${tu.active ? 'text-charcoal' : 'text-muted line-through'}`}>
-                    {tu.displayName}
-                  </span>
-                  <button
-                    onClick={() => toggleActive(tu)}
-                    className={`text-xs px-2.5 py-1 rounded-lg font-semibold transition-colors ${
-                      tu.active
-                        ? 'bg-sun/15 text-earth active:bg-sun/30'
-                        : 'bg-meadow/15 text-meadow active:bg-meadow/30'
-                    }`}
-                  >
-                    {tu.active ? 'Désactiver' : 'Réactiver'}
-                  </button>
-                  <button
-                    onClick={() => removeTempUser(tu.id)}
-                    className="text-danger/50 active:text-danger p-1"
-                  >
-                    <X size={15} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <p className="text-xs text-muted mt-3 leading-relaxed">
-            Les personnes ajoutées ici apparaissent dans l'assignation des tâches mais ne reçoivent pas de notifications.
-          </p>
-        </div>
-        )}
 
         {/* ─── Groupes d'animaux ─── */}
         <div className="bg-card rounded-2xl p-4 shadow-sm">

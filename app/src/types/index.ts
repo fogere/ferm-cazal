@@ -294,14 +294,6 @@ export interface FermeAlert {
   refId?: string
 }
 
-export interface TempUser {
-  id: string
-  displayName: string
-  active: boolean
-  addedBy: string
-  addedAt: number
-}
-
 export interface TempAccessCode {
   id: string          // document ID = code normalisé (12 chars sans tirets)
   displayName: string // prénom de l'aide

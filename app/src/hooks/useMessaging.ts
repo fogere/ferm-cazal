@@ -16,6 +16,21 @@ export interface ToastMsg {
 let _nextId = 0
 
 /**
+ * Erreur "FCM indisponible sur ce navigateur" attendue (Chrome/Edge Windows
+ * sans connexion au push service de Google) — on la silence pour ne pas
+ * polluer les bug reports avec un signal connu (cf. announcements.ts:255).
+ *
+ * Bug Nils 23/05/2026 : ce warning apparaissait dans 15 bug reports sur 18 et
+ * masquait les vrais bugs en console. Désormais on log en `debug` (silencieux
+ * par défaut, visible avec un filtre dev) au lieu de `warn`.
+ */
+function isExpectedFcmUnavailable(err: unknown): boolean {
+  const name = (err as { name?: string })?.name
+  const msg  = (err as { message?: string })?.message ?? ''
+  return name === 'AbortError' || /push service error|Registration failed/i.test(msg)
+}
+
+/**
  * Tente d'obtenir un token FCM. Si `pushManager.subscribe()` plante avec
  * un `AbortError: Registration failed - push service error` (cas connu :
  * une vieille souscription incompatible traîne dans le SW), on nettoie la
@@ -30,21 +45,14 @@ async function getFcmTokenResilient(
   try {
     return await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration })
   } catch (err) {
-    const name = (err as { name?: string })?.name
-    const msg  = (err as { message?: string })?.message ?? ''
-    const isAbort = name === 'AbortError' || /push service error|Registration failed/i.test(msg)
-    if (!isAbort) throw err
+    if (!isExpectedFcmUnavailable(err)) throw err
 
-    // Nettoyage de la souscription incompatible puis retry
+    // Nettoyage de la souscription incompatible puis retry — silencieux.
+    // Le bug reporter capture aussi console.debug, donc on s'abstient.
     try {
       const old = await registration.pushManager.getSubscription()
-      if (old) {
-        console.warn('[FCM] AbortError — unsubscribe ancienne souscription puis retry')
-        await old.unsubscribe()
-      }
-    } catch (cleanupErr) {
-      console.warn('[FCM] Échec du nettoyage de la souscription :', cleanupErr)
-    }
+      if (old) await old.unsubscribe()
+    } catch { /* silent : navigateur sans push, cas attendu */ }
 
     // Petite pause pour laisser le push service se stabiliser
     await new Promise(r => setTimeout(r, 800))
@@ -82,13 +90,18 @@ export function useMessaging() {
         const token = await getFcmTokenResilient(messaging, VAPID!, registration)
         if (token && user && !cancelled) {
           await updateDoc(doc(db, 'users', user.uid), { fcmToken: token })
-        } else if (!token) {
-          console.warn('[FCM] Token vide — push probablement bloqué par le navigateur')
         }
+        // Token vide / impossible = cas attendu sur Chrome Windows sans push.
+        // On ne logge rien pour ne pas polluer les bug reports.
       } catch (err) {
-        const name = (err as { name?: string })?.name
-        const code = (err as { code?: string })?.code
-        console.warn(`[FCM] getToken a échoué (name=${name} code=${code}) :`, err)
+        // Bug Nils 23/05/2026 : silencieux sur les AbortError "FCM indispo"
+        // (15 bug reports sur 18 polluaient avant). On garde un warn pour les
+        // erreurs RÉELLES inattendues.
+        if (!isExpectedFcmUnavailable(err)) {
+          const name = (err as { name?: string })?.name
+          const code = (err as { code?: string })?.code
+          console.warn(`[FCM] getToken a échoué (name=${name} code=${code}) :`, err)
+        }
         // On laisse tokenAttempted=true : un bouton manuel dans Settings
         // permettra de retry quand l'utilisateur le décide.
       }
@@ -145,7 +158,10 @@ export async function registerFcmTokenManually(uid: string): Promise<boolean> {
     await updateDoc(doc(db, 'users', uid), { fcmToken: token })
     return true
   } catch (err) {
-    console.warn('[FCM] enregistrement manuel échoué :', err)
+    // Idem hook auto : silent sur les cas attendus, warn sur les vrais bugs.
+    if (!isExpectedFcmUnavailable(err)) {
+      console.warn('[FCM] enregistrement manuel échoué :', err)
+    }
     return false
   }
 }

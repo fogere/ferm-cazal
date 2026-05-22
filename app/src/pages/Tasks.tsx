@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
+import { timeAgo } from '../services/map/time'
 import type { Task, UserProfile } from '../types'
 
 /* ─── helpers ─── */
@@ -337,8 +338,16 @@ export default function Tasks() {
     const bkt   = getBucket(task.dueDate)
     const confirming = confirmDeleteId === task.id
 
+    // Bug Nils 22/05/2026 : visuel renforcé pour les tâches faites.
+    // - Bandeau vert clair en arrière-plan (au lieu du discret line-through seul)
+    // - Liseré meadow à gauche
+    // - "Fait il y a X min" sous le titre pour rappeler quand et par qui
+    const doneClass = task.completed
+      ? 'bg-meadow/5 border-l-4 border-meadow rounded-r-lg pl-2'
+      : ''
+
     return (
-      <li className="py-3 px-1">
+      <li className={`py-3 px-1 transition-colors ${doneClass}`}>
         {confirming ? (
           <div className="flex items-center gap-3">
             <Trash2 size={18} className="text-danger flex-shrink-0" />
@@ -376,6 +385,17 @@ export default function Tasks() {
               }`}>
                 {task.title}
               </p>
+
+              {/* Bug Nils 22/05/2026 : trace "fait" claire — quand et par qui.
+                  Visible pour TOUTES les tâches faites (broadcast ou non) en plus du badge. */}
+              {task.completed && task.completedAt && (
+                <p className="text-[11px] text-meadow font-semibold mt-0.5 flex items-center gap-1">
+                  <CheckCircle2 size={11} />
+                  Fait {timeAgo(task.completedAt).toLowerCase()}
+                  {task.completedBy && userById(task.completedBy)?.displayName &&
+                    ` · ${userById(task.completedBy)?.displayName}`}
+                </p>
+              )}
 
               {/* Badges meta */}
               <div className="flex items-center gap-1.5 mt-1 flex-wrap">

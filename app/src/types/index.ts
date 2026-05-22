@@ -212,7 +212,9 @@ export interface MapPin {
   //
   // Zones vides intérieures (donut polygon) : Eugénie 21/05 tip n°2 — un grand
   // parc peut contenir des bouts de terrain qui ne nous appartiennent pas.
-  holes?: Array<Array<{ lat: number; lng: number }>>
+  // Note Firestore : les tableaux imbriqués sont interdits — chaque hole est
+  // wrappé dans un objet { points } pour contourner cette limite (bug Nils 22/05).
+  holes?: Array<{ points: Array<{ lat: number; lng: number }> }>
   // Lien parent pour le scindage manuel d'un espace en sous-espaces avec une
   // clôture intérieure. Les sous-espaces partagent le même parentPlotId pour
   // que le calcul de la couleur d'herbe regroupe toute la surface d'origine.

@@ -57,7 +57,11 @@ export function LandPlotPanel(props: Props) {
   const points = pin.points ?? []
   const holes  = pin.holes  ?? []
   const isEnclosed = points.length >= 3
-  const areaM2 = isEnclosed ? polygonAreaSquareMeters({ outer: points, holes }) : 0
+  // Holes au format { points }[] côté stockage Firestore (bug Nils 22/05) → on
+  // déplie pour le helper interne qui attend Array<LatLng[]>.
+  const areaM2 = isEnclosed
+    ? polygonAreaSquareMeters({ outer: points, holes: holes.map(h => h.points) })
+    : 0
 
   return (
     <div className="mb-4 space-y-3">
@@ -105,7 +109,7 @@ export function LandPlotPanel(props: Props) {
               {holes.map((h, i) => (
                 <li key={i} className="flex items-center justify-between text-xs bg-white border border-border/40 rounded-lg px-2 py-1.5">
                   <span className="text-charcoal">
-                    Zone {i + 1} · {h.length} points
+                    Zone {i + 1} · {h.points.length} points
                   </span>
                   <button
                     onClick={() => props.onDeleteHole?.(pin, i)}

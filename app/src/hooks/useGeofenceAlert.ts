@@ -97,7 +97,9 @@ export function useGeofenceAlert() {
     const candidate = enclosuresRef.current.find(e =>
       pointInPolygonWithHoles(u.lat, u.lng, {
         outer: e.points ?? [],
-        holes: e.holes ?? [],
+        // Holes stockés en Array<{points}> côté Firestore (bug Nils 22/05) → on
+        // déplie pour le helper interne qui attend Array<LatLng[]>.
+        holes: (e.holes ?? []).map(h => h.points),
       }),
     )
     if (!candidate) {

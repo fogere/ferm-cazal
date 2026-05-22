@@ -319,7 +319,11 @@ function makeSnapIcon(isClose: boolean): L.DivIcon {
   })
 }
 
-const LABEL_ZOOM = 17
+const LABEL_ZOOM      = 17  // zoom haut : 1 ligne par animal (emoji + nom)
+const LABEL_ZOOM_MED  = 15  // zoom moyen : compteur compact "3 🐎 · 2 🫏"
+const LABEL_ZOOM_LOW  = 13  // zoom bas : juste un nombre total minuscule
+// Bug Nils 22/05/2026 : en-dessous de LABEL_ZOOM_LOW les labels sont masqués
+// pour éviter la surcharge visuelle ("trop d'emoji trop d'indication").
 
 function makeEnclosureLabelIcon(
   enclosureAnimals: Animal[],
@@ -336,8 +340,8 @@ function makeEnclosureLabelIcon(
       const { emoji } = getSpeciesInfo(a.species, customSpecies)
       return `<div style="font-size:10px;font-weight:600;white-space:nowrap;line-height:1.6;color:var(--color-charcoal)">${emoji} ${a.name}</div>`
     }).join('')
-  } else {
-    // Regroupement par espèce pour le mode zoom-out
+  } else if (zoom >= LABEL_ZOOM_MED) {
+    // Zoom moyen — comptage par espèce
     const counts = new Map<string, number>()
     for (const a of enclosureAnimals) counts.set(a.species, (counts.get(a.species) ?? 0) + 1)
     const parts: string[] = []
@@ -346,6 +350,10 @@ function makeEnclosureLabelIcon(
       parts.push(`${n} ${emoji}`)
     }
     inner = `<strong style="font-size:13px;white-space:nowrap;color:var(--color-charcoal)">${parts.join(' · ')}</strong>`
+  } else {
+    // Zoom bas — un seul petit chiffre, neutre. Évite l'empilement d'emojis sur
+    // la vue large (bug Nils 22/05).
+    inner = `<strong style="font-size:11px;color:var(--color-charcoal)">${enclosureAnimals.length}</strong>`
   }
 
   // Badge "rotation à prévoir" — orange à J-7, rouge à échéance dépassée.
@@ -514,18 +522,23 @@ function MapClickCapture({
 
   useMapEvents({
     mousemove(e) {
-      if (!fenceActive) return
+      // Bug Nils 22/05/2026 : snap bidirectionnel — il opère désormais aussi
+      // pendant le tracé d'un espace (land_plot) sur les sommets des clôtures
+      // ET des autres land_plots existants. Avant : seul fenceActive snappait.
+      if (!fenceActive && !plotActive) return
       const movePx = map.latLngToContainerPoint(e.latlng)
       let best: { lat: number; lng: number; isClose: boolean } | null = null
       let bestDist = SNAP_RADIUS_PX
 
-      // Premier point de la clôture courante (fermeture) — rayon serré
-      // (FENCE_CLOSE_RADIUS_PX) pour ne plus fermer accidentellement les
-      // petits parcs (P5, Nils 22/05/2026).
-      if (fenceFirstPoint) {
-        const fp = map.latLngToContainerPoint(L.latLng(fenceFirstPoint.lat, fenceFirstPoint.lng))
+      // Premier point du tracé courant (fermeture) — rayon serré.
+      // - fence  : utilise FENCE_CLOSE_RADIUS_PX (P5, Nils 22/05/2026)
+      // - plot   : utilise SNAP_RADIUS_PX par défaut (déjà cohérent avec onClick)
+      const firstPoint = fenceActive ? fenceFirstPoint : plotFirstPoint
+      const closeRadius = fenceActive ? FENCE_CLOSE_RADIUS_PX : SNAP_RADIUS_PX
+      if (firstPoint) {
+        const fp = map.latLngToContainerPoint(L.latLng(firstPoint.lat, firstPoint.lng))
         const d  = Math.hypot(movePx.x - fp.x, movePx.y - fp.y)
-        if (d < FENCE_CLOSE_RADIUS_PX) { bestDist = d; best = { ...fenceFirstPoint, isClose: true } }
+        if (d < closeRadius) { bestDist = d; best = { ...firstPoint, isClose: true } }
       }
       // Points existants des clôtures sauvegardées
       for (const pin of fencePins) {
@@ -545,8 +558,8 @@ function MapClickCapture({
           if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng, isClose: false } }
         }
         // Points des holes (zones vides intérieures)
-        for (const hole of pin.holes ?? []) {
-          for (const v of hole) {
+        for (const h of pin.holes ?? []) {
+          for (const v of h.points) {
             const vp = map.latLngToContainerPoint(L.latLng(v.lat, v.lng))
             const d  = Math.hypot(movePx.x - vp.x, movePx.y - vp.y)
             if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng, isClose: false } }
@@ -556,7 +569,7 @@ function MapClickCapture({
       onSnapHover(best)
     },
     mouseout() {
-      if (fenceActive) onSnapHover(null)
+      if (fenceActive || plotActive) onSnapHover(null)
     },
     click(e) {
       // ── Mode pointer (curseur partagé) : envoie la position aux autres ──
@@ -570,10 +583,14 @@ function MapClickCapture({
         return
       }
       // ── Mode "Définir un espace" (land_plot) : accumule des points,
-      //    ferme automatiquement si on retouche le premier point (≥ 3 points). ──
+      //    ferme automatiquement si on retouche le premier point (≥ 3 points).
+      //    Bug Nils 22/05/2026 : snap bidirectionnel — un tap proche d'un sommet
+      //    de clôture (ou d'un autre land_plot) se cale dessus pour assurer la
+      //    continuité géométrique entre l'espace et les clôtures qui l'entourent. ──
       if (plotActive) {
+        const clickPx = map.latLngToContainerPoint(e.latlng)
+        // 1. fermeture sur le 1er point ?
         if (plotFirstPoint) {
-          const clickPx = map.latLngToContainerPoint(e.latlng)
           const firstPx = map.latLngToContainerPoint(L.latLng(plotFirstPoint.lat, plotFirstPoint.lng))
           const d = Math.hypot(clickPx.x - firstPx.x, clickPx.y - firstPx.y)
           if (d < SNAP_RADIUS_PX) {
@@ -581,7 +598,29 @@ function MapClickCapture({
             return
           }
         }
-        onPlotPoint(e.latlng.lat, e.latlng.lng)
+        // 2. snap sur le sommet le plus proche (fence vertices + autres land_plots)
+        let snap: { lat: number; lng: number } | null = null
+        let bestDist = SNAP_RADIUS_PX
+        for (const pin of fencePins) {
+          for (const v of pin.points ?? []) {
+            const vp = map.latLngToContainerPoint(L.latLng(v.lat, v.lng))
+            const d  = Math.hypot(clickPx.x - vp.x, clickPx.y - vp.y)
+            if (d < bestDist) { bestDist = d; snap = { lat: v.lat, lng: v.lng } }
+          }
+        }
+        for (const pin of allPins) {
+          if (pin.type !== 'land_plot') continue
+          for (const v of pin.points ?? []) {
+            const vp = map.latLngToContainerPoint(L.latLng(v.lat, v.lng))
+            const d  = Math.hypot(clickPx.x - vp.x, clickPx.y - vp.y)
+            if (d < bestDist) { bestDist = d; snap = { lat: v.lat, lng: v.lng } }
+          }
+        }
+        if (snap) {
+          onPlotPoint(snap.lat, snap.lng)
+        } else {
+          onPlotPoint(e.latlng.lat, e.latlng.lng)
+        }
         return
       }
       // ── Mode "+ Zone vide intérieure" (hole d'un land_plot) ──
@@ -676,8 +715,8 @@ function MapClickCapture({
             const d  = Math.hypot(clickPx.x - vp.x, clickPx.y - vp.y)
             if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng, isClose: false } }
           }
-          for (const hole of pin.holes ?? []) {
-            for (const v of hole) {
+          for (const h of pin.holes ?? []) {
+            for (const v of h.points) {
               const vp = map.latLngToContainerPoint(L.latLng(v.lat, v.lng))
               const d  = Math.hypot(clickPx.x - vp.x, clickPx.y - vp.y)
               if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng, isClose: false } }
@@ -753,54 +792,68 @@ function MapClickCapture({
  * fait rien (le Marker gère).
  */
 function FenceEditHitDetector({
-  editPin, points, isClosed, hasDup, onInsert, onRealClick,
+  editPin, points, isClosed, hasDup, mode, onInsert, onRealClick, onRemove,
 }: {
   editPin: MapPin | null
   points: { lat: number; lng: number }[]
   isClosed: boolean
   hasDup: boolean
+  /** Bug Nils #4+#7 22/05/2026 — un seul comportement par tap selon le mode. */
+  mode: 'move' | 'add' | 'delete' | 'cut'
   onInsert: (afterIdx: number) => void
   onRealClick: (idx: number) => void
+  onRemove: (idx: number) => void
 }) {
   const map = useMap()
   useMapEvents({
     click(e) {
       if (!editPin || points.length < 2) return
-      const clickPx = map.latLngToContainerPoint(e.latlng)
-      let bestDist  = EDIT_HITBOX_PX
-      let bestKind: 'real' | 'mid' | null = null
-      let bestMidIdx  = -1
-      let bestRealIdx = -1
+      // En mode 'move', le tap simple ne fait RIEN. Le drag des markers gère
+      // lui-même le déplacement (cf. eventHandlers.dragend). On élimine ainsi
+      // toute sélection accidentelle qui agaçait Nils (#7 problème 1).
+      if (mode === 'move') return
 
-      // 1. Poteaux réels (skip doublon final pour les fences fermés)
+      const clickPx = map.latLngToContainerPoint(e.latlng)
+
+      // Mode 'add' : on cherche UNIQUEMENT les segments (= mid-dots "+").
+      // Les poteaux réels sont volontairement ignorés — c'est cohérent : pour
+      // ajouter on doit cliquer ENTRE des poteaux. Plus de winner-takes-all
+      // qui empêchait le "+" de répondre quand on était proche d'un poteau.
+      if (mode === 'add') {
+        let bestDist = EDIT_HITBOX_PX
+        let bestMidIdx = -1
+        for (let i = 0; i < points.length - 1; i++) {
+          if (hasDup && i === points.length - 2) continue
+          const a = points[i], b = points[i + 1]
+          const px = map.latLngToContainerPoint(L.latLng((a.lat + b.lat) / 2, (a.lng + b.lng) / 2))
+          const d  = Math.hypot(clickPx.x - px.x, clickPx.y - px.y)
+          if (d < bestDist) { bestDist = d; bestMidIdx = i }
+        }
+        // Mid-dot de fermeture (polygon land_plot sans doublon : segment dernier → premier)
+        if (isClosed && !hasDup && points.length >= 2) {
+          const last  = points[points.length - 1]
+          const first = points[0]
+          const px = map.latLngToContainerPoint(L.latLng((last.lat + first.lat) / 2, (last.lng + first.lng) / 2))
+          const d  = Math.hypot(clickPx.x - px.x, clickPx.y - px.y)
+          if (d < bestDist) { bestDist = d; bestMidIdx = points.length - 1 }
+        }
+        if (bestMidIdx >= 0) onInsert(bestMidIdx)
+        return
+      }
+
+      // Modes 'delete' et 'cut' : on cherche UNIQUEMENT les poteaux réels.
+      // Pas d'ambiguïté possible avec les "+" qui n'existent pas dans ces modes.
+      let bestDist = EDIT_HITBOX_PX
+      let bestRealIdx = -1
       for (let i = 0; i < points.length; i++) {
         if (hasDup && i === points.length - 1) continue
         const px = map.latLngToContainerPoint(L.latLng(points[i].lat, points[i].lng))
         const d  = Math.hypot(clickPx.x - px.x, clickPx.y - px.y)
-        if (d < bestDist) { bestDist = d; bestKind = 'real'; bestRealIdx = i }
+        if (d < bestDist) { bestDist = d; bestRealIdx = i }
       }
-
-      // 2. "+" intermédiaires entre points[i] et points[i+1]
-      for (let i = 0; i < points.length - 1; i++) {
-        if (hasDup && i === points.length - 2) continue
-        const a = points[i], b = points[i + 1]
-        const px = map.latLngToContainerPoint(L.latLng((a.lat + b.lat) / 2, (a.lng + b.lng) / 2))
-        const d  = Math.hypot(clickPx.x - px.x, clickPx.y - px.y)
-        if (d < bestDist) { bestDist = d; bestKind = 'mid'; bestMidIdx = i }
-      }
-
-      // 3. "+" de fermeture (land_plot fermé sans doublon : segment dernier → premier)
-      if (isClosed && !hasDup && points.length >= 2) {
-        const last  = points[points.length - 1]
-        const first = points[0]
-        const px = map.latLngToContainerPoint(L.latLng((last.lat + first.lat) / 2, (last.lng + first.lng) / 2))
-        const d  = Math.hypot(clickPx.x - px.x, clickPx.y - px.y)
-        if (d < bestDist) { bestDist = d; bestKind = 'mid'; bestMidIdx = points.length - 1 }
-      }
-
-      if (bestKind === 'mid' && bestMidIdx >= 0) onInsert(bestMidIdx)
-      else if (bestKind === 'real' && bestRealIdx >= 0) onRealClick(bestRealIdx)
-      // aucun → no-op
+      if (bestRealIdx < 0) return
+      if (mode === 'delete') onRemove(bestRealIdx)
+      else if (mode === 'cut') onRealClick(bestRealIdx)
     },
   })
   return null
@@ -972,10 +1025,15 @@ export default function MapPage() {
 
   /* Édition d'une clôture existante : drag des poteaux pour corriger le tracé.
      fenceEditPin = pin en cours d'édition (null = hors mode).
-     fenceEditPoints = copie de travail des points (commit Firestore au "Valider"). */
+     fenceEditPoints = copie de travail des points (commit Firestore au "Valider").
+     Bugs Nils #4+#7 22/05/2026 — refonte UX : un seul comportement par tap selon
+     le mode actif (toolbar). Avant on superposait drag + range select + "+"
+     intermédiaires sur le même tap → confusion + sélection accidentelle. */
   const [fenceEditPin,    setFenceEditPin]    = useState<MapPin | null>(null)
   const [fenceEditPoints, setFenceEditPoints] = useState<{ lat: number; lng: number }[]>([])
   const [fenceEditSaving, setFenceEditSaving] = useState(false)
+  type EditMode = 'move' | 'add' | 'delete' | 'cut'
+  const [editMode, setEditMode] = useState<EditMode>('move')
 
   // P7 (Nils 22/05/2026) : sélection d'une portion entre 2 poteaux dans le
   // mode édition. Permet de changer le fil utilisé sur cette portion sans
@@ -1387,6 +1445,7 @@ export default function MapPage() {
     }
     setFenceEditPin(pin)
     setFenceEditPoints(pin.points.map(p => ({ ...p })))
+    setEditMode('move') // mode par défaut : déplacer
     // Ferme les autres panneaux pour libérer la carte
     setSelected(null)
     setEditOccupants(false)
@@ -1398,6 +1457,7 @@ export default function MapPage() {
     setFenceEditPoints([])
     setEditRangeStart(null)
     setEditRangeEnd(null)
+    setEditMode('move')
   }
 
   // Déplace le point #idx vers (lat, lng). Si le polygone est fermé
@@ -2594,11 +2654,16 @@ export default function MapPage() {
     && (p.points?.length ?? 0) >= 3
     && !p.inactive,
   )
-  const nonFencePins = pins.filter(p =>
-    p.type !== 'fence'
-    && p.type !== 'land_plot'  // les land_plots ne sont jamais des Markers
-    || (p.type === 'fence' && (p.points?.length ?? 0) < 2)
-  )
+  const nonFencePins = pins.filter(p => {
+    // Bug Nils 22/05/2026 : pas d'épingle 🏞️ pour les water_stream tracés —
+    // l'utilisateur veut juste voir le fil d'eau, sans la bulle emoji qui
+    // surcharge le visuel. On retombe sur l'épingle pour les streams orphelins
+    // (sans points — incident de saisie) pour qu'ils restent sélectionnables.
+    if (p.type === 'water_stream' && (p.points?.length ?? 0) >= 2) return false
+    if (p.type === 'fence' && (p.points?.length ?? 0) >= 2)        return false
+    if (p.type === 'land_plot')                                     return false  // jamais des Markers
+    return true
+  })
   // P3 : pendant l'édition d'un tracé (fenceEditPin actif), on ne veut AUCUNE
   // interaction avec les autres pins de la carte — l'utilisatrice se concentre
   // uniquement sur ses points. Inclus dans anyModeActive pour désactiver tous
@@ -2630,7 +2695,21 @@ export default function MapPage() {
 
   function getFencePathOptions(pin: MapPin): L.PolylineOptions {
     const preset = fencePresets.find(p => p.id === pin.presetId)
-    return getFenceVisualState(pin, preset, pins)
+    const base = getFenceVisualState(pin, preset, pins)
+    // Bug Nils 22/05/2026 : animation "le courant circule" quand la clôture est
+    // électrique, sous tension, alimentée par une batterie ALLUMÉE — et qu'on
+    // est zoomé suffisamment pour la voir sans alourdir l'UX en vue large.
+    const isElectric = preset?.wireStyle === 'electric'
+    const intensity  = pin.electricityIntensity ?? 'full'
+    const battery    = pin.connectedBatteryId
+      ? pins.find(p => p.id === pin.connectedBatteryId)
+      : null
+    const isPowered  = isElectric && intensity !== 'off'
+      && (!pin.connectedBatteryId || (battery && battery.powerOn !== false))
+    if (isPowered && mapZoom >= LABEL_ZOOM_MED) {
+      return { ...base, dashArray: '10 6', className: 'fence-electric-flow' }
+    }
+    return base
   }
 
   /* ─── render ─── */
@@ -2726,7 +2805,9 @@ export default function MapPage() {
             if (holePoints.length < 3 || !holePlotId || !user) return
             const plot = pins.find(p => p.id === holePlotId)
             if (!plot) return
-            const nextHoles = [...(plot.holes ?? []), holePoints]
+            // Firestore interdit les tableaux imbriqués → on wrappe chaque hole
+            // dans un objet { points } (bug Nils 22/05).
+            const nextHoles = [...(plot.holes ?? []), { points: holePoints }]
             try {
               await updateDoc(doc(db, 'map_pins', holePlotId), {
                 holes:     nextHoles,
@@ -2766,8 +2847,10 @@ export default function MapPage() {
           points={fenceEditPoints}
           isClosed={fenceEditPin ? isEditPinClosed(fenceEditPin) : false}
           hasDup={fenceEditPin ? hasDuplicateLastPoint(fenceEditPin) : false}
+          mode={editMode}
           onInsert={insertEditPoint}
           onRealClick={handleEditPostClick}
+          onRemove={removeEditPoint}
         />
         <FlyHome trigger={flyTrigger} />
         <FlyToTarget target={flyTarget} />
@@ -2787,8 +2870,8 @@ export default function MapPage() {
           const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
           const outer = pin.points!.map(p => [p.lat, p.lng] as [number, number])
           const holesPos = (pin.holes ?? [])
-            .filter(h => h.length >= 3)
-            .map(h => h.map(p => [p.lat, p.lng] as [number, number]))
+            .filter(h => h.points.length >= 3)
+            .map(h => h.points.map(p => [p.lat, p.lng] as [number, number]))
           // Leaflet : positions[0] = outer, positions[1..n] = holes
           const positions = holesPos.length > 0 ? [outer, ...holesPos] : outer
           // S9 : le fill couleur d'herbe (algo vert → jaune selon fraîcheur du
@@ -2835,7 +2918,14 @@ export default function MapPage() {
             S9 : les labels appartiennent désormais aux land_plot, pas aux fences fermés.
             Bug Eugénie 20/05/2026 : ne pas afficher "Vide" en vue large — ça surcharge la carte. */}
         {landPlotPins
-          .filter(pin => mapZoom >= LABEL_ZOOM || animals.some(a => a.enclosureId === pin.id))
+          // Bug Nils 22/05/2026 : on cache complètement les labels en vue très large
+          // pour éviter le brouillon d'emojis empilés. En vue moyenne, on garde
+          // uniquement les enclos avec animaux.
+          .filter(pin => {
+            if (mapZoom < LABEL_ZOOM_LOW) return false
+            if (mapZoom >= LABEL_ZOOM)    return true
+            return animals.some(a => a.enclosureId === pin.id)
+          })
           .map(pin => {
             const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
             const labelPos = pin.points ? insidePolygonCentroid(pin.points) : { lat: pin.lat, lng: pin.lng }
@@ -2984,24 +3074,33 @@ export default function MapPage() {
             (Phase 2 demande Eugénie 21/05/2026). */}
         {pins.filter(p => p.type === 'water_stream' && (p.points?.length ?? 0) >= 2).flatMap(pin => {
           const segments = getStreamSegments(pin, new Date().getMonth() + 1)
-          return segments.map(seg => (
+          // Bug Nils 22/05/2026 : hitbox élargie pour la sélection — un trait
+          // invisible (opacity 0) plus épais doublé du trait visuel donne au doigt
+          // une cible facile à toucher sur mobile. Le visuel garde son weight d'origine.
+          const allPositions = (pin.points ?? []).map(p => [p.lat, p.lng] as [number, number])
+          return [
             <Polyline
-              key={`${pin.id}-seg-${seg.fromIndex}`}
-              positions={[[seg.a.lat, seg.a.lng], [seg.b.lat, seg.b.lng]] as Array<[number, number]>}
-              pathOptions={{
-                color:     seg.color,
-                weight:    seg.weight,
-                opacity:   seg.opacity,
-                dashArray: seg.dashArray,
-              }}
+              key={`${pin.id}-hit`}
+              positions={allPositions}
+              pathOptions={{ color: '#000', weight: 22, opacity: 0 }}
               eventHandlers={{
-                // P3 (Nils 22/05/2026) : aligné sur landPlotPins — pendant un
-                // mode actif (édition d'un tracé, ajout, etc.), pas de
-                // sélection d'autre pin pour ne pas casser la concentration.
                 click: () => { if (!anyModeActive) setSelected(pin) },
               }}
-            />
-          ))
+            />,
+            ...segments.map(seg => (
+              <Polyline
+                key={`${pin.id}-seg-${seg.fromIndex}`}
+                positions={[[seg.a.lat, seg.a.lng], [seg.b.lat, seg.b.lng]] as Array<[number, number]>}
+                pathOptions={{
+                  color:     seg.color,
+                  weight:    seg.weight,
+                  opacity:   seg.opacity,
+                  dashArray: seg.dashArray,
+                }}
+                interactive={false}
+              />
+            )),
+          ]
         })}
 
         {/* ── Édition d'une clôture existante : aperçu live + markers draggables ── */}
@@ -3040,32 +3139,32 @@ export default function MapPage() {
                 // Cache le doublon final UNIQUEMENT pour les fences fermés
                 // (land_plot stocke sans doublon, water_stream est ouvert).
                 if (editHasDup && i === fenceEditPoints.length - 1) return null
+                // Bug Nils #7 22/05/2026 : drag uniquement en mode 'move'. Dans les
+                // autres modes, le tap est interprété par FenceEditHitDetector.
+                const canDrag = editMode === 'move'
                 return (
                   <Marker
                     key={`edit-${i}`}
                     position={[p.lat, p.lng]}
                     icon={i === 0 ? FENCE_FIRST_DOT_ICON : FENCE_DOT_ICON}
-                    draggable={true}
+                    draggable={canDrag}
                     // P2 : vrais poteaux au-dessus des ghosts (mid-dots) en cas
                     // de chevauchement hitbox → le doigt tape sur le poteau réel.
                     zIndexOffset={200}
-                    eventHandlers={{
+                    eventHandlers={canDrag ? {
                       dragend: (e) => {
                         const ll = e.target.getLatLng()
                         dragEditPoint(i, ll.lat, ll.lng)
                       },
-                      dblclick: () => removeEditPoint(i),
-                    }}
+                    } : {}}
                   />
                 )
               })}
 
-              {/* P7 : anneaux violets sur les poteaux inclus dans la portion
-                  sélectionnée (start, end, et tous ceux entre les deux pour
-                  une fence ouverte ; pour une fence fermée on prend le chemin
-                  le plus court). Le rendu est passif (interactive=false) :
-                  les clics passent au poteau sous-jacent puis au détecteur. */}
-              {fenceEditPoints.map((p, i) => {
+              {/* Anneaux violets de sélection portion — visibles uniquement en
+                  mode 'cut' (refonte #4+#7 22/05/2026 : la sélection range n'est
+                  plus active en parallèle des autres modes). */}
+              {editMode === 'cut' && fenceEditPoints.map((p, i) => {
                 if (editHasDup && i === fenceEditPoints.length - 1) return null
                 const inRange = (() => {
                   if (editRangeStart === null) return false
@@ -3086,12 +3185,11 @@ export default function MapPage() {
                 )
               })}
 
-              {/* Markers ghost au milieu de chaque segment : tap pour insérer un point.
-                  Pour land_plot fermé (sans doublon), on AJOUTE un ghost entre dernier et premier
-                  pour permettre l'insertion sur le segment de fermeture invisible.
-                  P1+P2 (Nils 22/05/2026) : non-interactifs côté Marker — l'insertion est
-                  déclenchée par FenceEditHitDetector (priorité Blender à la proximité). */}
-              {fenceEditPoints.map((p, i) => {
+              {/* Markers ghost "+" au milieu de chaque segment — visibles
+                  uniquement en mode 'add' (refonte #4+#7 : avant ils
+                  encombraient la carte tout le temps et entraient en conflit
+                  avec les poteaux réels selon Nils). */}
+              {editMode === 'add' && fenceEditPoints.map((p, i) => {
                 const next = fenceEditPoints[i + 1]
                 if (!next) return null
                 // Fence fermé : le dernier segment colle (doublon), on skippe l'intermédiaire
@@ -3107,7 +3205,7 @@ export default function MapPage() {
                 )
               })}
               {/* Ghost de fermeture pour land_plot : segment dernier ↔ premier */}
-              {editPolygon && !editHasDup && fenceEditPoints.length >= 2 && (() => {
+              {editMode === 'add' && editPolygon && !editHasDup && fenceEditPoints.length >= 2 && (() => {
                 const last  = fenceEditPoints[fenceEditPoints.length - 1]
                 const first = fenceEditPoints[0]
                 const mid   = { lat: (last.lat + first.lat) / 2, lng: (last.lng + first.lng) / 2 }
@@ -3495,8 +3593,21 @@ export default function MapPage() {
         </div>
       )}
 
-      {/* ── Barre d'outils édition d'une clôture existante ── */}
-      {fenceEditPin && (
+      {/* ── Barre d'outils édition d'une clôture existante ──
+          Refonte #4+#7 22/05/2026 : modes explicites (un seul comportement
+          par tap selon le mode actif). Avant on superposait drag + range
+          select + insert sur le même tap → confusion + sélection accidentelle. */}
+      {fenceEditPin && (() => {
+        const modes: Array<{ id: EditMode; icon: string; label: string; hint: string }> = [
+          { id: 'move',   icon: '✋', label: 'Déplacer',  hint: 'Glisse un poteau pour le repositionner.' },
+          { id: 'add',    icon: '➕', label: 'Ajouter',   hint: 'Touche entre 2 poteaux pour en insérer un nouveau.' },
+          { id: 'delete', icon: '✖',  label: 'Supprimer', hint: 'Touche un poteau pour le retirer.' },
+          { id: 'cut',    icon: '✂',  label: 'Découper',  hint: 'Touche 2 poteaux pour sélectionner la portion entre les deux.' },
+        ]
+        // Le mode 'cut' n'a de sens que sur les fences (changement de fil sur portion).
+        const visibleModes = fenceEditPin.type === 'fence' ? modes : modes.filter(m => m.id !== 'cut')
+        const activeMode = visibleModes.find(m => m.id === editMode) ?? visibleModes[0]
+        return (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] w-[92vw] max-w-md
                         text-white rounded-2xl shadow-xl px-4 py-3 space-y-2.5"
              style={{ backgroundColor: fenceEditPin.presetColor ?? '#EA580C' }}>
@@ -3515,17 +3626,41 @@ export default function MapPage() {
               <X size={14} />
             </button>
           </div>
-          <p className="text-[11px] opacity-90 leading-snug">
-            <strong>Glisse</strong> un poteau pour le repositionner.
-            <strong> Touche un + vert</strong> entre 2 poteaux pour en insérer un nouveau.
-            <strong> Double-tap</strong> sur un poteau pour le supprimer.
-            <strong> Tape 2 poteaux</strong> pour sélectionner la portion entre les deux et lui changer le fil.
+
+          {/* Toolbar modes — choisis-en un, le tap fait UNE seule chose à la fois */}
+          <div className="grid grid-cols-4 gap-1.5">
+            {visibleModes.map(m => {
+              const active = m.id === editMode
+              return (
+                <button
+                  key={m.id}
+                  onClick={() => {
+                    setEditMode(m.id)
+                    // En sortant du mode cut on nettoie la sélection range
+                    if (m.id !== 'cut') { setEditRangeStart(null); setEditRangeEnd(null) }
+                  }}
+                  className={`py-2 px-1 rounded-lg text-[11px] font-bold transition-all flex flex-col items-center gap-0.5 ${
+                    active
+                      ? 'bg-white text-charcoal shadow-md'
+                      : 'bg-white/15 text-white active:bg-white/25'
+                  }`}
+                >
+                  <span className="text-base leading-none">{m.icon}</span>
+                  <span>{m.label}</span>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Description courte du mode actif */}
+          <p className="text-[11px] opacity-95 leading-snug bg-white/10 rounded-lg px-2 py-1.5">
+            {activeMode.hint}
           </p>
-          {/* P7 (Nils 22/05/2026) : panneau sélection portion + action de
-              changement de fil. Apparaît quand l'utilisatrice a tapé au moins
-              un poteau ; le bouton "Changer le fil" est actif quand les 2
-              bornes sont définies. */}
-          {(editRangeStart !== null) && fenceEditPin?.type === 'fence' && (() => {
+
+          {/* Sélection portion (mode 'cut' uniquement) + action de changement
+              de fil. Apparaît quand l'utilisatrice a tapé au moins un poteau ;
+              le bouton "Changer le fil" est actif quand les 2 bornes sont définies. */}
+          {editMode === 'cut' && (editRangeStart !== null) && fenceEditPin?.type === 'fence' && (() => {
             const completeRange = editRangeOrdered !== null
             const count = completeRange ? (editRangeOrdered.iB - editRangeOrdered.iA + 1) : 1
             return (
@@ -3573,7 +3708,8 @@ export default function MapPage() {
             </button>
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {/* ── Prompt : snap vers un poteau existant ── */}
       {autoState === 'snap-prompt' && autoSnapCandidate && autoPendingPoint && (
@@ -3776,6 +3912,11 @@ export default function MapPage() {
             <Pencil size={18} />
             <span className="text-sm font-semibold">Clôture</span>
           </button>
+          {/* Bug Nils #4 22/05/2026 : bouton "Couper" global masqué — l'action
+              "découper une portion" est désormais accessible via le mode 'cut'
+              dans l'édition unifiée du tracé. État conservé pour rollback
+              éventuel (scissorMode et code associé encore en place). */}
+          {false && (
           <button
             onClick={() => {
               setScissorMode(true)
@@ -3788,6 +3929,7 @@ export default function MapPage() {
             <Scissors size={18} />
             <span className="text-sm font-semibold">Couper</span>
           </button>
+          )}
           {/* Bouton cours d'eau — bug Eugénie 21/05/2026 V2 */}
           <button
             onClick={() => { setStreamMode(true); setStreamPoints([]) }}
@@ -4984,6 +5126,16 @@ export default function MapPage() {
                 <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: selectedPreset.color }} />
                 <span className="text-sm font-semibold" style={{ color: selectedPreset.color }}>
                   {selectedPreset.name}
+                </span>
+              </div>
+            )}
+            {/* Bug Nils 22/05/2026 : marquer clairement les clôtures sous tension. */}
+            {selectedPreset?.wireStyle === 'electric' && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-xl mb-3 bg-yellow-100 border border-yellow-300">
+                <span className="text-lg">⚡</span>
+                <span className="text-xs text-yellow-900 font-semibold">
+                  Clôture électrique — relie-la à une batterie depuis le panneau
+                  après création pour visualiser l'alimentation.
                 </span>
               </div>
             )}

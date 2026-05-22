@@ -346,23 +346,42 @@ export function EnclosurePlacementPanel(props: Props) {
                   Aucun mouvement enregistré pour cet enclos.
                 </p>
               ) : (
-                <ul className="space-y-1.5 max-h-64 overflow-y-auto">
+                <ul className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {/* Bug Nils 22/05/2026 : on rend l'historique plus lisible —
+                      date+heure exactes, parc d'origine ET parc destination affichés
+                      explicitement (au lieu d'être cachés en italique gris). */}
                   {enclosureHistory.slice(0, 30).map(m => {
                     const cameIn = m.toEnclosureId === encId
                     const author = users.find(u => u.uid === m.movedBy)?.displayName ?? '—'
-                    const date   = new Date(m.movedAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
+                    const d = new Date(m.movedAt)
+                    const date = d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })
+                    const hour = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+                    const fromLabel = m.fromEnclosureName ?? '(libre)'
+                    const toLabel   = m.toEnclosureName   ?? '(libéré)'
                     return (
                       <li key={m.id}
                           className={`text-xs leading-snug px-2.5 py-1.5 rounded-lg ${cameIn ? 'bg-meadow/10' : 'bg-danger/5'}`}>
-                        <span className="font-bold">
-                          {getSpeciesInfo(m.species, customSpecies).emoji} {m.animalName}
-                        </span>
-                        {' '}
-                        {cameIn
-                          ? <span className="text-meadow">↘ entré{m.fromEnclosureName ? ` (depuis « ${m.fromEnclosureName} »)` : ' (libre)'}</span>
-                          : <span className="text-danger">↗ sorti{m.toEnclosureName ? ` (vers « ${m.toEnclosureName} »)` : ' (libéré)'}</span>
-                        }
-                        <div className="text-muted/80 text-[11px] mt-0.5">{date} · par {author}</div>
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <span className="font-bold">
+                            {getSpeciesInfo(m.species, customSpecies).emoji} {m.animalName}
+                          </span>
+                          <span className={cameIn ? 'text-meadow font-semibold' : 'text-danger font-semibold'}>
+                            {cameIn ? '↘ entré' : '↗ sorti'}
+                          </span>
+                        </div>
+                        <div className="text-charcoal/80 text-[11px] flex items-center gap-1 flex-wrap">
+                          <span className="px-1.5 py-0.5 bg-white/60 rounded border border-border/40">
+                            {fromLabel}
+                          </span>
+                          <span className="text-muted">→</span>
+                          <span className="px-1.5 py-0.5 bg-white/60 rounded border border-border/40 font-semibold">
+                            {toLabel}
+                          </span>
+                        </div>
+                        <div className="text-muted/80 text-[11px] mt-0.5">
+                          {date} à {hour} · par {author}
+                          {m.note && <span className="italic"> — {m.note}</span>}
+                        </div>
                       </li>
                     )
                   })}

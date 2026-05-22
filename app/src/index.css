@@ -217,3 +217,13 @@ button {
 .leaflet-control-attribution {
   font-size: 10px !important;
 }
+
+/* Bug Nils 22/05/2026 : animation "le courant circule" sur les clôtures
+   électriques alimentées. Marching ants subtil — l'œil capte que ça bouge
+   sans que ce soit envahissant. Conditionnel au zoom (cf. getFencePathOptions). */
+@keyframes fenceCurrentFlow {
+  to { stroke-dashoffset: -32; }
+}
+.fence-electric-flow {
+  animation: fenceCurrentFlow 1.6s linear infinite;
+}

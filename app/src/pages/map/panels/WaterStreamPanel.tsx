@@ -71,9 +71,25 @@ export function WaterStreamPanel({ pin, isTemp, actionBusy, onPatchAttenuations,
       {/* Liste des atténuations existantes */}
       {attenuations.length > 0 && (
         <div className="space-y-2">
-          <p className="text-xs font-semibold text-muted uppercase tracking-wider pt-1">
-            Atténuations ({attenuations.length})
-          </p>
+          <div className="flex items-center justify-between pt-1">
+            <p className="text-xs font-semibold text-muted uppercase tracking-wider">
+              Atténuations ({attenuations.length})
+            </p>
+            {/* Bug Nils 22/05/2026 : raccourci de remise à zéro tant que la
+                refonte complète du système d'atténuation n'est pas faite. */}
+            {!isTemp && (
+              <button
+                onClick={async () => {
+                  if (!confirm('Remettre le cours d\'eau à pleine puissance partout ?')) return
+                  await onPatchAttenuations(undefined)
+                }}
+                disabled={actionBusy}
+                className="text-[10px] font-semibold text-danger underline active:opacity-70 disabled:opacity-40"
+              >
+                Tout effacer
+              </button>
+            )}
+          </div>
           {attenuations.map(att => (
             <div key={att.id} className="rounded-xl p-3 bg-cream border border-border space-y-2">
               <div className="flex items-center justify-between">

@@ -218,7 +218,9 @@ export default function Admin() {
   const [tempCodes,      setTempCodes]      = useState<TempAccessCode[]>([])
   const [codeFormOpen,   setCodeFormOpen]   = useState(false)
   const [codeName,       setCodeName]       = useState('')
-  const [codeDuration,   setCodeDuration]   = useState<24 | 48 | 168>(24)
+  // Bug Nils 22/05/2026 : 'custom' = date d'expiration choisie librement (stockée dans codeCustomDate).
+  const [codeDuration,   setCodeDuration]   = useState<24 | 48 | 168 | 'custom'>(24)
+  const [codeCustomDate, setCodeCustomDate] = useState('') // YYYY-MM-DD du <input type=date>
   const [creatingCode,   setCreatingCode]   = useState(false)
   const [lastCreated,    setLastCreated]    = useState<{ code: string; name: string } | null>(null)
   const [copiedCode,     setCopiedCode]     = useState(false)
@@ -704,13 +706,24 @@ export default function Admin() {
 
   async function createCode() {
     if (!codeName.trim() || !user) return
+    // Bug Nils 22/05/2026 : si mode custom, on prend la date du picker (fin de
+    // journée 23:59 pour couvrir toute la dernière journée).
+    let expiresAt: number
+    if (codeDuration === 'custom') {
+      if (!codeCustomDate) { alert('Choisis une date de fin.'); return }
+      const [y, m, d] = codeCustomDate.split('-').map(Number)
+      const end = new Date(y, m - 1, d, 23, 59, 59).getTime()
+      if (end <= Date.now()) { alert('La date doit être dans le futur.'); return }
+      expiresAt = end
+    } else {
+      expiresAt = Date.now() + codeDuration * 3_600_000
+    }
     setCreatingCode(true)
     try {
       const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
       const arr = new Uint8Array(12)
       crypto.getRandomValues(arr)
       const rawCode = Array.from(arr, b => chars[b % chars.length]).join('')
-      const expiresAt = Date.now() + codeDuration * 3_600_000
       await setDoc(doc(db, 'tempCodes', rawCode), {
         displayName: codeName.trim(),
         expiresAt,
@@ -872,6 +885,11 @@ export default function Admin() {
       <div className="px-4 space-y-4 mt-2">
 
         {/* ─── Utilisateurs temporaires ─── */}
+        {/* Bug Nils 22/05/2026 : section masquée — redondante avec les codes d'accès
+            temporaires plus bas qui créent déjà une aide occasionnelle réelle (avec login).
+            État conservé pour ne pas perdre les données Firestore existantes ;
+            si tu veux supprimer définitivement, retire les useState/useEffect tempUsers. */}
+        {false && (
         <div className="bg-card rounded-2xl p-4 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
@@ -952,6 +970,7 @@ export default function Admin() {
             Les personnes ajoutées ici apparaissent dans l'assignation des tâches mais ne reçoivent pas de notifications.
           </p>
         </div>
+        )}
 
         {/* ─── Groupes d'animaux ─── */}
         <div className="bg-card rounded-2xl p-4 shadow-sm">
@@ -1356,7 +1375,9 @@ export default function Admin() {
 
                         {tab === 'details' && (
                           <div className="bg-card rounded-xl p-3 space-y-3 border border-forest/20">
-                            {/* Nom — bug Eugénie 21/05/2026 : pouvoir corriger une faute de frappe sans tout recréer */}
+                            {/* Nom — bug Eugénie 21/05/2026 : pouvoir corriger une faute de frappe sans tout recréer.
+                                Bug Nils 22/05/2026 : robustifié — save aussi sur Enter
+                                (sinon mobile : pas de blur si on ferme le panneau directement). */}
                             <div>
                               <label className="block text-[11px] font-bold text-muted uppercase tracking-wider mb-1">Nom</label>
                               <input
@@ -1367,9 +1388,40 @@ export default function Admin() {
                                   if (v && v !== a.name) updateAnimalDetails(a.id, { name: v })
                                   else e.target.value = a.name
                                 }}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                                }}
                                 className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
                                 placeholder="ex: Hercule"
                               />
+                            </div>
+
+                            {/* Race / emoji — bug Nils 22/05/2026 : pouvoir corriger un emoji
+                                erroné (ex : âne créé comme cheval). Modifier l'espèce met à
+                                jour l'emoji affiché partout (dérivé via getSpeciesInfo). */}
+                            <div>
+                              <label className="block text-[11px] font-bold text-muted uppercase tracking-wider mb-1">Race / emoji</label>
+                              <div className="flex flex-wrap gap-1.5">
+                                {allSpeciesOptions.map(opt => {
+                                  const selected = a.species === opt.id
+                                  return (
+                                    <button
+                                      key={opt.id}
+                                      type="button"
+                                      onClick={() => {
+                                        if (a.species !== opt.id) updateAnimalDetails(a.id, { species: opt.id })
+                                      }}
+                                      className={`py-1.5 px-2 rounded-lg border text-[11px] font-semibold flex items-center gap-1 transition-all ${
+                                        selected
+                                          ? 'border-forest text-forest bg-forest/10'
+                                          : 'border-border text-muted bg-white'
+                                      }`}
+                                    >
+                                      <span>{opt.emoji}</span> {opt.label}
+                                    </button>
+                                  )
+                                })}
+                              </div>
                             </div>
 
                             <div>
@@ -2024,13 +2076,13 @@ export default function Admin() {
                 <label className="block text-xs font-semibold text-muted uppercase tracking-wider mb-1.5">
                   Durée de validité
                 </label>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   {([24, 48, 168] as const).map(h => (
                     <button
                       key={h}
                       type="button"
                       onClick={() => setCodeDuration(h)}
-                      className={`flex-1 py-2 rounded-xl border text-sm font-semibold transition-all ${
+                      className={`flex-1 min-w-[60px] py-2 rounded-xl border text-sm font-semibold transition-all ${
                         codeDuration === h
                           ? 'border-forest text-forest bg-forest/10'
                           : 'border-border text-muted bg-white'
@@ -2039,7 +2091,29 @@ export default function Admin() {
                       {h === 24 ? '24 h' : h === 48 ? '48 h' : '7 jours'}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => setCodeDuration('custom')}
+                    className={`flex-1 min-w-[80px] py-2 rounded-xl border text-sm font-semibold transition-all ${
+                      codeDuration === 'custom'
+                        ? 'border-forest text-forest bg-forest/10'
+                        : 'border-border text-muted bg-white'
+                    }`}
+                  >
+                    Date custom
+                  </button>
                 </div>
+                {/* Bug Nils 22/05/2026 : permet de choisir une date d'expiration libre.
+                    L'expiration tombe à 23:59:59 du jour choisi (couvre toute la journée). */}
+                {codeDuration === 'custom' && (
+                  <input
+                    type="date"
+                    value={codeCustomDate}
+                    onChange={e => setCodeCustomDate(e.target.value)}
+                    min={new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)}
+                    className="w-full mt-2 border border-border rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-forest"
+                  />
+                )}
               </div>
               <div className="flex gap-2 pt-1">
                 <button
@@ -2080,7 +2154,11 @@ export default function Admin() {
                 </button>
               </div>
               <p className="text-xs text-muted mt-2">
-                Partagez ce code à voix ou par SMS. Valide {codeDuration === 168 ? '7 jours' : `${codeDuration}h`}.
+                Partagez ce code à voix ou par SMS. Valide {
+                  codeDuration === 168 ? '7 jours'
+                  : codeDuration === 'custom' ? `jusqu'au ${codeCustomDate}`
+                  : `${codeDuration}h`
+                }.
               </p>
             </div>
           )}

@@ -1,6 +1,6 @@
 import 'leaflet/dist/leaflet.css'
 import { useEffect, useState, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MapContainer, TileLayer, Marker, Polyline, Polygon, Circle, useMapEvents, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Check, Pencil, Undo2, Scissors, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search } from 'lucide-react'
@@ -35,6 +35,7 @@ import { FencePanel } from './map/panels/FencePanel'
 import { EnclosurePlacementPanel } from './map/panels/EnclosurePlacementPanel'
 import { LandPlotPanel } from './map/panels/LandPlotPanel'
 import { ScindageModal, type ScindageChoice } from './map/panels/ScindageModal'
+import { GeofenceCheckSheet } from '../components/GeofenceCheckSheet'
 import { BATTERY_STATUS_CFG } from './map/panels/shared'
 import type { MapPin, PinType, UserProfile, FencePreset, Animal } from '../types'
 
@@ -875,6 +876,11 @@ function blankForm(defaultUid: string): FormState {
 
 export default function MapPage() {
   const navigate = useNavigate()
+  // Bug Eugénie 22/05/2026 : la notification geofence arrive en URL avec
+  // ?check=<plotId> → on ouvre la GeofenceCheckSheet automatiquement plutôt
+  // que de juste recharger /map.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const checkPlotId = searchParams.get('check')
   const { user, profile, isTemp } = useAuth()
   // Géoloc partagée : ne s'active QUE pendant que cette page est montée.
   // Évite de pinger Firestore en arrière-plan toute la journée — la position
@@ -5040,6 +5046,34 @@ export default function MapPage() {
           onConfirm={confirmSplit}
         />
       )}
+
+      {/* ══════════════════════════════════════════
+          Sheet : check rapide depuis la notif geofence (bug Eugénie 22/05/2026)
+          URL : /map?check=<plotId> → cocher les animaux vus en bonne santé
+      ══════════════════════════════════════════ */}
+      {checkPlotId && (() => {
+        const plot = pins.find(p => p.id === checkPlotId && p.type === 'land_plot')
+        if (!plot) return null
+        const plotAnimals = animals.filter(a => a.enclosureId === plot.id)
+        const clearCheck = () => {
+          // Retire le param ?check de l'URL pour qu'un refresh n'ouvre pas la
+          // sheet en boucle. Garde les autres params (defensive).
+          const next = new URLSearchParams(searchParams)
+          next.delete('check')
+          setSearchParams(next, { replace: true })
+        }
+        return (
+          <GeofenceCheckSheet
+            plot={plot}
+            animals={plotAnimals}
+            customSpecies={customSpecies}
+            saving={savingHealth}
+            onMarkChecked={markAllHealthy}
+            onOpenAnimal={(a) => { clearCheck(); navigate(`/animal/${a.id}`) }}
+            onClose={clearCheck}
+          />
+        )
+      })()}
 
       {/* ══════════════════════════════════════════
           Sheet : détail épingle

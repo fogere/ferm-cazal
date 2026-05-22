@@ -121,15 +121,18 @@ export function useGeofenceAlert() {
     if (now - lastNotif < RENOTIFY_MIN_MS) return
     notifiedMap.current = { ...notifiedMap.current, [candidate.id]: now }
 
-    // Notification locale (registration.showNotification = compatible PWA)
+    // Notification locale (registration.showNotification = compatible PWA).
+    // Bug Eugénie 22/05/2026 : avant, `url: '/map'` faisait juste recharger
+    // la carte au tap. Maintenant on passe l'id du parc → Map.tsx ouvre une
+    // feuille de check rapide listant les animaux à valider.
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       navigator.serviceWorker?.ready?.then(reg => {
         reg.showNotification('🐴 Tu es dans un enclos', {
-          body: `${stale.length} animal${stale.length > 1 ? 'aux' : ''} à vérifier ici. Touche pour ouvrir la carte.`,
+          body: `${stale.length} animal${stale.length > 1 ? 'aux' : ''} à vérifier ici. Touche pour cocher.`,
           icon: '/icons/farm-icon-192.png',
           badge: '/icons/farm-icon-192.png',
           tag: `geofence-${candidate.id}`,
-          data: { url: '/map' },
+          data: { url: `/map?check=${candidate.id}` },
         } as NotificationOptions).catch(() => {})
       })
     }

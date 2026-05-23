@@ -34,6 +34,14 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* Bug Eugénie/Benoît 23/05/2026 : leurs téléphones Android ont "Taille
+     d'affichage" / "Taille du texte" en grand (accessibilité) → tous les
+     `rem` Tailwind sont multipliés et l'UI paraît disproportionnée. On cap
+     la base entre 15px et 17px : accessibilité préservée si réglage normal,
+     mais limite l'inflation visuelle quand le user a forcé un gros zoom.
+     Aucun impact pour Nils/shaza/mathieu dont les téléphones sont en taille
+     standard (la valeur reste 16px = 1rem). */
+  font-size: clamp(15px, 1rem, 17px);
 }
 
 body {

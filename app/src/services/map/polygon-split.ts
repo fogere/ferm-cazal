@@ -189,9 +189,35 @@ export function splitPolygonByPolyline(
   }
 
   // 1. Classifier chaque sommet de la polyline
-  const classes = polyline.map(p => classifyPoint(p, polygon))
+  const rawClasses = polyline.map(p => classifyPoint(p, polygon))
 
-  // 2. Indices des sommets strictement intérieurs
+  // 1bis. Bug Nils 23/05/2026 (BUGV3 #1) : si la polyline traverse le polygon
+  // en ligne droite (cas typique : 2 sommets snappés sur des bords opposés
+  // pour couper le terrain en 2), aucun sommet n'est "inside" et l'algo
+  // refusait. Pre-process : on insère un sommet virtuel `inside` au milieu
+  // de toute paire on-edge → on-edge sur edges différents dont le milieu
+  // est strictement intérieur. L'algo principal continue normalement ensuite.
+  const enrichedPoly: LatLng[] = []
+  const classes:     ReturnType<typeof classifyPoint>[] = []
+  for (let i = 0; i < polyline.length; i++) {
+    enrichedPoly.push(polyline[i])
+    classes.push(rawClasses[i])
+    const next = polyline[i + 1]
+    if (!next) continue
+    const a = rawClasses[i]
+    const b = rawClasses[i + 1]
+    if (a.status === 'on-edge' && b.status === 'on-edge' && a.edgeIdx !== b.edgeIdx) {
+      const mid = { lat: (polyline[i].lat + next.lat) / 2, lng: (polyline[i].lng + next.lng) / 2 }
+      // Vérifier que le milieu est strictement à l'intérieur (et pas re-on-edge)
+      const midClass = classifyPoint(mid, polygon)
+      if (midClass.status === 'inside') {
+        enrichedPoly.push(mid)
+        classes.push(midClass)
+      }
+    }
+  }
+
+  // 2. Indices des sommets strictement intérieurs (dans la polyline enrichie)
   const insideIdx: number[] = []
   for (let i = 0; i < classes.length; i++) {
     if (classes[i].status === 'inside') insideIdx.push(i)
@@ -200,6 +226,10 @@ export function splitPolygonByPolyline(
   if (insideIdx.length === 0) {
     return { code: 'no-intersection', message: "La clôture ne passe pas à l'intérieur de l'espace." }
   }
+
+  // À partir d'ici on utilise `enrichedPoly` au lieu de `polyline` pour que
+  // les indices firstIn/lastIn soient cohérents avec les sommets injectés.
+  const polylineWorking = enrichedPoly
 
   const firstIn = insideIdx[0]
   const lastIn  = insideIdx[insideIdx.length - 1]
@@ -212,11 +242,11 @@ export function splitPolygonByPolyline(
   }
   const prev = classes[firstIn - 1]
   if (prev.status === 'on-edge') {
-    entryPoint = polyline[firstIn - 1]
+    entryPoint = polylineWorking[firstIn - 1]
     entryEdge  = prev.edgeIdx
   } else {
     // outside → intersection segment [polyline[firstIn-1], polyline[firstIn]] avec le contour
-    const hit = findSegmentEdgeIntersection(polyline[firstIn - 1], polyline[firstIn], polygon, 'last')
+    const hit = findSegmentEdgeIntersection(polylineWorking[firstIn - 1], polylineWorking[firstIn], polygon, 'last')
     if (!hit) {
       return { code: 'no-intersection', message: "Impossible de localiser le point d'entrée de la clôture dans l'espace." }
     }
@@ -227,15 +257,15 @@ export function splitPolygonByPolyline(
   // 4. Point de sortie (juste après lastIn)
   let exitPoint: LatLng
   let exitEdge:  number
-  if (lastIn === polyline.length - 1) {
+  if (lastIn === polylineWorking.length - 1) {
     return { code: 'ends-inside', message: "La clôture doit revenir sur le bord de l'espace, pas y finir à l'intérieur." }
   }
-  const next = classes[lastIn + 1]
-  if (next.status === 'on-edge') {
-    exitPoint = polyline[lastIn + 1]
-    exitEdge  = next.edgeIdx
+  const nextCls = classes[lastIn + 1]
+  if (nextCls.status === 'on-edge') {
+    exitPoint = polylineWorking[lastIn + 1]
+    exitEdge  = nextCls.edgeIdx
   } else {
-    const hit = findSegmentEdgeIntersection(polyline[lastIn], polyline[lastIn + 1], polygon, 'first')
+    const hit = findSegmentEdgeIntersection(polylineWorking[lastIn], polylineWorking[lastIn + 1], polygon, 'first')
     if (!hit) {
       return { code: 'no-intersection', message: "Impossible de localiser le point de sortie de la clôture." }
     }
@@ -249,7 +279,7 @@ export function splitPolygonByPolyline(
   }
 
   // 6. Cut path = entryPoint + sommets intérieurs + exitPoint
-  const cutPath: LatLng[] = [entryPoint, ...polyline.slice(firstIn, lastIn + 1), exitPoint]
+  const cutPath: LatLng[] = [entryPoint, ...polylineWorking.slice(firstIn, lastIn + 1), exitPoint]
   const innerCut = cutPath.slice(1, -1)
 
   // 7. Reconstruire les 2 sous-polygons en parcourant le contour

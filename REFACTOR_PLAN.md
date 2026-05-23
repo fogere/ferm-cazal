@@ -136,7 +136,7 @@ Règle absolue : **aucune modif qui change un comportement utilisateur**. Que de
 | Sentry free tier (5k events/mois) pour visibilité prod | Très faible | Visibilité erreurs runtime | À faire |
 | Cloud Function backup Firestore hebdomadaire (gs://le-cazal-backup) | Très faible | Sécurité données | À faire |
 | Extraction de sous-composants visuels Map.tsx (panneau enclos, historique, photos) | Modéré | Maintenabilité | À faire (plus tard) |
-| Hook unifié `useLocationCore()` qui remplace les 3 watchPosition | Modéré | Batterie + clarté | À faire (plus tard) |
+| ~~Hook unifié `useLocationCore()` qui remplace les 3 watchPosition~~ | ~~Modéré~~ | ~~Batterie + clarté~~ | ✅ **Fait** (services/location/locationCore.ts + hook useLocationCore) |
 | Tests Playwright sur 3-4 flux critiques | Faible | Détection régression | À faire (plus tard) |
 | Index Firestore audit complet (queries cachées) | Faible | Robustesse | À faire (plus tard) |
 

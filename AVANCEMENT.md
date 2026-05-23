@@ -186,7 +186,7 @@ projet farm/
 2. Refonte clôtures/espaces — Eugénie (gros chantier à arbitrer)
 3. Migration des `water_natural` ponctuels existants → `water_stream` polyline
 4. Découpe de Map.tsx (5153 lignes) en sous-composants visuels
-5. `useLocationCore()` unifié pour remplacer les 3 `watchPosition()` parallèles
+5. ~~`useLocationCore()` unifié pour remplacer les 3 `watchPosition()` parallèles~~ ✅ FAIT (services/location/locationCore.ts)
 
 ---
 
@@ -233,8 +233,57 @@ projet farm/
 2. ~~Refonte clôtures/espaces~~ — fait dans une session précédente (S2-S9)
 3. Migration des `water_natural` ponctuels existants → `water_stream` polyline (le user le fait à la main)
 4. Découpe de Map.tsx (5500+ lignes désormais) en sous-composants visuels
-5. `useLocationCore()` unifié pour remplacer les 3 `watchPosition()` parallèles
+5. ~~`useLocationCore()` unifié pour remplacer les 3 `watchPosition()` parallèles~~ ✅ FAIT (services/location/locationCore.ts)
 
 ---
 
-*Dernière mise à jour : 22 mai 2026 (soir)*
+## SESSION DU 23 MAI 2026 — traitement BUGV2 (11 bugs) + quick wins + top 3
+
+### Lot 1 : 11 bugs du rapport BUGV2.json (commit `e33cbe2`)
+- **#9** Erreur "Nested arrays" zone vide : holes wrappés en `{ points: LatLng[] }[]` côté stockage (types + Map.tsx + helpers).
+- **#8** Modif emoji animal : sélecteur race ajouté dans l'onglet Identité Admin (l'emoji est dérivé de l'espèce). Save aussi sur Enter pour le nom.
+- **#13** Visuel "tâche faite" : bandeau vert + liseré meadow + ligne "Fait il y a X min · Nils" dans Tasks.tsx.
+- **#3** Section "Aide occasionnelle" Admin masquée (doublon avec codes d'accès). Bouton "Date custom" ajouté au form de code temporaire (date d'expiration libre).
+- **#11** Historique mouvements : date+heure exactes, chips parc source/dest, note libre.
+- **#6** Densité emojis par zoom : 3 paliers (≥17 noms, ≥15 compteurs, ≥13 chiffre, <13 rien).
+- **#10** Cours d'eau : épingle 🏞️ supprimée pour les streams tracés, hitbox invisible weight 22, bouton "Tout effacer" sur atténuations (refonte UX complète à faire plus tard).
+- **#12** Clôture électrique : animation CSS "marching ants" (`.fence-electric-flow`) sur fences sous tension, conditionnelle au zoom ≥15 + bandeau ⚡ au form de création.
+- **#2** Snap bidirectionnel : le mode "Définir un espace" snappe désormais sur fence vertices + autres land_plots (avant uniquement le mode clôture snappait sur les espaces).
+- **#4** + **#7** Refonte mode édition : toolbar avec 4 modes explicites (✋ Déplacer / ➕ Ajouter / ✖ Supprimer / ✂ Découper). Un seul comportement par tap. Bouton "Couper" global masqué — intégré comme sous-mode "Découper".
+- **#1** + **#5** (perf/écran qui saute) : hypothèse — résolus par #9 (state corrompu après save raté du hole). À confirmer en live.
+
+### Lot 2 : 5 quick wins (commits `3010b69`, `16be780`, `17df4d4`, `a6e19ac`)
+- **Favicon** : cache-bust `?v=2` + balises shortcut/Edge ajoutées (bug Eugénie 19/05 jamais traité — Chrome cachait l'ancien favicon Vite).
+- **FCM AbortError silencieux** : 15/18 bug reports en moins polluent les logs. Helper `isExpectedFcmUnavailable()` dans `useMessaging.ts`, console.warn supprimés pour les cas attendus.
+- **MONTHS_FR off-by-one** : streamActiveMonths stocke 1-12, fix `MONTHS_FR[m - 1]` dans WaterStreamPanel.tsx (commentaire d'origine "à fixer hors S1" enfin traité).
+- **Audit where + orderBy** : 2 occurrences trouvées, toutes saines (Bugs.tsx orderBy sans where + commentaire AnimalDetail.tsx).
+- **Cleanup tempUsers** : section "Aide occasionnelle" supprimée définitivement, state + useEffect + handlers + type TempUser + entrée backup retirés (~130 lignes en moins). `scissorMode` reste masqué derrière `{false && (...)}` — à supprimer dans 1 semaine après validation prod refonte édition.
+
+### Lot 3 : Top 3 moyen terme (commits `9e4da90`, `182a991`, `9be3175`)
+- **Pastilles santé sur la map** (demande Chacha 19/05 jamais traitée, bug.json #3). 3 niveaux selon zoom : ≥17 pastille par animal à côté du nom, ≥15 badge "⚠N" dans le compteur, ≥13 point coloré à côté du chiffre. Utilise les seuils existants de `services/map/health.ts`.
+- **Audit isTemp défense en profondeur** : 30 fonctions guardées (20 Map.tsx via helper `assertRegularUser()`, 10 réparties Tasks/AnimalDetail/Bugs/AnimalPhotos). Admin.tsx skip (protégé par AdminRoute), Grazing sous-composants skip (UI parent gardée). Si bug UI futur expose une action regular-only à un temp, plus de unhandledrejection en console.
+- **Perf Map.tsx useMemo** : `overduePins`, `fencePins`, `landPlotPins`, `nonFencePins` ne recomputent plus à chaque render — uniquement quand `pins` change. Découverte annexe : la consolidation watchPosition (piège n°10 ONBOARDING) est déjà faite via `useLocationCore` — ONBOARDING + ARCHITECTURE + REFACTOR_PLAN mis à jour.
+
+### Lot 4 : Backup Firestore automatique (pas de commit nouveau)
+- Workflow `.github/workflows/backup-firestore.yml` + script `scripts/backup-firestore.cjs` déjà en place depuis le 21/05 mais jamais exécuté (premier dimanche programmé = demain 24/05 04:00 UTC).
+- Test local validé : **216 documents, 11.73 MB** sauvegardés. 39 animaux, 19 tâches, 74 pins, 6 users, 5 bug reports.
+- Pour déclencher un test manuel : GitHub → Actions → backup-firestore → "Run workflow".
+- Backups stockés en artifacts GitHub (rétention 90 jours, gratuit).
+
+### Métriques de la session
+- **8 commits** poussés sur main, déployés sur https://le-cazal.web.app
+- **+560 / −250** lignes nettes en code applicatif
+- **0 régression tsc/build** sur tous les commits intermédiaires
+- BUGV2 traité à 100% (11/11 bugs codés, hypothèses #1+#5 pendantes)
+
+### Restant prioritaire pour la prochaine session
+1. **Cleanup `scissorMode`** (~150 lignes Map.tsx) — après ~1 semaine de prod sur la nouvelle UX édition sans bug
+2. **Vraie refonte UX atténuation streams** (tap sur ruisseau → menu plutôt que sélection par index)
+3. **Mobile-first audit** des 8 pages en 432×865 (boutons <44px, ellipses, scroll clavier)
+4. **Tests Playwright** sur 3-4 flows critiques (REFACTOR_PLAN.md TODO existant)
+5. Découpe Map.tsx (5500+ lignes) en sous-composants visuels (panel enclos, historique, photos…)
+6. Migration `water_natural` ponctuels → `water_stream` (Nils le fait à la main)
+
+---
+
+*Dernière mise à jour : 23 mai 2026*

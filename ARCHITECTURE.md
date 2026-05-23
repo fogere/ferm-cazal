@@ -107,7 +107,7 @@ projet farm/
 | `useGeofenceAlert.ts` | Notif "tu es dans un enclos" | App (global) |
 | `useCustomSpecies.ts` | Liste des races custom (chat, mouton…) | Où nécessaire |
 
-⚠️ **Trois hooks utilisent `watchPosition()` en parallèle** (useLiveLocation, useOnDemandLocationPublish, useGeofenceAlert). Sur Android il n'y a qu'une seule source GPS — à consolider en un seul `useLocationCore()` quand on aura le temps.
+✅ **Consolidation GPS terminée** (mai 2026). Les 3 hooks GPS (useLiveLocation, useOnDemandLocationPublish, useGeofenceAlert) consomment désormais `locationCore` (`services/location/locationCore.ts`) via le hook partagé `useLocationCore`. Un seul `navigator.geolocation.watchPosition()` actif à la fois, peu importe combien de hooks s'abonnent. **Pour tout nouveau besoin GPS, réutiliser `useLocationCore` — ne pas remonter un nouveau watchPosition.**
 
 ### Services (`app/src/services/`)
 | Fichier | Rôle |

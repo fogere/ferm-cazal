@@ -3,7 +3,7 @@ import { useEffect, useState, useRef, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MapContainer, TileLayer, Marker, Polyline, Polygon, Circle, useMapEvents, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Check, Pencil, Undo2, Scissors, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search } from 'lucide-react'
+import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Check, Pencil, Undo2, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search } from 'lucide-react'
 import { compressImage } from '../services/image'
 import type { PinPhoto, EnclosureMovement } from '../types'
 import {
@@ -204,15 +204,6 @@ function makeDivIconGhost(type: PinType): L.DivIcon {
     iconAnchor: [19, 19],
   })
 }
-
-// Marqueurs de points ciseau (A et B)
-const SCISSOR_POINT_ICON = L.divIcon({
-  html: `<div style="background:#DC2626;width:16px;height:16px;border-radius:50%;
-    border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.55);"></div>`,
-  className: '',
-  iconSize: [16, 16],
-  iconAnchor: [8, 8],
-})
 
 // Anneau visuel autour de l'épingle sélectionnée
 const SELECTION_RING_ICON = L.divIcon({
@@ -517,19 +508,16 @@ const FENCE_SELECT_RADIUS_PX = 22
 const FENCE_CLOSE_RADIUS_PX = 24
 
 function MapClickCapture({
-  addActive, fenceActive, scissorActive, scissorFenceId, scissorOverridePoints,
+  addActive, fenceActive,
   pointerActive, onPointer,
   streamActive, onStreamPoint,
   plotActive, onPlotPoint, onPlotClose, plotFirstPoint,
   holeActive, onHolePoint, onHoleClose, holeFirstPoint,
-  onPin, onFencePoint, onFenceClose, onSelect, onScissorSnap, onSnapHover,
+  onPin, onFencePoint, onFenceClose, onSelect, onSnapHover,
   fencePins, allPins, fenceFirstPoint,
 }: {
   addActive: boolean
   fenceActive: boolean
-  scissorActive: boolean
-  scissorFenceId: string | null
-  scissorOverridePoints: { lat: number; lng: number }[]
   pointerActive: boolean
   onPointer: (lat: number, lng: number) => void
   streamActive: boolean
@@ -546,7 +534,6 @@ function MapClickCapture({
   onFencePoint: (lat: number, lng: number) => void
   onFenceClose: () => void
   onSelect: (pin: MapPin) => void
-  onScissorSnap: (pinId: string, newPoints: { lat: number; lng: number }[], snapIndex: number) => void
   onSnapHover: (target: { lat: number; lng: number; isClose: boolean } | null) => void
   fencePins: MapPin[]
   allPins: MapPin[]
@@ -671,56 +658,6 @@ function MapClickCapture({
         onHolePoint(e.latlng.lat, e.latlng.lng)
         return
       }
-      // ── Mode ciseau : snap sur le fil le plus proche ──
-      if (scissorActive) {
-        const clickPx  = map.latLngToContainerPoint(e.latlng)
-        // On exclut les enclos fillOnly : leur contour visible est déjà géré par des segments enfants
-        const targets  = scissorFenceId
-          ? fencePins.filter(p => p.id === scissorFenceId)
-          : fencePins.filter(p => !p.fillOnly)
-        let bestPinId  = ''
-        let bestDist   = SNAP_RADIUS_PX
-        let bestSeg    = -1
-        let bestT      = 0
-        let bestPts: { lat: number; lng: number }[] = []
-
-        for (const pin of targets) {
-          const pts = (pin.id === scissorFenceId && scissorOverridePoints.length > 0)
-            ? scissorOverridePoints : (pin.points ?? [])
-          if (pts.length < 2) continue
-          for (let i = 0; i < pts.length - 1; i++) {
-            const a  = map.latLngToContainerPoint(L.latLng(pts[i].lat, pts[i].lng))
-            const b  = map.latLngToContainerPoint(L.latLng(pts[i+1].lat, pts[i+1].lng))
-            const dx = b.x - a.x, dy = b.y - a.y
-            const len2 = dx*dx + dy*dy
-            const t  = len2 > 0
-              ? Math.max(0, Math.min(1, ((clickPx.x-a.x)*dx + (clickPx.y-a.y)*dy) / len2))
-              : 0
-            const d = Math.hypot(clickPx.x - (a.x+t*dx), clickPx.y - (a.y+t*dy))
-            if (d < bestDist) { bestDist = d; bestPinId = pin.id; bestSeg = i; bestT = t; bestPts = pts }
-          }
-        }
-        if (!bestPinId || bestSeg < 0) return
-
-        // Interpolation en latlng
-        const snapLat = bestPts[bestSeg].lat + bestT * (bestPts[bestSeg+1].lat - bestPts[bestSeg].lat)
-        const snapLng = bestPts[bestSeg].lng + bestT * (bestPts[bestSeg+1].lng - bestPts[bestSeg].lng)
-        // Vérifier si le snap coïncide avec un point existant (< 5px)
-        const snapPx = map.latLngToContainerPoint(L.latLng(snapLat, snapLng))
-        const dA = Math.hypot(snapPx.x - map.latLngToContainerPoint(L.latLng(bestPts[bestSeg].lat,   bestPts[bestSeg].lng)).x,
-                              snapPx.y - map.latLngToContainerPoint(L.latLng(bestPts[bestSeg].lat,   bestPts[bestSeg].lng)).y)
-        const dB = Math.hypot(snapPx.x - map.latLngToContainerPoint(L.latLng(bestPts[bestSeg+1].lat, bestPts[bestSeg+1].lng)).x,
-                              snapPx.y - map.latLngToContainerPoint(L.latLng(bestPts[bestSeg+1].lat, bestPts[bestSeg+1].lng)).y)
-        const newPoints = [...bestPts]
-        let snapIndex: number
-        if (dA < 5)      { snapIndex = bestSeg }
-        else if (dB < 5) { snapIndex = bestSeg + 1 }
-        else             { newPoints.splice(bestSeg + 1, 0, { lat: snapLat, lng: snapLng }); snapIndex = bestSeg + 1 }
-
-        onScissorSnap(bestPinId, newPoints, snapIndex)
-        return
-      }
-
       if (fenceActive) {
         // ── Snap vers point existant ou fermeture ──
         const clickPx = map.latLngToContainerPoint(e.latlng)
@@ -1109,13 +1046,6 @@ export default function MapPage() {
   const [autoSnapCandidate, setAutoSnapCandidate] = useState<{ lat: number; lng: number; sourceName: string } | null>(null)
 
   // États mode ciseau
-  const [scissorMode,         setScissorMode]         = useState(false)
-  const [scissorFenceId,      setScissorFenceId]      = useState<string | null>(null)
-  const [scissorPoints,       setScissorPoints]       = useState<{ lat: number; lng: number }[]>([])
-  const [scissorIndexA,       setScissorIndexA]       = useState<number | null>(null)
-  const [scissorIndexB,       setScissorIndexB]       = useState<number | null>(null)
-  const [scissorPreset,       setScissorPreset]       = useState<FencePreset | null>(null)
-  const [scissorFormVisible,  setScissorFormVisible]  = useState(false)
 
   // États presets de fil
   const [fencePresets,          setFencePresets]          = useState<FencePreset[]>([])
@@ -1219,16 +1149,6 @@ export default function MapPage() {
   }, [deleteCountdown])
 
   // Auto-découpage : dès que A, B et preset sont prêts, on coupe (1 seule fois)
-  const splittingRef = useRef(false)
-  useEffect(() => {
-    if (splittingRef.current) return
-    if (scissorMode && scissorPreset && scissorIndexA !== null && scissorIndexB !== null && !saving) {
-      splittingRef.current = true
-      splitFence().finally(() => { splittingRef.current = false })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scissorIndexB])
-
   useEffect(() => {
     const u1 = onSnapshot(
       query(collection(db, 'map_pins')),
@@ -1994,125 +1914,6 @@ export default function MapPage() {
     } finally { setActionBusy(false) }
   }
 
-  function handleScissorSnap(pinId: string, newPoints: { lat: number; lng: number }[], snapIndex: number) {
-    // Garde anti-réentrée : si la coupe est déjà déclenchée (B posé) ou en cours d'écriture, on ignore
-    if (scissorIndexB !== null || saving) return
-
-    if (scissorIndexA === null) {
-      // Phase 1 : point A
-      setScissorFenceId(pinId)
-      setScissorPoints(newPoints)
-      setScissorIndexA(snapIndex)
-    } else {
-      // Phase 2 : point B (même clôture, n'importe où sauf même point)
-      if (pinId !== scissorFenceId) return
-      if (snapIndex === scissorIndexA) return
-      // Si un nouveau point a été inséré AVANT le point A, l'index de A se décale de +1
-      const inserted = newPoints.length > scissorPoints.length && snapIndex < scissorIndexA
-      const adjustedA = inserted ? scissorIndexA + 1 : scissorIndexA
-      setScissorPoints(newPoints)
-      setScissorIndexA(Math.min(snapIndex, adjustedA))
-      setScissorIndexB(Math.max(snapIndex, adjustedA))
-    }
-  }
-
-  function cancelScissor() {
-    setScissorMode(false)
-    setScissorFenceId(null)
-    setScissorPoints([])
-    setScissorIndexA(null)
-    setScissorIndexB(null)
-    setScissorPreset(null)
-    setScissorFormVisible(false)
-  }
-
-  async function splitFence() {
-    if (!assertRegularUser()) return
-    if (!user || !scissorFenceId || scissorIndexA === null || scissorIndexB === null || !scissorPreset) return
-    const originalFence = pins.find(p => p.id === scissorFenceId)
-    if (!originalFence) return
-    setSaving(true)
-    try {
-      const now = Date.now()
-      const pts = scissorPoints
-      const iA  = Math.min(scissorIndexA, scissorIndexB)
-      const iB  = Math.max(scissorIndexA, scissorIndexB)
-
-      if (isFenceClosed(originalFence)) {
-        // ── Enclos fermé : l'original devient "fill only" (polygon + animaux), le contour est remplacé par de vrais segments ──
-        await updateDoc(doc(db, 'map_pins', scissorFenceId), {
-          fillOnly: true,
-          updatedAt: now,
-          updatedBy: user.uid,
-        })
-
-        // Créer les segments de contour couvrant tout le périmètre
-        type Seg = { points: { lat: number; lng: number }[]; useNewPreset: boolean }
-        const enclosureSegs: Seg[] = []
-        if (iA > 0)              enclosureSegs.push({ points: pts.slice(0, iA + 1), useNewPreset: false })
-                                 enclosureSegs.push({ points: pts.slice(iA, iB + 1), useNewPreset: true  })
-        if (iB < pts.length - 1) enclosureSegs.push({ points: pts.slice(iB),        useNewPreset: false })
-
-        for (const seg of enclosureSegs) {
-          if (seg.points.length < 2) continue
-          const cLat = seg.points.reduce((s, p) => s + p.lat, 0) / seg.points.length
-          const cLng = seg.points.reduce((s, p) => s + p.lng, 0) / seg.points.length
-          await addDoc(collection(db, 'map_pins'), {
-            name:        originalFence.name,
-            type:        'fence',
-            note:        '',
-            lat:         cLat,
-            lng:         cLng,
-            points:      seg.points,
-            presetId:    seg.useNewPreset ? scissorPreset.id    : (originalFence.presetId    ?? null),
-            presetColor: seg.useNewPreset ? scissorPreset.color : (originalFence.presetColor ?? '#EA580C'),
-            wireCount:   originalFence.wireCount ?? 1,
-            cutFromId:   scissorFenceId,
-            status:      'ok',
-            createdAt:   now,
-            createdBy:   user.uid,
-            updatedAt:   now,
-          })
-        }
-      } else {
-        // ── Clôture ouverte (ou segment-enfant) : découpage classique en 2-3 segments ──
-        // Si c'est un segment-enfant d'un enclos, on propage le cutFromId
-        const inheritedParent = originalFence.cutFromId ?? null
-        type Seg = { points: { lat: number; lng: number }[]; useNewPreset: boolean }
-        const segments: Seg[] = []
-        if (iA > 0)              segments.push({ points: pts.slice(0, iA + 1), useNewPreset: false })
-                                 segments.push({ points: pts.slice(iA, iB + 1), useNewPreset: true  })
-        if (iB < pts.length - 1) segments.push({ points: pts.slice(iB),        useNewPreset: false })
-
-        await deleteDoc(doc(db, 'map_pins', scissorFenceId))
-
-        for (const seg of segments) {
-          if (seg.points.length < 2) continue
-          const cLat = seg.points.reduce((s, p) => s + p.lat, 0) / seg.points.length
-          const cLng = seg.points.reduce((s, p) => s + p.lng, 0) / seg.points.length
-          const docData: Record<string, unknown> = {
-            name:        originalFence.name,
-            type:        'fence',
-            note:        originalFence.note ?? '',
-            lat:         cLat,
-            lng:         cLng,
-            points:      seg.points,
-            presetId:    seg.useNewPreset ? scissorPreset.id    : (originalFence.presetId    ?? null),
-            presetColor: seg.useNewPreset ? scissorPreset.color : (originalFence.presetColor ?? '#EA580C'),
-            wireCount:   originalFence.wireCount ?? 1,
-            status:      'ok',
-            createdAt:   now,
-            createdBy:   user.uid,
-            updatedAt:   now,
-          }
-          if (inheritedParent) docData.cutFromId = inheritedParent
-          await addDoc(collection(db, 'map_pins'), docData)
-        }
-      }
-      cancelScissor()
-    } finally { setSaving(false) }
-  }
-
   // P7 (Nils 22/05/2026) : applique un nouveau preset à une portion [iA..iB]
   // de la clôture en cours d'édition. Logique identique à `splitFence()`
   // mais paramétrée (pas de `scissorMode`) et basée sur les points en cours
@@ -2759,7 +2560,7 @@ export default function MapPage() {
   // uniquement sur ses points. Inclus dans anyModeActive pour désactiver tous
   // les onClick gardés par ce guard.
   const inTraceEdit = fenceEditPin !== null
-  const anyModeActive = addMode || fenceMode || scissorMode || pointerMode || streamMode || plotMode || holeMode || inTraceEdit
+  const anyModeActive = addMode || fenceMode || pointerMode || streamMode || plotMode || holeMode || inTraceEdit
 
   function toggleMonth(m: number) {
     setForm(f => ({
@@ -2872,9 +2673,6 @@ export default function MapPage() {
           // En mode auto, on désactive le tap-pour-ajouter : les points viennent du GPS,
           // pas du toucher. Le toolbar bascule en bouton "Capturer ce poteau".
           fenceActive={fenceMode && fenceMethod === 'manual' && !fenceFormVisible}
-          scissorActive={scissorMode && !scissorFormVisible}
-          scissorFenceId={scissorFenceId}
-          scissorOverridePoints={scissorPoints}
           pointerActive={pointerMode}
           onPointer={sendPointer}
           streamActive={streamMode && !streamFormVisible}
@@ -2926,7 +2724,6 @@ export default function MapPage() {
             if (fenceEditPin) return
             setSelected(pin); setAddMode(false); setFenceMode(false); setEditOccupants(false); setEditEnclosureAnimals(false)
           }}
-          onScissorSnap={handleScissorSnap}
           onSnapHover={setFenceSnapTarget}
           fencePins={fencePins}
           allPins={pins}
@@ -2994,7 +2791,7 @@ export default function MapPage() {
             (ouverte, bouclée, ex-enclos). Le rôle d'espace appartient
             uniquement aux land_plot. Demande Nils 22/05/2026. */}
         {fencePins
-          .filter(pin => !pin.fillOnly && !(scissorMode && pin.id === scissorFenceId))
+          .filter(pin => !pin.fillOnly)
           .map(pin => (
             <Polyline
               key={pin.id}
@@ -3028,54 +2825,6 @@ export default function MapPage() {
               />
             )
           })}
-
-        {/* Aperçu ciseau : visualisation du tronçon découpé */}
-        {scissorMode && scissorFenceId && scissorPoints.length > 0 && scissorIndexA !== null && (() => {
-          const origColor = fencePins.find(p => p.id === scissorFenceId)?.presetColor ?? '#EA580C'
-          // Couleur du tronçon découpé : preset choisi sinon jaune vif pour ressortir
-          const previewColor = scissorPreset?.color ?? '#FBBF24'
-          return (
-            <>
-              {/* Tronçon avant A — atténué */}
-              {scissorIndexA > 0 && (
-                <Polyline
-                  positions={scissorPoints.slice(0, scissorIndexA + 1).map(p => [p.lat, p.lng] as [number, number])}
-                  pathOptions={{ color: origColor, weight: 2, opacity: 0.4, dashArray: '4 4' }}
-                  interactive={false}
-                />
-              )}
-              {/* Tronçon A→B — bien visible avec couleur du futur fil */}
-              {scissorIndexB !== null
-                ? <Polyline
-                    positions={scissorPoints.slice(scissorIndexA, scissorIndexB + 1).map(p => [p.lat, p.lng] as [number, number])}
-                    pathOptions={{ color: previewColor, weight: 6, opacity: 1 }}
-                    interactive={false}
-                  />
-                : /* Clôture entière en attendant le 2e point */
-                  <Polyline
-                    positions={scissorPoints.map(p => [p.lat, p.lng] as [number, number])}
-                    pathOptions={{ color: origColor, weight: 2, opacity: 0.55 }}
-                    interactive={false}
-                  />
-              }
-              {/* Tronçon après B — atténué */}
-              {scissorIndexB !== null && scissorIndexB < scissorPoints.length - 1 && (
-                <Polyline
-                  positions={scissorPoints.slice(scissorIndexB).map(p => [p.lat, p.lng] as [number, number])}
-                  pathOptions={{ color: origColor, weight: 2, opacity: 0.4, dashArray: '4 4' }}
-                  interactive={false}
-                />
-              )}
-              {/* Marqueurs A et B */}
-              <Marker position={[scissorPoints[scissorIndexA].lat, scissorPoints[scissorIndexA].lng]}
-                      icon={SCISSOR_POINT_ICON} interactive={false} />
-              {scissorIndexB !== null && (
-                <Marker position={[scissorPoints[scissorIndexB].lat, scissorPoints[scissorIndexB].lng]}
-                        icon={SCISSOR_POINT_ICON} interactive={false} />
-              )}
-            </>
-          )
-        })()}
 
         {/* Clôture en cours de dessin */}
         {fenceMode && fencePoints.length > 0 && (
@@ -3468,7 +3217,7 @@ export default function MapPage() {
       )}
 
       {/* ── Bandeau d'erreur tuiles (auto-affiché si tuiles ne chargent pas) ── */}
-      {tileError && !fenceMode && !pointerMode && !scissorMode && (
+      {tileError && !fenceMode && !pointerMode && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000]
                         bg-sun text-earth text-xs font-semibold px-3 py-2 rounded-2xl
                         shadow-lg flex items-center gap-2 max-w-[92vw]">
@@ -3983,7 +3732,7 @@ export default function MapPage() {
 
 
       {/* ── Boutons flottants (FAB) ── */}
-      {!addMode && !pendingPos && !selected && !fenceMode && !scissorMode && !pointerMode && !streamMode && !plotMode && (
+      {!addMode && !pendingPos && !selected && !fenceMode && !pointerMode && !streamMode && !plotMode && (
         <div className="absolute bottom-6 right-4 z-[1000] flex flex-col gap-3 items-end">
           <button
             onClick={() => setPointerMode(true)}
@@ -4002,24 +3751,6 @@ export default function MapPage() {
             <Pencil size={18} />
             <span className="text-sm font-semibold">Clôture</span>
           </button>
-          {/* Bug Nils #4 22/05/2026 : bouton "Couper" global masqué — l'action
-              "découper une portion" est désormais accessible via le mode 'cut'
-              dans l'édition unifiée du tracé. État conservé pour rollback
-              éventuel (scissorMode et code associé encore en place). */}
-          {false && (
-          <button
-            onClick={() => {
-              setScissorMode(true)
-              setScissorPreset(null)
-              setScissorFormVisible(true)
-            }}
-            className="bg-rose-600 text-white rounded-2xl px-4 py-3 shadow-lg
-                       active:scale-95 transition-all flex items-center gap-2"
-          >
-            <Scissors size={18} />
-            <span className="text-sm font-semibold">Couper</span>
-          </button>
-          )}
           {/* Bouton cours d'eau — bug Eugénie 21/05/2026 V2 */}
           <button
             onClick={() => { setStreamMode(true); setStreamPoints([]) }}
@@ -4447,7 +4178,7 @@ export default function MapPage() {
         )}
         {/* Badge animaux non placés — couleurs explicites + bordure pour rester
             lisible aussi en dark mode au-dessus d'une photo aérienne sombre. */}
-        {animals.filter(a => a.enclosureId === null).length > 0 && !addMode && !fenceMode && !scissorMode && (
+        {animals.filter(a => a.enclosureId === null).length > 0 && !addMode && !fenceMode && (
           <div
             className="rounded-xl px-3 py-1.5 shadow-md border"
             style={{ backgroundColor: '#FACC15', borderColor: '#92400E' }}
@@ -4838,89 +4569,6 @@ export default function MapPage() {
                 {saving ? 'Enregistrement…' : "Placer l'épingle"}
               </button>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── Barre d'outils ciseau ── */}
-      {scissorMode && !scissorFormVisible && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000]
-                        bg-rose-600 text-white rounded-2xl shadow-xl
-                        px-3 py-2.5 flex items-center gap-2 max-w-[94vw]">
-          <Scissors size={15} className="flex-shrink-0" />
-          {/* Preset chip cliquable pour changer */}
-          {scissorPreset && (
-            <button
-              onClick={() => setScissorFormVisible(true)}
-              className="flex items-center gap-1.5 bg-white/15 active:bg-white/30 rounded-lg px-2 py-1 transition-colors"
-              title="Changer le type de fil"
-            >
-              <div className="w-3 h-3 rounded-full" style={{ background: scissorPreset.color }} />
-              <span className="text-xs font-semibold whitespace-nowrap">{scissorPreset.name}</span>
-            </button>
-          )}
-          <span className="text-sm font-semibold whitespace-nowrap">
-            {!scissorPreset
-              ? 'Choisir un fil...'
-              : scissorIndexA === null
-                ? '→ Tapez le 1er point'
-                : scissorIndexB === null
-                  ? '→ Tapez le 2e point'
-                  : 'Découpage…'}
-          </span>
-          {scissorIndexA !== null && scissorIndexB === null && (
-            <button
-              onClick={() => { setScissorFenceId(null); setScissorPoints([]); setScissorIndexA(null); setScissorIndexB(null) }}
-              className="p-1.5 rounded-lg bg-white/20 active:bg-white/40 text-sm font-bold"
-              title="Recommencer"
-            >↺</button>
-          )}
-          <button onClick={cancelScissor} className="p-1.5 rounded-lg bg-white/20 active:bg-white/40">
-            <X size={14} />
-          </button>
-        </div>
-      )}
-
-      {/* ══════════════════════════════════════════
-          Sheet : choix du type de fil pour la coupe
-      ══════════════════════════════════════════ */}
-      {scissorMode && scissorFormVisible && (
-        <div className="absolute inset-0 z-[2000] flex flex-col justify-end">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-               onClick={() => { if (scissorPreset) setScissorFormVisible(false); else cancelScissor() }} />
-          <div className="relative bg-card rounded-t-3xl px-5 pt-5 pb-10 shadow-2xl max-h-[75vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-charcoal text-lg font-bold m-0 flex items-center gap-2">
-                <Scissors size={20} className="text-rose-600" /> Type de fil pour la coupe
-              </h2>
-              <button onClick={cancelScissor}
-                      className="p-2 rounded-xl text-muted active:bg-cream">
-                <X size={20} />
-              </button>
-            </div>
-            <p className="text-xs text-muted mb-4 leading-relaxed">
-              Choisissez le fil à appliquer sur le tronçon découpé. Ensuite, tapez deux fois sur la clôture pour marquer le début et la fin.
-            </p>
-            <div className="space-y-2 max-h-[60vh] overflow-y-auto">
-              {fencePresets.map(preset => (
-                <button
-                  key={preset.id}
-                  onClick={() => {
-                    setScissorPreset(preset)
-                    setScissorFormVisible(false)
-                  }}
-                  className="w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all active:scale-95"
-                  style={{ borderColor: preset.color + '40', background: preset.color + '10' }}
-                >
-                  <div className="w-6 h-6 rounded-full flex-shrink-0 shadow-md" style={{ background: preset.color }} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-charcoal truncate">{preset.name}</p>
-                    {preset.description && <p className="text-xs text-muted truncate">{preset.description}</p>}
-                  </div>
-                  <span className="text-xs font-semibold text-muted/70">Choisir →</span>
-                </button>
-              ))}
-            </div>
           </div>
         </div>
       )}

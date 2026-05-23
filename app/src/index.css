@@ -220,10 +220,20 @@ button {
 
 /* Bug Nils 22/05/2026 : animation "le courant circule" sur les clôtures
    électriques alimentées. Marching ants subtil — l'œil capte que ça bouge
-   sans que ce soit envahissant. Conditionnel au zoom (cf. getFencePathOptions). */
+   sans que ce soit envahissant. Conditionnel au zoom (cf. getFencePathOptions).
+   Bug Eugénie 23/05 (téléphone qui chauffe) : ralentie de 1.6s → 4s pour
+   diviser la fréquence des repaints GPU. Visuellement aussi joli, moins coûteux.
+   Aussi : pause CSS quand la page est en arrière-plan (les browsers récents
+   le font automatiquement mais on force au cas où). */
 @keyframes fenceCurrentFlow {
   to { stroke-dashoffset: -32; }
 }
 .fence-electric-flow {
-  animation: fenceCurrentFlow 1.6s linear infinite;
+  animation: fenceCurrentFlow 4s linear infinite;
+  animation-play-state: running;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fence-electric-flow {
+    animation: none;
+  }
 }

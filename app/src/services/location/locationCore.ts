@@ -27,6 +27,28 @@ class LocationCore {
   // Anti-spam logs : un warn par code d'erreur par session. Sans ça le buffer
   // ring du bugReporter se remplit de "Timeout expired" toutes les minutes.
   private geoLogged         = new Set<string>()
+  // Bug Eugénie 23/05/2026 (téléphone qui chauffe) : on coupe le watch GPS
+  // quand la PWA passe en arrière-plan (écran verrouillé, app minimisée).
+  // Sans ça `enableHighAccuracy: true` consomme la batterie 24/24h alors que
+  // l'utilisatrice ne regarde pas. Reprend automatiquement au visibilitychange.
+  private visibilityBound   = false
+
+  private ensureVisibilityListener() {
+    if (this.visibilityBound || typeof document === 'undefined') return
+    this.visibilityBound = true
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        // Page cachée → on coupe le watch mais on garde les subscribers
+        // (resume automatique quand on revient).
+        if (this.watchId !== null) {
+          navigator.geolocation.clearWatch(this.watchId)
+          this.watchId = null
+        }
+      } else if (this.subscribers.size > 0 && this.watchId === null) {
+        this.start()
+      }
+    })
+  }
 
   /**
    * S'abonne au flux de positions. Démarre le watchPosition() si c'est le
@@ -49,7 +71,12 @@ class LocationCore {
       })
     }
 
-    if (this.watchId === null && this.subscribers.size > 0) {
+    this.ensureVisibilityListener()
+
+    // Si la page est cachée au moment du subscribe, on ne démarre pas tout
+    // de suite — le visibilitychange handler s'en chargera quand on reviendra.
+    const pageVisible = typeof document === 'undefined' || !document.hidden
+    if (this.watchId === null && this.subscribers.size > 0 && pageVisible) {
       this.start()
     }
 

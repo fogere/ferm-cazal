@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { collection, doc, onSnapshot, updateDoc } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from './useAuth'
@@ -37,16 +37,19 @@ export function useOnDemandLocationPublish() {
   const shareLocation = !!profile?.shareLocation
   const myUid = user?.uid
 
-  // Détecte si un autre user regarde la carte
-  const otherWatcherActive = useRef(false)
+  // Bug Eugénie 23/05/2026 (téléphone qui chauffe) : avant on subscribait au
+  // core en permanence avec un no-op pour "maintenir le watch actif" — résultat,
+  // le GPS tournait 24/24h alors que personne ne regardait la carte. Maintenant
+  // on n'active la souscription QUE si un autre user regarde la map → en idle
+  // (cas typique : Eugénie seule, app ouverte mais autres téléphones fermés),
+  // le watch ne tourne PAS du tout via ce hook.
+  const [otherWatcherActive, setOtherWatcherActive] = useState(false)
   const lastPublishAt      = useRef(0)
   const timerRef           = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // S'abonne au core (no-op sur les updates) : garantit que le watch tourne
-  // tant que shareLocation est on, même pour les utilisateurs où
-  // useGeofenceAlert est désactivé (cas temp + shareLocation).
+  // Subscribe au core uniquement quand un autre user nous regarde
   const noopUpdate = useCallback(() => { /* updates lus à la demande via getRecentPosition */ }, [])
-  useLocationCore(noopUpdate, undefined, !!myUid && shareLocation)
+  useLocationCore(noopUpdate, undefined, !!myUid && shareLocation && otherWatcherActive)
 
   useEffect(() => {
     if (!myUid || !shareLocation) return
@@ -62,12 +65,12 @@ export function useOnDemandLocationPublish() {
           active = true
         }
       })
-      otherWatcherActive.current = active
+      setOtherWatcherActive(active)
     }, err => console.warn('[onDemandPublish] users snap:', err?.code))
 
     // Polling local — quand actif, on publie 1× / minute (throttle).
     timerRef.current = setInterval(() => {
-      if (!otherWatcherActive.current) return
+      if (!otherWatcherActive) return
       const now = Date.now()
       if (now - lastPublishAt.current < PUBLISH_INTERVAL) return
 
@@ -89,5 +92,5 @@ export function useOnDemandLocationPublish() {
       unsub()
       if (timerRef.current) clearInterval(timerRef.current)
     }
-  }, [myUid, shareLocation])
+  }, [myUid, shareLocation, otherWatcherActive])
 }

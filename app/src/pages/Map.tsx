@@ -1,5 +1,5 @@
 import 'leaflet/dist/leaflet.css'
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MapContainer, TileLayer, Marker, Polyline, Polygon, Circle, useMapEvents, useMap } from 'react-leaflet'
 import L from 'leaflet'
@@ -2716,29 +2716,44 @@ export default function MapPage() {
 
   /* ─── helpers render ─── */
 
-  const overduePins  = new Set(pins.filter(p => isWaterOverdue(p) || isBatteryDue(p)).map(p => p.id))
-  const fencePins    = pins.filter(p => p.type === 'fence' && (p.points?.length ?? 0) >= 2)
+  // Perf Nils 23/05/2026 : useMemo sur les filters lourds. Avant ils
+  // recomputaient à CHAQUE render (et il y en a beaucoup vu la taille du
+  // composant), maintenant uniquement quand `pins` change.
+  const overduePins  = useMemo(
+    () => new Set(pins.filter(p => isWaterOverdue(p) || isBatteryDue(p)).map(p => p.id)),
+    [pins],
+  )
+  const fencePins    = useMemo(
+    () => pins.filter(p => p.type === 'fence' && (p.points?.length ?? 0) >= 2),
+    [pins],
+  )
   // Ids des land_plots qui ont un fence jumeau (migration S3). On ne les rend
   // S9 : avant on filtrait les jumeaux migrés pour les rendre via leur fence.
   // Désormais une clôture n'est jamais un espace, donc tous les land_plots
   // (y compris les jumeaux S3) doivent se dessiner eux-mêmes. Demande Nils
   // 22/05/2026 : "lorsque on referme une clôture ça crée une zone, on veut
   // pas du tout ça". Les plots scindés (S7) restent masqués via `inactive`.
-  const landPlotPins = pins.filter(p =>
-    p.type === 'land_plot'
-    && (p.points?.length ?? 0) >= 3
-    && !p.inactive,
+  const landPlotPins = useMemo(
+    () => pins.filter(p =>
+      p.type === 'land_plot'
+      && (p.points?.length ?? 0) >= 3
+      && !p.inactive,
+    ),
+    [pins],
   )
-  const nonFencePins = pins.filter(p => {
-    // Bug Nils 22/05/2026 : pas d'épingle 🏞️ pour les water_stream tracés —
-    // l'utilisateur veut juste voir le fil d'eau, sans la bulle emoji qui
-    // surcharge le visuel. On retombe sur l'épingle pour les streams orphelins
-    // (sans points — incident de saisie) pour qu'ils restent sélectionnables.
-    if (p.type === 'water_stream' && (p.points?.length ?? 0) >= 2) return false
-    if (p.type === 'fence' && (p.points?.length ?? 0) >= 2)        return false
-    if (p.type === 'land_plot')                                     return false  // jamais des Markers
-    return true
-  })
+  const nonFencePins = useMemo(
+    () => pins.filter(p => {
+      // Bug Nils 22/05/2026 : pas d'épingle 🏞️ pour les water_stream tracés —
+      // l'utilisateur veut juste voir le fil d'eau, sans la bulle emoji qui
+      // surcharge le visuel. On retombe sur l'épingle pour les streams orphelins
+      // (sans points — incident de saisie) pour qu'ils restent sélectionnables.
+      if (p.type === 'water_stream' && (p.points?.length ?? 0) >= 2) return false
+      if (p.type === 'fence' && (p.points?.length ?? 0) >= 2)        return false
+      if (p.type === 'land_plot')                                     return false  // jamais des Markers
+      return true
+    }),
+    [pins],
+  )
   // P3 : pendant l'édition d'un tracé (fenceEditPin actif), on ne veut AUCUNE
   // interaction avec les autres pins de la carte — l'utilisatrice se concentre
   // uniquement sur ses points. Inclus dans anyModeActive pour désactiver tous

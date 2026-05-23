@@ -226,6 +226,25 @@ button {
   font-size: 10px !important;
 }
 
+/* Bug Nils 23/05/2026 (BUGV3 #2) : animation visible quand on coche une tâche.
+   Flash vert qui balaie + petit zoom doux pour confirmer l'action.
+   Désactivée si prefers-reduced-motion. */
+@keyframes taskJustChecked {
+  0%   { background-color: rgba(82, 183, 136, 0.05); transform: scale(1); }
+  20%  { background-color: rgba(82, 183, 136, 0.45); transform: scale(1.015); }
+  60%  { background-color: rgba(82, 183, 136, 0.25); transform: scale(1.005); }
+  100% { background-color: rgba(82, 183, 136, 0.05); transform: scale(1); }
+}
+.task-just-checked {
+  animation: taskJustChecked 0.75s ease-out;
+  will-change: background-color, transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-just-checked {
+    animation: none;
+  }
+}
+
 /* Bug Nils 22/05/2026 : animation "le courant circule" sur les clôtures
    électriques alimentées. Marching ants subtil — l'œil capte que ça bouge
    sans que ce soit envahissant. Conditionnel au zoom (cf. getFencePathOptions).

@@ -122,6 +122,9 @@ export default function Tasks() {
   const [showDone, setShowDone]   = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [urgentForId, setUrgentForId] = useState<string | null>(null)
+  // Bug Nils 23/05/2026 (BUGV3 #2) : animation visible quand on coche une tâche.
+  // L'id reste setté ~700ms le temps de l'animation CSS, puis revient à null.
+  const [justCheckedId, setJustCheckedId] = useState<string | null>(null)
   const [urgentReason, setUrgentReason] = useState('')
   // Filtre : "à prendre" (libres) | "toutes" (incluant prises)
   const [filter, setFilter] = useState<'all' | 'unclaimed' | 'mine'>('all')
@@ -216,6 +219,11 @@ export default function Tasks() {
   async function toggleDone(task: Task) {
     const nowDone = !task.completed
     const now = Date.now()
+    // Animation : déclenchée immédiatement (optimistic UI) sans attendre l'écriture Firestore
+    if (nowDone) {
+      setJustCheckedId(task.id)
+      setTimeout(() => setJustCheckedId(curr => (curr === task.id ? null : curr)), 800)
+    }
     const updates: Record<string, unknown> = {
       completed:   nowDone,
       completedAt: nowDone ? now : null,
@@ -349,9 +357,11 @@ export default function Tasks() {
     const doneClass = task.completed
       ? 'bg-meadow/5 border-l-4 border-meadow rounded-r-lg pl-2'
       : ''
+    // Bug Nils 23/05/2026 (BUGV3 #2) : animation visible au moment où on coche.
+    const animClass = justCheckedId === task.id ? 'task-just-checked' : ''
 
     return (
-      <li className={`py-3 px-1 transition-colors ${doneClass}`}>
+      <li className={`py-3 px-1 transition-colors ${doneClass} ${animClass}`}>
         {confirming ? (
           <div className="flex items-center gap-3">
             <Trash2 size={18} className="text-danger flex-shrink-0" />

@@ -41,6 +41,15 @@ export interface BugSnapshot {
   userAgent:      string
   viewport:       { w: number; h: number }
   capturedAt:     number
+  // Bug Nils 23/05/2026 (BUGV3 #5) : enrichi avec contexte env pour traquer
+  // les bugs liés à la connexion / mémoire / batterie / state cache.
+  online?:        boolean
+  connection?:    string  // effectiveType : 'slow-2g'|'2g'|'3g'|'4g'
+  downlinkMbps?:  number
+  deviceMemoryGb?: number
+  hardwareConcurrency?: number
+  visible?:       boolean
+  sessionDurationSec?: number  // depuis l'install du reporter
 }
 
 export interface BugReport extends BugSnapshot {
@@ -62,6 +71,10 @@ let reporterUserName: string | null = null
 let installed = false
 // Réentrance : on désactive le patch console quand on logge nous-mêmes.
 let internalLog = false
+// Bug Nils 23/05/2026 (BUGV3 #5) : timestamp d'init pour calculer la durée
+// de session au moment du report (utile : un crash après 8h vs après 30s
+// pointent vers des problèmes différents — accumulation vs cold-start).
+let installedAtTs = 0
 
 // Listeners pour notifier l'UI quand un auto-report est ajouté.
 type AutoReportListener = (description: string) => void
@@ -162,6 +175,96 @@ function installErrorListeners() {
       errorStack:   String(stack).slice(0, 4000),
     })
   })
+
+  // Bug Nils 23/05/2026 (BUGV3 #5) : capter les changements de connectivité —
+  // souvent corrélé avec les bugs Firestore "WebChannel transport errored".
+  window.addEventListener('online',  () => pushConsole({ level: 'info', ts: Date.now(), text: '[net] online'  }))
+  window.addEventListener('offline', () => pushConsole({ level: 'warn', ts: Date.now(), text: '[net] OFFLINE' }))
+
+  // Bug Nils 23/05/2026 (BUGV3 #5) : capter les violations CSP (sécurité +
+  // bugs de chargement de ressource externe).
+  window.addEventListener('securitypolicyviolation', (ev) => {
+    pushConsole({
+      level: 'error',
+      ts: Date.now(),
+      text: `[csp-violation] ${ev.violatedDirective} blocked ${ev.blockedURI}`,
+    })
+  })
+}
+
+/**
+ * Patch fetch() pour logger toutes les requêtes qui échouent (network error
+ * ou 4xx/5xx). Bug Nils 23/05/2026 (BUGV3 #5) : Eugénie a des erreurs sur les
+ * tuiles IGN / Firestore en zone réseau dégradé que le système actuel ne
+ * capture pas explicitement.
+ */
+function installFetchPatch() {
+  if (typeof window === 'undefined' || !window.fetch) return
+  const orig = window.fetch.bind(window)
+  window.fetch = async (input, init) => {
+    const start = Date.now()
+    let url: string
+    try {
+      url = typeof input === 'string' ? input
+        : input instanceof URL ? input.toString()
+        : (input as Request).url
+    } catch { url = '<unknown>' }
+    try {
+      const res = await orig(input, init)
+      if (!res.ok && res.status >= 500) {
+        pushConsole({
+          level: 'error',
+          ts: Date.now(),
+          text: `[fetch] ${res.status} ${url} (${Date.now() - start}ms)`,
+        })
+      } else if (!res.ok && res.status >= 400) {
+        pushConsole({
+          level: 'warn',
+          ts: Date.now(),
+          text: `[fetch] ${res.status} ${url} (${Date.now() - start}ms)`,
+        })
+      }
+      return res
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : safeStringify(err)
+      pushConsole({
+        level: 'error',
+        ts: Date.now(),
+        text: `[fetch] network error ${url} : ${msg} (${Date.now() - start}ms)`,
+      })
+      throw err
+    }
+  }
+}
+
+/**
+ * PerformanceObserver pour capter les long tasks (>200ms = freezes UI
+ * perceptibles, à l'origine du bug #1+#5 BUGV2 "pas fluide / écran qui saute").
+ * Throttlé à 5 entries / minute pour ne pas spammer le buffer.
+ */
+function installLongTaskObserver() {
+  if (typeof PerformanceObserver === 'undefined') return
+  // Liste des types supportés varie par navigateur ; on essaie sans crasher.
+  try {
+    let recentCount = 0
+    let windowStart = Date.now()
+    const obs = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.duration < 200) continue  // seulement les freezes notables
+        // Reset compteur toutes les minutes
+        const now = Date.now()
+        if (now - windowStart > 60_000) { recentCount = 0; windowStart = now }
+        if (recentCount >= 5) continue
+        recentCount++
+        pushConsole({
+          level: 'warn',
+          ts:    Date.now(),
+          text:  `[longtask] ${Math.round(entry.duration)}ms (${entry.name ?? 'self'})`,
+        })
+      }
+    })
+    obs.observe({ entryTypes: ['longtask'] })
+  } catch { /* navigateur sans support : on ignore */ }
 }
 
 /* ─── Auto-report dedupe + queue ─── */
@@ -196,6 +299,10 @@ function queueAutoReport(partial: Pick<BugReport, 'description' | 'errorMessage'
 /* ─── Snapshot builder ─── */
 
 function buildSnapshot(): BugSnapshot {
+  // Contexte env (best-effort, certains APIs ne sont pas toujours dispos).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const nav = typeof navigator !== 'undefined' ? (navigator as any) : null
+  const conn = nav?.connection ?? nav?.mozConnection ?? nav?.webkitConnection
   return {
     consoleEntries: consoleBuffer.slice(-150), // 150 dernières pour limiter taille payload
     userActions:    actionBuffer.slice(-50),
@@ -205,6 +312,13 @@ function buildSnapshot(): BugSnapshot {
                       ? { w: window.innerWidth, h: window.innerHeight }
                       : { w: 0, h: 0 },
     capturedAt:     Date.now(),
+    online:         nav?.onLine ?? undefined,
+    connection:     conn?.effectiveType ?? undefined,
+    downlinkMbps:   typeof conn?.downlink === 'number' ? conn.downlink : undefined,
+    deviceMemoryGb: typeof nav?.deviceMemory === 'number' ? nav.deviceMemory : undefined,
+    hardwareConcurrency: typeof nav?.hardwareConcurrency === 'number' ? nav.hardwareConcurrency : undefined,
+    visible:        typeof document !== 'undefined' ? !document.hidden : undefined,
+    sessionDurationSec: installedAtTs ? Math.round((Date.now() - installedAtTs) / 1000) : undefined,
   }
 }
 
@@ -325,8 +439,11 @@ export function getQueueLength(): number {
 export function initBugReporter() {
   if (installed) return
   installed = true
+  installedAtTs = Date.now()
   installConsolePatch()
   installErrorListeners()
+  installFetchPatch()
+  installLongTaskObserver()
   // Tente de drainer la queue au lancement (au cas où l'app a planté hier)
   // Pas critique si ça échoue.
   setTimeout(() => { flushLocalQueue().catch(() => {}) }, 5_000)

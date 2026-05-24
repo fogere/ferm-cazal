@@ -2,15 +2,16 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   LogOut, Check, User, Bell, Shield, ChevronRight, MapPin, Moon, Sun, Bug,
-  Lock, Eye, EyeOff,
+  Lock, Eye, EyeOff, Minimize2, Maximize2,
 } from 'lucide-react'
-import { doc, deleteField } from 'firebase/firestore'
+import { doc, deleteField } from '../services/firestoreMonitor'
 import {
   reauthenticateWithCredential, EmailAuthProvider, updatePassword,
 } from 'firebase/auth'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import { useTheme } from '../hooks/useTheme'
+import { useDensity } from '../hooks/useDensity'
 import { registerFcmTokenManually } from '../hooks/useMessaging'
 import { updateDocBounded, FirestoreWriteTimeoutError } from '../services/firestoreWrite'
 
@@ -69,6 +70,7 @@ export default function Settings() {
   const [pwSuccess,     setPwSuccess]     = useState(false)
 
   const { theme, toggleTheme } = useTheme()
+  const { density, setDensity } = useDensity()
 
   async function changePassword() {
     if (!user || !user.email) return
@@ -508,6 +510,40 @@ export default function Settings() {
             >
               <Moon size={16} /> Sombre
             </button>
+          </div>
+
+          {/* Bug Eugénie/Benoît 24/05/2026 : si les boutons restent trop gros
+              malgré le clamp font-size (cf. index.css), basculer ici réduit la
+              base de ~12% — propage à tout le chrome via les `rem` Tailwind. */}
+          <div className="mt-3 pt-3 border-t border-border/40">
+            <p className="text-[11px] font-semibold text-muted uppercase tracking-wider mb-2">
+              Taille d'affichage
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => density !== 'normal' && setDensity('normal')}
+                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-semibold transition-all active:scale-95 ${
+                  density === 'normal'
+                    ? 'border-2 border-forest bg-forest/15 text-forest'
+                    : 'border border-border text-muted bg-cream'
+                }`}
+              >
+                <Maximize2 size={15} /> Normal
+              </button>
+              <button
+                onClick={() => density !== 'compact' && setDensity('compact')}
+                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-semibold transition-all active:scale-95 ${
+                  density === 'compact'
+                    ? 'border-2 border-forest bg-forest/15 text-forest'
+                    : 'border border-border text-muted bg-cream'
+                }`}
+              >
+                <Minimize2 size={15} /> Compact
+              </button>
+            </div>
+            <p className="text-[10px] text-muted mt-1.5 leading-tight">
+              Si les boutons et le texte te paraissent trop grands (Android avec "Taille d'affichage" en grand), passe en compact. Réglage local à ce téléphone.
+            </p>
           </div>
         </div>
 

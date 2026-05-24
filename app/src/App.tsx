@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './hooks/useAuth'
 import { ThemeProvider } from './hooks/useTheme'
+import { DensityProvider } from './hooks/useDensity'
 import { useMessaging } from './hooks/useMessaging'
 import { useBugReporter } from './hooks/useBugReporter'
 import { useOnDemandLocationPublish } from './hooks/useOnDemandLocationPublish'
@@ -203,9 +204,11 @@ export default function App() {
   return (
     <BrowserRouter>
       <ThemeProvider>
-        <AuthProvider>
-          <AppRoutes />
-        </AuthProvider>
+        <DensityProvider>
+          <AuthProvider>
+            <AppRoutes />
+          </AuthProvider>
+        </DensityProvider>
       </ThemeProvider>
     </BrowserRouter>
   )

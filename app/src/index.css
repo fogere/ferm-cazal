@@ -44,6 +44,21 @@ html {
   font-size: clamp(15px, 1rem, 17px);
 }
 
+/* Bug Eugénie/Benoît 24/05/2026 : si le clamp au-dessus ne suffit pas (Android
+   "Taille d'affichage" maximum), on offre un cran supplémentaire via le mode
+   "Affichage compact" dans Réglages > Apparence. Réduit la base de ~12%, ce
+   qui propage à tous les `rem` Tailwind (padding, gaps, tailles de police).
+   Activable par device (localStorage). Voir hooks/useDensity.tsx. */
+html.ui-compact {
+  font-size: clamp(13px, 0.875rem, 15px);
+}
+
+/* L'attribution Leaflet en compact : on la pousse encore un peu plus petite
+   (elle est déjà en px, donc pas touchée par le rem). */
+html.ui-compact .leaflet-control-attribution {
+  font-size: 9px !important;
+}
+
 body {
   margin: 0;
   height: 100%;

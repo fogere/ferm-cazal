@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { doc, updateDoc, deleteField } from 'firebase/firestore'
+import { doc, updateDoc, deleteField } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from './useAuth'
 import { useLocationCore } from './useLocationCore'
@@ -15,6 +15,11 @@ const MIN_DISTANCE_M  = 15
 // Filet de sécurité : si la page reste ouverte (onglet en arrière-plan),
 // on coupe au bout de 2 h sans toucher Firestore.
 const AUTO_STOP_MS    = 2 * 60 * 60 * 1000
+// Bug Eugénie 24/05/2026 (qualité GPS) : on rejette les positions très imprécises
+// (typiquement triangulation Wi-Fi/cellulaire → 100-500 m d'erreur). On préfère
+// ne rien publier plutôt que de partager une position fausse de 200 m aux autres
+// utilisatrices, qui croiraient alors qu'Eugénie est dans le mauvais enclos.
+const MAX_ACCURACY_M  = 100
 
 function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
   const R = 6_371_000
@@ -67,6 +72,9 @@ export function useLiveLocation() {
 
   const onPosition = useCallback((u: { lat: number; lng: number; accuracy: number; timestamp: number }) => {
     if (!myUid || stoppedRef.current) return
+
+    // Position trop imprécise (Wi-Fi/cellulaire) — on attend un fix GPS propre.
+    if (u.accuracy > MAX_ACCURACY_M) return
 
     // Auto-stop après 2 h : on désactive le partage en base et on arrête
     if (Date.now() - startedAtRef.current > AUTO_STOP_MS) {

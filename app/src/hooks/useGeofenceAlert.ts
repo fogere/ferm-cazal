@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import {
   collection, doc, getDocs, updateDoc,
-} from 'firebase/firestore'
+} from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from './useAuth'
 import { pointInPolygonWithHoles } from '../services/map/polygon'
@@ -35,6 +35,10 @@ const STALE_AFTER_MS  = 12 * 60 * 60 * 1000 // 12 h sans check → animal "à v�
 const RENOTIFY_MIN_MS = 6  * 60 * 60 * 1000 // anti-spam : 6 h entre 2 notifs pour le même enclos
 const REFRESH_MS      = 5  * 60 * 1000      // refresh cache enclos/animaux toutes les 5 min
 const POS_CHECK_MS    = 60_000              // throttle des checks de position : 1× / minute
+// Bug Eugénie 24/05/2026 : on ignore les positions à >100 m de précision
+// (Wi-Fi/cellulaire). Avec ce niveau d'erreur, on déclencherait des notifs de
+// geofence aléatoires dans le mauvais enclos.
+const MAX_ACCURACY_M  = 100
 
 function isValidLandPlot(pin: MapPin): boolean {
   return pin.type === 'land_plot'
@@ -85,8 +89,11 @@ export function useGeofenceAlert() {
   }, [active])
 
   // Réception des positions partagées : pointInPolygonWithHoles + notification locale.
-  const onPosition = useCallback((u: { lat: number; lng: number }) => {
+  const onPosition = useCallback((u: { lat: number; lng: number; accuracy: number }) => {
     if (!myUid) return
+    // Position imprécise (>100 m) — ignorer, sinon on risque de notifier
+    // qu'on est dans un enclos voisin.
+    if (u.accuracy > MAX_ACCURACY_M) return
     const now = Date.now()
     if (now - lastCheckedAt.current < POS_CHECK_MS) return
     lastCheckedAt.current = now

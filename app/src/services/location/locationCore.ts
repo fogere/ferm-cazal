@@ -45,6 +45,11 @@ class LocationCore {
           this.watchId = null
         }
       } else if (this.subscribers.size > 0 && this.watchId === null) {
+        // Bug Eugénie 24/05/2026 : au resume, on invalide la dernière position
+        // connue. Sans ça, le marker "me" continue d'afficher l'ancienne
+        // position pendant 10-30 s avant le premier nouveau fix GPS, alors
+        // que l'utilisatrice s'est peut-être déplacée pendant la veille.
+        this.lastUpdate = null
         this.start()
       }
     })
@@ -63,7 +68,13 @@ class LocationCore {
     this.subscribers.set(key, cb)
     if (errCb) this.errorSubscribers.set(key, errCb)
 
-    if (this.lastUpdate) {
+    // Bug Eugénie 24/05/2026 (qualité GPS) : on ne replay PAS une lastUpdate
+    // périmée. Sinon, après une longue mise en veille (page cachée), un nouveau
+    // subscriber recevait une position d'il y a 5 min comme si elle était fraîche.
+    // 30 s est le seuil sous lequel la position est encore "current" pour
+    // l'usage typique de la PWA (geofence, marker me, live-share).
+    const REPLAY_FRESH_MS = 30_000
+    if (this.lastUpdate && Date.now() - this.lastUpdate.timestamp < REPLAY_FRESH_MS) {
       // Replay async pour ne pas perturber le flow d'effets React au mount
       const snapshot = this.lastUpdate
       queueMicrotask(() => {

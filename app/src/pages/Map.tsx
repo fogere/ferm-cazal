@@ -9,10 +9,11 @@ import type { PinPhoto, EnclosureMovement } from '../types'
 import {
   collection, query, where, onSnapshot, addDoc, deleteDoc, getDocs,
   doc, updateDoc, getDoc, setDoc, writeBatch, deleteField,
-} from 'firebase/firestore'
+} from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import { useLiveLocation } from '../hooks/useLiveLocation'
+import { useLocationCore } from '../hooks/useLocationCore'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'
 import { getSpeciesInfo } from '../services/species'
 import {
@@ -910,6 +911,15 @@ export default function MapPage() {
   // Évite de pinger Firestore en arrière-plan toute la journée — la position
   // n'est utile qu'aux utilisateurs qui ont la carte ouverte.
   useLiveLocation()
+
+  // Bug Eugénie 24/05/2026 (qualité GPS) : son propre marker sur la carte est
+  // rendu DIRECTEMENT depuis le flux GPS local (~1 update/s), pas depuis
+  // Firestore qui est throttled à 90 s. Sans ça, sur son propre téléphone, sa
+  // pastille bougeait toutes les 90 s, d'où le sentiment "GPS nul" comparé à
+  // Google Maps. Les AUTRES utilisateurs continuent d'être lus via Firestore
+  // (cf. plus bas dans le rendu).
+  const [selfPos, setSelfPos] = useState<{ lat: number; lng: number; accuracy: number; timestamp: number } | null>(null)
+  useLocationCore(setSelfPos, undefined, !!user && !!profile?.shareLocation)
 
   /* Signal "carte ouverte" : pose `mapOpenAt` + heartbeat 60 s tant que
      cette page est montée. Sert aux autres clients pour décider de publier
@@ -3141,9 +3151,12 @@ export default function MapPage() {
           <Marker position={[pendingPos.lat, pendingPos.lng]} icon={makeDivIcon(form.type)} />
         )}
 
-        {/* Positions GPS partagées des membres (incluant soi-même) */}
+        {/* Positions GPS partagées des AUTRES membres (lues depuis Firestore,
+            throttled à 90 s).
+            Soi-même est rendu séparément depuis selfPos (locationCore direct,
+            ~1 update/s) pour avoir une pastille temps réel comme Google Maps. */}
         {users
-          .filter(u => u.liveLocation && (now - (u.liveLocation.updatedAt ?? 0)) < 10 * 60_000)
+          .filter(u => u.uid !== user?.uid && u.liveLocation && (now - (u.liveLocation.updatedAt ?? 0)) < 10 * 60_000)
           .map(u => (
             <Marker
               key={`live-${u.uid}`}
@@ -3153,6 +3166,35 @@ export default function MapPage() {
               zIndexOffset={300}
             />
           ))}
+
+        {/* Soi-même : marker temps réel + cercle de précision.
+            Cercle d'incertitude = visualisation directe de la qualité du signal
+            GPS (3 m = excellent, 80 m = mauvais). Permet à l'utilisatrice de
+            voir si son GPS est fiable AVANT de prendre une décision (placer un
+            poteau, valider un check geofence). */}
+        {selfPos && profile?.shareLocation && (
+          <>
+            <Circle
+              center={[selfPos.lat, selfPos.lng]}
+              radius={Math.max(3, Math.min(200, selfPos.accuracy))}
+              pathOptions={{
+                color:       profile.color || '#2D6A4F',
+                weight:      1,
+                opacity:     0.4,
+                fillColor:   profile.color || '#2D6A4F',
+                fillOpacity: 0.08,
+              }}
+              interactive={false}
+            />
+            <Marker
+              key="live-self"
+              position={[selfPos.lat, selfPos.lng]}
+              icon={makeUserLocationIcon(profile.color || '#2D6A4F', (profile.displayName || '?').charAt(0).toUpperCase())}
+              interactive={false}
+              zIndexOffset={400}
+            />
+          </>
+        )}
 
         {/* Pointeurs partagés des AUTRES utilisateurs (depuis Firestore).
             Le sien à soi est rendu séparément via localPointer (cf. en dessous)

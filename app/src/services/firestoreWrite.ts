@@ -1,4 +1,4 @@
-import { updateDoc as fsUpdateDoc, type DocumentReference } from 'firebase/firestore'
+import { updateDoc as fsUpdateDoc, type DocumentReference } from './firestoreMonitor'
 
 // Quand Firestore est saturé (quota dépassé), le SDK met les écritures en file
 // d'attente avec backoff exponentiel — la promesse de updateDoc() peut ne jamais

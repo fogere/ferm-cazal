@@ -6,10 +6,11 @@ import {
   Stethoscope, ChevronDown, ChevronRight, Calendar, Camera, Trash2,
 } from 'lucide-react'
 import { compressImage } from '../services/image'
+import FirestoreMonitorPanel from '../components/admin/FirestoreMonitorPanel'
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
   doc, getDoc, setDoc, getDocs, query, where, deleteField, writeBatch,
-} from 'firebase/firestore'
+} from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth, formatCode } from '../hooks/useAuth'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'
@@ -2116,6 +2117,9 @@ export default function Admin() {
             </p>
           </div>
         </div>
+
+        {/* ─── Monitoring Firebase (BUGV3 #4) ─── */}
+        <FirestoreMonitorPanel />
 
       </div>
 

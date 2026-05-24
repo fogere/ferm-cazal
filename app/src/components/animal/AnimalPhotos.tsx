@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Camera, X, Play, Pause, ChevronLeft, ChevronRight, Tag } from 'lucide-react'
 import {
   doc, updateDoc, deleteDoc, addDoc, collection,
-} from 'firebase/firestore'
+} from '../../services/firestoreMonitor'
 import { db } from '../../firebase'
 import { compressImage } from '../../services/image'
 import type { AnimalPhoto } from '../../types'

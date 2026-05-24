@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Plus, Trash2, Calendar } from 'lucide-react'
 import {
   collection, addDoc, deleteDoc, doc,
-} from 'firebase/firestore'
+} from '../../services/firestoreMonitor'
 import { db } from '../../firebase'
 import {
   dateInputToTs,

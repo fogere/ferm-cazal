@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Home, CheckSquare, Map, Bell, Settings } from 'lucide-react'
-import { collection, query, where, onSnapshot } from 'firebase/firestore'
+import { collection, query, where, onSnapshot } from '../../services/firestoreMonitor'
 import { db } from '../../firebase'
 
 const NAV_ITEMS = [

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Moon, CheckCircle2, AlertCircle, Plus, ArrowRight, X, Sunrise } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { collection, doc, onSnapshot, query, updateDoc } from 'firebase/firestore'
+import { collection, doc, onSnapshot, query, updateDoc } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import type { Task, UserProfile } from '../types'

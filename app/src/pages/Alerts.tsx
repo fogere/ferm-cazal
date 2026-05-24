@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Plus, X, AlertTriangle, Check, ChevronDown, ChevronRight } from 'lucide-react'
 import {
   collection, query, onSnapshot, updateDoc, doc, addDoc, where,
-} from 'firebase/firestore'
+} from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import { timeAgo } from '../services/map/time'

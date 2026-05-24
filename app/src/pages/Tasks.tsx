@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import {
   collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc,
-} from 'firebase/firestore'
+} from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import { timeAgo } from '../services/map/time'

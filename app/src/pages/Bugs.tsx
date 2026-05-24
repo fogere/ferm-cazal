@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query } from 'firebase/firestore'
+import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query } from '../services/firestoreMonitor'
 import { Bug, ChevronDown, ChevronRight, Copy, ExternalLink, Trash2, Download, Trash, Mail, X } from 'lucide-react'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'

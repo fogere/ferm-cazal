@@ -7,7 +7,7 @@ import {
   type Query,
   type QueryDocumentSnapshot,
   type Unsubscribe,
-} from 'firebase/firestore'
+} from './firestoreMonitor'
 import { db } from '../firebase'
 
 /**

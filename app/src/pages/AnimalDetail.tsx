@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   collection, doc, onSnapshot, query, where, updateDoc, addDoc, deleteDoc,
-} from 'firebase/firestore'
+} from '../services/firestoreMonitor'
 import { X, Plus, Check, Calendar, Stethoscope, Trash2 } from 'lucide-react'
 import { db } from '../firebase'
 import {

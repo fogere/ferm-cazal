@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Bell, MapPin, Check, ChevronRight, Loader2 } from 'lucide-react'
-import { doc, updateDoc } from 'firebase/firestore'
+import { doc, updateDoc } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import { registerFcmTokenManually } from '../hooks/useMessaging'

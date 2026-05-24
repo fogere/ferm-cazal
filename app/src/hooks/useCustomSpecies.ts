@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { doc, onSnapshot } from 'firebase/firestore'
+import { doc, onSnapshot } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import type { CustomSpecies } from '../types'
 

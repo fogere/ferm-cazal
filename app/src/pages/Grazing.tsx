@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   collection, onSnapshot, addDoc, query, where,
-} from 'firebase/firestore'
+} from '../services/firestoreMonitor'
 import {
   ArrowLeft, Download, ClipboardPaste, Plus, Calendar, X,
 } from 'lucide-react'

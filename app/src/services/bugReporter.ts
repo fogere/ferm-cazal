@@ -1,4 +1,4 @@
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore'
+import { addDoc, collection, serverTimestamp } from './firestoreMonitor'
 import { db } from '../firebase'
 import { withTimeout, FirestoreWriteTimeoutError } from './firestoreWrite'
 

@@ -6,7 +6,7 @@ import {
   onAuthStateChanged,
   type User,
 } from 'firebase/auth'
-import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore'
+import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from '../services/firestoreMonitor'
 import { auth, db, nameToEmail } from '../firebase'
 import type { UserProfile, Availability } from '../types'
 

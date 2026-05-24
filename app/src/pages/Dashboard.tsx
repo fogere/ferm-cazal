@@ -5,7 +5,7 @@ import {
   AlertTriangle, ChevronRight, RefreshCw, Flame, Stethoscope,
   Navigation, Zap, Hand, ChevronDown, BellRing, Megaphone,
 } from 'lucide-react'
-import { doc, updateDoc, collection, query, where, onSnapshot } from 'firebase/firestore'
+import { doc, updateDoc, collection, query, where, onSnapshot } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'

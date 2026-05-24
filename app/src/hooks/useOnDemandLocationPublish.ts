@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { collection, doc, onSnapshot, updateDoc } from 'firebase/firestore'
+import { collection, doc, onSnapshot, updateDoc } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from './useAuth'
 import { useLocationCore } from './useLocationCore'

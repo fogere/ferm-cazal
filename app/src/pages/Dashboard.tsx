@@ -232,27 +232,33 @@ export default function Dashboard() {
 
   useEffect(() => { loadWeather() }, [loadWeather])
 
-  // Pool model : on lit TOUTES les tâches du jour (pas juste les miennes)
-  // pour pouvoir séparer "Pour moi", "Libres" et "Pour les autres".
+  // Toutes les tâches : single source of truth.
+  // Optimisation 24/05/2026 (panel monitoring) : avant on avait 2 listeners
+  // séparés sur la collection `tasks` (l'un pour `tasks` aujourd'hui, l'autre
+  // pour `allTasks` stats hebdo) — même donnée chargée 2× au mount. Maintenant
+  // un seul listener stocke `allTasks`, et `tasks` du jour est dérivé via
+  // useMemo plus bas.
+  const [allTasks, setAllTasks] = useState<Task[]>([])
   useEffect(() => {
     if (!user) return
-    const q = query(collection(db, 'tasks'))
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-    const todayEnd   = new Date(); todayEnd.setHours(23, 59, 59, 999)
-
-    const unsub = onSnapshot(q, snap => {
-      const all = snap.docs.map(d => ({ id: d.id, ...d.data() } as Task))
-      // Aujourd'hui = dueDate dans la journée OU déjà fait aujourd'hui
-      const todayTasks = all.filter(t => {
-        if (t.dueDate >= todayStart.getTime() && t.dueDate <= todayEnd.getTime()) return true
-        if (t.completed && t.completedAt &&
-            t.completedAt >= todayStart.getTime() && t.completedAt <= todayEnd.getTime()) return true
-        return false
-      })
-      setTasks(todayTasks)
+    const unsub = onSnapshot(query(collection(db, 'tasks')), snap => {
+      setAllTasks(snap.docs.map(d => ({ id: d.id, ...d.data() } as Task)))
     })
     return unsub
   }, [user])
+
+  // Tâches du jour (dérivé sans re-fetch Firestore)
+  useEffect(() => {
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+    const todayEnd   = new Date(); todayEnd.setHours(23, 59, 59, 999)
+    const todayTasks = allTasks.filter(t => {
+      if (t.dueDate >= todayStart.getTime() && t.dueDate <= todayEnd.getTime()) return true
+      if (t.completed && t.completedAt &&
+          t.completedAt >= todayStart.getTime() && t.completedAt <= todayEnd.getTime()) return true
+      return false
+    })
+    setTasks(todayTasks)
+  }, [allTasks])
 
   // Alertes actives en temps réel
   useEffect(() => {
@@ -307,14 +313,8 @@ export default function Dashboard() {
     return unsub
   }, [])
 
-  // Toutes les tâches (pour stats hebdo)
-  const [allTasks, setAllTasks] = useState<Task[]>([])
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'tasks'), snap =>
-      setAllTasks(snap.docs.map(d => ({ id: d.id, ...d.data() } as Task)))
-    )
-    return unsub
-  }, [])
+  // allTasks est désormais alimenté par le listener unique plus haut
+  // (single source of truth, évite le double-fetch de la collection tasks).
 
   // Réserves basses (stock <= seuil d'alerte)
   const lowReserves = useMemo(

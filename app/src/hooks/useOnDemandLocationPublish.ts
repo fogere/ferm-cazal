@@ -46,6 +46,12 @@ export function useOnDemandLocationPublish() {
   const [otherWatcherActive, setOtherWatcherActive] = useState(false)
   const lastPublishAt      = useRef(0)
   const timerRef           = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Bug détecté 24/05/2026 via panel monitoring : si on met `otherWatcherActive`
+  // dans les deps de l'effet plus bas, le listener `users` se ré-attache à
+  // chaque ouverture/fermeture de carte par un autre utilisateur (listener
+  // churn). Le ref ci-dessous reflète la valeur courante du state pour que le
+  // setInterval puisse la lire sans re-créer l'effet.
+  const otherWatcherActiveRef = useRef(false)
 
   // Subscribe au core uniquement quand un autre user nous regarde
   const noopUpdate = useCallback(() => { /* updates lus à la demande via getRecentPosition */ }, [])
@@ -54,7 +60,9 @@ export function useOnDemandLocationPublish() {
   useEffect(() => {
     if (!myUid || !shareLocation) return
 
-    // Écoute les autres profils pour savoir si l'un d'eux regarde la map
+    // Écoute les autres profils pour savoir si l'un d'eux regarde la map.
+    // Listener stable : ne dépend que de myUid+shareLocation, ne se ré-attache
+    // PAS quand otherWatcherActive bascule.
     const unsub = onSnapshot(collection(db, 'users'), snap => {
       const now = Date.now()
       let active = false
@@ -65,12 +73,15 @@ export function useOnDemandLocationPublish() {
           active = true
         }
       })
+      otherWatcherActiveRef.current = active
       setOtherWatcherActive(active)
     }, err => console.warn('[onDemandPublish] users snap:', err?.code))
 
     // Polling local — quand actif, on publie 1× / minute (throttle).
+    // Lit otherWatcherActiveRef.current au lieu du state pour éviter d'avoir
+    // à recréer le timer (et le listener au-dessus) à chaque flip.
     timerRef.current = setInterval(() => {
-      if (!otherWatcherActive) return
+      if (!otherWatcherActiveRef.current) return
       const now = Date.now()
       if (now - lastPublishAt.current < PUBLISH_INTERVAL) return
 
@@ -92,5 +103,5 @@ export function useOnDemandLocationPublish() {
       unsub()
       if (timerRef.current) clearInterval(timerRef.current)
     }
-  }, [myUid, shareLocation, otherWatcherActive])
+  }, [myUid, shareLocation])
 }

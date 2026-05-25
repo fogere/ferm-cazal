@@ -30,6 +30,7 @@ import { isBatteryDue } from '../services/map/battery'
 import { enclosureQueryIds, effectiveEnclosureId } from '../services/map/enclosure'
 import { detectPlotSplit, diagnoseSplitFailure, type SplitResult } from '../services/map/polygon-split'
 import { healthFreshness } from '../services/map/health'
+import { completeLinkedTasks } from '../services/taskAutoComplete'
 import { WaterManualPanel } from './map/panels/WaterManualPanel'
 import { WaterStreamPanel } from './map/panels/WaterStreamPanel'
 import { BatteryPanel } from './map/panels/BatteryPanel'
@@ -1438,6 +1439,26 @@ export default function MapPage() {
     setSelected(null)
     setEditOccupants(false)
     setEditEnclosureAnimals(false)
+    // Bug Nils V4 #2 (24/05/2026) : reset tous les drafts de création pour ne
+    // pas voir de pin/poteau fantôme apparaitre en mode édition. Cas typique :
+    // l'utilisatrice a commencé à tracer une clôture, a abandonné via setSelected
+    // (qui ne fait que setFenceMode(false) sans nettoyer fencePoints), puis a
+    // ouvert l'édition d'une autre clôture → les anciens points restaient.
+    setPendingPos(null)
+    setAddMode(false)
+    setFenceMode(false)
+    setFencePoints([])
+    setFenceFormVisible(false)
+    setFenceIsClosed(false)
+    setFenceSnapTarget(null)
+    setStreamMode(false)
+    setStreamPoints([])
+    setPlotMode(false)
+    setPlotPoints([])
+    setHoleMode(false)
+    setHolePoints([])
+    setHolePlotId(null)
+    setPointerMode(false)
   }
 
   function cancelEditFence() {
@@ -2268,6 +2289,9 @@ export default function MapPage() {
         updatedAt:      now,
         updatedBy:      user.uid,
       })
+      // Auto-validation des tâches liées (demande Nils 25/05/2026) :
+      // si une tâche pointe vers ce point d'eau, on la coche en même temps.
+      await completeLinkedTasks('water_manual', pin.id, user.uid)
     } finally { setActionBusy(false) }
   }
 
@@ -2415,6 +2439,66 @@ export default function MapPage() {
       alert("Suppression réservée aux utilisateurs réguliers.")
       return
     }
+    if (!user) return
+
+    // Pin à supprimer (lu depuis la mémoire pour pas re-fetch)
+    const pinToDelete = pins.find(p => p.id === pinId)
+
+    // ── S8 — fusion auto si on supprime une clôture qui a scindé un land_plot.
+    // Demande Nils 24/05/2026 (V4 #3) : "j'ai supprimé la clôture rouge mais les
+    // 2 terrains n'ont pas refusionné". La logique S7 (scindage) créait bien les
+    // enfants + flagait le parent inactive, mais S8 (suppression de la clôture
+    // scindante = retour à l'état d'origine) n'avait jamais été codée.
+    //
+    // Comportement attendu :
+    //   1. Lire splitsPlotId sur la clôture supprimée → trouver le parent + ses enfants directs.
+    //   2. Si l'un des enfants a lui-même été re-scindé (descendants actifs), refuser
+    //      la fusion et avertir l'utilisateur (sinon on perdrait les sous-divisions).
+    //   3. Sinon, dans le même batch atomique :
+    //      - rapatrier les animaux des enfants vers le parent (enclosureId = parent.id)
+    //      - supprimer les enfants
+    //      - réactiver le parent (inactive: false)
+    //      - supprimer la clôture
+    const splitParentId = pinToDelete?.splitsPlotId
+    let mergeParent: MapPin | null = null
+    let mergeChildren: MapPin[] = []
+    let animalsToRehome: Animal[] = []
+    if (splitParentId) {
+      const parent = pins.find(p => p.id === splitParentId && p.type === 'land_plot')
+      if (parent) {
+        // Enfants directs : land_plots qui pointent vers ce parent.
+        // Note : on exclut le parent lui-même par sécurité (parentPlotId ne devrait
+        // jamais s'auto-référencer mais c'est de la défense en profondeur).
+        const children = pins.filter(p =>
+          p.type === 'land_plot' &&
+          p.parentPlotId === splitParentId &&
+          p.id !== splitParentId
+        )
+        // Si un enfant est lui-même parent d'une sous-division encore active,
+        // on bloque la fusion pour ne pas perdre la sous-structure.
+        const hasActiveSubsplit = children.some(c =>
+          pins.some(p =>
+            p.type === 'land_plot' &&
+            p.parentPlotId === c.id &&
+            !p.inactive
+          )
+        )
+        if (hasActiveSubsplit) {
+          alert(
+            "Cette clôture ne peut pas être supprimée tant que les sous-divisions existent.\n\n" +
+            "Supprime d'abord les clôtures qui scindent les sous-espaces, puis réessaye."
+          )
+          // Ré-ouvrir le panneau (l'utilisateur l'avait peut-être fermé déjà)
+          if (pinToDelete) setSelected(pinToDelete)
+          return
+        }
+        mergeParent     = parent
+        mergeChildren   = children
+        const childIds  = new Set(children.map(c => c.id))
+        animalsToRehome = animals.filter(a => a.enclosureId && childIds.has(a.enclosureId))
+      }
+    }
+
     // 1. Fermer immédiatement le panneau (UX : pas d'attente perçue)
     setSelected(null)
     setConfirmDeletePin(false)
@@ -2430,10 +2514,25 @@ export default function MapPage() {
       } catch { /* on continue sans les photos */ }
     }
     // 3. Tout dans UN seul batch atomique (1 round-trip réseau)
+    const now = Date.now()
     const batch = writeBatch(db)
     for (const a of toFree)    batch.update(doc(db, 'animals',    a.id), { enclosureId: null })
     for (const s of childSegs) batch.delete(doc(db, 'map_pins',   s.id))
     for (const p of attachedPhotos) batch.delete(doc(db, 'pin_photos', p.id))
+    // S8 — fusion
+    if (mergeParent) {
+      for (const a of animalsToRehome) {
+        batch.update(doc(db, 'animals', a.id), { enclosureId: mergeParent.id })
+      }
+      for (const c of mergeChildren) {
+        batch.delete(doc(db, 'map_pins', c.id))
+      }
+      batch.update(doc(db, 'map_pins', mergeParent.id), {
+        inactive:  false,
+        updatedAt: now,
+        updatedBy: user.uid,
+      })
+    }
     batch.delete(doc(db, 'map_pins', pinId))
     try {
       await batch.commit()
@@ -2732,7 +2831,17 @@ export default function MapPage() {
             // d'autres pins. L'utilisatrice se concentre uniquement sur ses
             // points (drag/insert/delete). Pour sortir, elle valide ou annule.
             if (fenceEditPin) return
-            setSelected(pin); setAddMode(false); setFenceMode(false); setEditOccupants(false); setEditEnclosureAnimals(false)
+            setSelected(pin)
+            setAddMode(false)
+            setFenceMode(false)
+            setEditOccupants(false)
+            setEditEnclosureAnimals(false)
+            // Bug Nils V4 #2 (24/05/2026) : reset les drafts en abandonnant
+            // fenceMode/streamMode/plotMode via sélection d'un pin, sinon les
+            // points fantômes survivent et réapparaissent ailleurs.
+            setFencePoints([])
+            setStreamPoints([])
+            setPlotPoints([])
           }}
           onSnapHover={setFenceSnapTarget}
           fencePins={fencePins}
@@ -3126,15 +3235,33 @@ export default function MapPage() {
           </>
         )}
 
-        {/* Épingles standard — non-interactives, sélection via proximité */}
-        {nonFencePins.map(pin => (
-          <Marker
-            key={pin.id}
-            position={[pin.lat, pin.lng]}
-            icon={makeDivIcon(pin.type, overduePins.has(pin.id), (pin.photoCount ?? 0) > 0, pin.waterStatus, pin.todoStatus === 'done', pin.type === 'battery' && pin.powerOn === false)}
-            interactive={false}
-          />
-        ))}
+        {/* Épingles standard — non-interactives, sélection via proximité.
+            Bug Nils V4 #5 (24/05/2026) : en vue très large (zoom < LABEL_ZOOM_LOW),
+            les pins eau/zone surchargeaient la carte alors que les labels animaux
+            étaient déjà masqués. On aligne le seuil : tout disparaît ensemble.
+            Les pins critiques (alert, todo non fait, batterie en panne) restent
+            visibles à tous les zooms pour rester repérables de loin. */}
+        {nonFencePins
+          .filter(pin => {
+            if (mapZoom >= LABEL_ZOOM_LOW) return true
+            // Pins toujours visibles : alertes + tâches à faire en cours +
+            // batteries en panne (utile en vue dézoom pour repérer rapidement).
+            if (pin.type === 'alert') return true
+            if (pin.type === 'todo' && pin.todoStatus !== 'done') return true
+            if (pin.type === 'battery' && (pin.batteryStatus === 'down' || pin.batteryStatus === 'critical')) return true
+            // Eau en retard reste visible (cas critique, l'utilisatrice doit voir
+            // qu'il y a une urgence même de loin).
+            if ((pin.type === 'water_manual' || pin.type === 'water_natural') && overduePins.has(pin.id)) return true
+            return false
+          })
+          .map(pin => (
+            <Marker
+              key={pin.id}
+              position={[pin.lat, pin.lng]}
+              icon={makeDivIcon(pin.type, overduePins.has(pin.id), (pin.photoCount ?? 0) > 0, pin.waterStatus, pin.todoStatus === 'done', pin.type === 'battery' && pin.powerOn === false)}
+              interactive={false}
+            />
+          ))}
 
         {/* Anneau de sélection autour de l'épingle/clôture sélectionnée */}
         {selected && (
@@ -5000,7 +5127,11 @@ export default function MapPage() {
             animals={plotAnimals}
             customSpecies={customSpecies}
             saving={savingHealth}
-            onMarkChecked={markAllHealthy}
+            onMarkChecked={async (list) => {
+              await markAllHealthy(list)
+              // Auto-validation des tâches liées à cet espace (Nils 25/05/2026)
+              if (user) await completeLinkedTasks('land_plot', plot.id, user.uid)
+            }}
             onOpenAnimal={(a) => { clearCheck(); navigate(`/animal/${a.id}`) }}
             onClose={clearCheck}
           />
@@ -5080,7 +5211,10 @@ export default function MapPage() {
                 setPendingMoveDate={setPendingMoveDate}
                 pendingMoveNote={pendingMoveNote}
                 setPendingMoveNote={setPendingMoveNote}
-                onMarkAllHealthy={markAllHealthy}
+                onMarkAllHealthy={async (list) => {
+                  await markAllHealthy(list)
+                  if (user) await completeLinkedTasks('land_plot', selected.id, user.uid)
+                }}
                 onSaveEnclosureAnimals={saveEnclosureAnimals}
                 onSetRotation={async (pin, days) => {
                   if (!user) return
@@ -5204,7 +5338,14 @@ export default function MapPage() {
                   setPendingMoveDate={setPendingMoveDate}
                   pendingMoveNote={pendingMoveNote}
                   setPendingMoveNote={setPendingMoveNote}
-                  onMarkAllHealthy={markAllHealthy}
+                  onMarkAllHealthy={async (list) => {
+                    await markAllHealthy(list)
+                    // Fences ont parfois un land_plot jumeau (migration S3). Si oui,
+                    // les tâches sont liées au plot — on auto-valide pour ce plot.
+                    if (user && selected.migratedToPlotId) {
+                      await completeLinkedTasks('land_plot', selected.migratedToPlotId, user.uid)
+                    }
+                  }}
                   onSaveEnclosureAnimals={saveEnclosureAnimals}
                   onSetRotation={async (pin, days) => {
                     if (!user) return

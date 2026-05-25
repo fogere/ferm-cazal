@@ -501,19 +501,25 @@ async function processMorningSummary() {
   }
 }
 
-/* ─── Push bilan du soir (19h Paris, tous les users) ─── */
+/* ─── Push bilan du soir (heure custom par user, défaut 19h) ─── */
 /*
- * À 19h00 (±5 min), push à tous les utilisateurs réguliers :
- * "Bilan du soir disponible — ouvre l'app". Le modal EveningRecap dans l'app
- * fait le reste de l'expérience (récap visuel, planifier demain, etc.).
+ * Chaque user a son propre horaire de bilan (champ eveningRecapTime). Le cron
+ * tourne toutes les 5 min ; on déclenche le push si l'heure actuelle est dans
+ * une fenêtre de ±5 min autour de eveningRecapTime ET que le push n'a pas déjà
+ * été envoyé aujourd'hui (lastEveningPushDate).
+ *
+ * Le modal EveningRecap dans l'app fait le reste de l'expérience (récap visuel,
+ * planifier demain, etc.). Demande Nils 25/05/2026 : heure custom + accès permanent
+ * via l'encart Dashboard après cette heure.
  */
-const EVENING_TIME = '19:00'
+const EVENING_TIME_DEFAULT = '19:00'
 
 async function processEveningPush() {
-  if (!isWithinMinutes(EVENING_TIME)) return
   const today = dayStringParis()
   const allUsers = await getAllRegularUsers()
   for (const u of allUsers) {
+    const time = u.eveningRecapTime || EVENING_TIME_DEFAULT
+    if (!isWithinMinutes(time)) continue
     if (u.lastEveningPushDate === today) continue
     await sendNotification(u, {
       title: '🌙 Bilan du soir',

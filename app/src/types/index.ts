@@ -17,6 +17,10 @@ export interface UserProfile {
   // Heure à laquelle le user veut recevoir le résumé du matin (HH:MM Europe/Paris).
   // Défaut implicite : valeur de silentEnd, sinon 07:00.
   morningReminderTime?: string
+  // Heure du bilan du soir (HH:MM Europe/Paris). Cron envoie la notif "🌙 Bilan"
+  // à cette heure ; côté client, le modal pop à cette heure et l'encart Dashboard
+  // reste visible jusqu'à la fin de la journée. Défaut implicite : 19:00.
+  eveningRecapTime?: string
   // Timestamp de l'ouverture de la carte (heartbeat 60 s). Sert au modèle
   // pull-on-demand : tant qu'un user a `mapOpenAt` récent, les autres
   // publient leur position 1× pour qu'il les voie ; sinon, plus aucune
@@ -62,6 +66,27 @@ export interface Task {
   // Si broadcast=true, ces champs gardent qui a coché et quand, pour l'UI 24 h.
   // (Différent de completedBy/At pour les tâches récurrentes : sur une broadcast
   // récurrente on garde l'info de la dernière complétion.)
+  // Heure du jour cible (HH:MM) à utiliser lors de la régénération d'une tâche
+  // récurrente. Stocké pour ne pas perdre l'heure si l'utilisateur a édité la
+  // tâche avec une heure précise. Distinct de dueDate qui contient la valeur
+  // numérique courante.
+  hasDueTime?: boolean
+  // Anti-doublon cron pour les tâches avec hasDueTime (rappel personnel).
+  reminderSentAt?: number | null
+
+  // ── Lien à un élément carte ──
+  // Demande Nils 25/05/2026 : éviter d'avoir à cocher la tâche manuellement
+  // après être allé physiquement sur le terrain. Quand une tâche est liée à
+  // un point d'eau manuel ou un espace défini :
+  //   - water_manual : "Remplir maintenant" sur le pin coche la tâche.
+  //   - land_plot    : "Vu animaux OK" sur l'espace coche la tâche.
+  // Affichage : badge "💧 Point d'eau X" / "🟩 Espace X" + bouton "Voir sur carte".
+  linkedKind?: 'water_manual' | 'land_plot'
+  linkedId?:   string
+  // Nom snapshot du pin/espace au moment du lien — pour l'afficher sans avoir
+  // à requêter map_pins. Mis à jour à la modification du nom du pin via cron
+  // (optionnel — on s'en passe pour démarrer).
+  linkedName?: string
 }
 
 export type WaterPointType = 'natural' | 'manual'

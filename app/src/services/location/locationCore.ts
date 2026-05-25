@@ -19,11 +19,51 @@ export type GeoUpdate = {
 type PositionCallback = (u: GeoUpdate) => void
 type ErrorCallback    = (e: GeolocationPositionError) => void
 
+/**
+ * 3 profils GPS — demande Nils 24/05/2026 (V4 #4). Permet à l'utilisatrice de
+ * choisir le compromis batterie/précision selon sa situation :
+ *   - low    : économie batterie (Wi-Fi/cell positioning OK, 5 min de fraîcheur)
+ *   - medium : compromis par défaut (GPS satellite, 30 s de fraîcheur)
+ *   - high   : terrain — précision max, intervalle court (5 s), pour suivi fin
+ *
+ * Stocké en localStorage par device car le choix est device-specific (un téléphone
+ * qui chauffe au soleil veut "low", un PC fixe se moque du mode).
+ */
+export type GpsMode = 'low' | 'medium' | 'high'
+
+interface GpsOptions {
+  enableHighAccuracy: boolean
+  maximumAge:         number
+  timeout:            number
+}
+
+const GPS_OPTIONS: Record<GpsMode, GpsOptions> = {
+  low:    { enableHighAccuracy: false, maximumAge: 300_000, timeout: 60_000 },
+  medium: { enableHighAccuracy: true,  maximumAge: 30_000,  timeout: 45_000 },
+  high:   { enableHighAccuracy: true,  maximumAge: 5_000,   timeout: 45_000 },
+}
+
+const GPS_MODE_LS_KEY = 'fm_gps_mode'
+
+export function readGpsMode(): GpsMode {
+  try {
+    const v = localStorage.getItem(GPS_MODE_LS_KEY)
+    if (v === 'low' || v === 'medium' || v === 'high') return v
+  } catch { /* SSR / privé strict */ }
+  return 'medium'
+}
+
+export function writeGpsMode(mode: GpsMode): void {
+  try { localStorage.setItem(GPS_MODE_LS_KEY, mode) }
+  catch { /* SSR / privé strict */ }
+}
+
 class LocationCore {
   private watchId:          number | null = null
   private subscribers       = new Map<symbol, PositionCallback>()
   private errorSubscribers  = new Map<symbol, ErrorCallback>()
   private lastUpdate:       GeoUpdate | null = null
+  private mode:             GpsMode = readGpsMode()
   // Anti-spam logs : un warn par code d'erreur par session. Sans ça le buffer
   // ring du bugReporter se remplit de "Timeout expired" toutes les minutes.
   private geoLogged         = new Set<string>()
@@ -114,10 +154,9 @@ class LocationCore {
 
   private start() {
     if (!('geolocation' in navigator)) return
-    // Options unifiées : enableHighAccuracy=true (bug Eugénie 21/05 — sinon
-    // Wi-Fi positioning → 500 m d'erreur), timeout 45 s (cold start GPS
-    // outdoor sur Android peut prendre 20-30 s), maximumAge 30 s (les
-    // consumers throttlent eux-mêmes plus fin).
+    // Options : choisies par le profil GPS courant. Voir GPS_OPTIONS pour les
+    // valeurs (low / medium / high). Demande Nils 24/05 (V4 #4).
+    const opts = GPS_OPTIONS[this.mode]
     this.watchId = navigator.geolocation.watchPosition(
       pos => {
         const update: GeoUpdate = {
@@ -137,8 +176,28 @@ class LocationCore {
         }
         this.errorSubscribers.forEach(cb => cb(err))
       },
-      { enableHighAccuracy: true, maximumAge: 30_000, timeout: 45_000 },
+      opts,
     )
+  }
+
+  /**
+   * Change le profil GPS à chaud. Redémarre le watchPosition() en cours pour
+   * que les nouvelles options s'appliquent (Android continue avec les
+   * anciennes options jusqu'au prochain clearWatch + watchPosition).
+   * Persistance via localStorage.
+   */
+  setMode(mode: GpsMode) {
+    if (this.mode === mode) return
+    this.mode = mode
+    writeGpsMode(mode)
+    if (this.watchId !== null) {
+      this.stop()
+      this.start()
+    }
+  }
+
+  getMode(): GpsMode {
+    return this.mode
   }
 
   private stop() {

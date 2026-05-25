@@ -7,8 +7,9 @@ import { useAuth } from '../hooks/useAuth'
 import type { Task, UserProfile } from '../types'
 
 /**
- * Bilan du soir : pop-up qui apparaît automatiquement à partir de 18h
- * (heure locale) une fois par jour.
+ * Bilan du soir : pop-up qui apparaît automatiquement à partir de l'heure
+ * configurée par l'utilisateur (profile.eveningRecapTime, défaut 19:00) une
+ * fois par jour. Peut aussi être ouvert manuellement depuis le Dashboard.
  *
  * Contenu :
  *   - Ce qui a été fait aujourd'hui (compte + liste collapsible)
@@ -16,14 +17,14 @@ import type { Task, UserProfile } from '../types'
  *   - Ce qui est prévu demain (preview)
  *   - Lien vers Tâches pour en ajouter
  *
- * Stocké dans localStorage : `fm_evening_recap_done_<uid>_YYYY-MM-DD`.
- * Permet de fermer le modal une fois par jour.
+ * Ouverture manuelle : émettre l'événement window 'open-evening-recap'.
+ * Le modal s'ouvre alors sans tenir compte du flag "déjà fait aujourd'hui".
  *
- * Heure d'apparition : 18h00. Configurable plus tard si besoin.
+ * Demande Nils 25/05/2026 : heure custom + accès permanent via encart Dashboard.
  */
 
-const RECAP_HOUR_FROM = 18  // commence à 18h
-const RECAP_HOUR_TO   = 23  // s'arrête après 23h (on ne pop pas au milieu de la nuit)
+const RECAP_HOUR_TO = 23  // s'arrête après 23h (on ne pop pas au milieu de la nuit)
+export const OPEN_EVENING_RECAP_EVENT = 'open-evening-recap'
 
 function todayKey(): string {
   const d = new Date()
@@ -32,6 +33,20 @@ function todayKey(): string {
 
 function lsKey(uid: string, day: string) {
   return `fm_evening_recap_done_${uid}_${day}`
+}
+
+// Parse "HH:MM" en minutes depuis minuit. Retourne null si invalide.
+function parseHHMM(s: string | undefined | null): number | null {
+  if (!s || !/^\d{1,2}:\d{2}$/.test(s)) return null
+  const [hh, mm] = s.split(':').map(Number)
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null
+  return hh * 60 + mm
+}
+
+// Helper exporté pour le Dashboard : l'heure (en minutes) à partir de laquelle
+// l'encart bilan devient visible pour ce profil.
+export function eveningRecapMinutes(time: string | undefined | null): number {
+  return parseHHMM(time) ?? 19 * 60
 }
 
 function startOfDay(offset: number) {
@@ -51,15 +66,17 @@ export default function EveningRecapModal() {
   const [users, setUsers] = useState<UserProfile[]>([])
   const [postponingId, setPostponingId] = useState<string | null>(null)
 
-  /* Décide si on ouvre */
+  /* Décide si on ouvre (timer auto à l'heure du profil) */
   useEffect(() => {
     if (!user || isTemp) return
     if (typeof window === 'undefined') return
 
+    const startMin = eveningRecapMinutes(profile?.eveningRecapTime)
+
     function check() {
       const now = new Date()
-      const h = now.getHours()
-      if (h < RECAP_HOUR_FROM || h > RECAP_HOUR_TO) return
+      const nowMin = now.getHours() * 60 + now.getMinutes()
+      if (nowMin < startMin || now.getHours() > RECAP_HOUR_TO) return
       try {
         const already = localStorage.getItem(lsKey(user!.uid, todayKey()))
         if (already === 'done') return
@@ -71,6 +88,15 @@ export default function EveningRecapModal() {
     check()
     const t = setInterval(check, 5 * 60 * 1000)
     return () => clearInterval(t)
+  }, [user, isTemp, profile?.eveningRecapTime])
+
+  /* Ouverture manuelle déclenchée depuis le Dashboard (force, même si déjà fermé) */
+  useEffect(() => {
+    if (!user || isTemp) return
+    if (typeof window === 'undefined') return
+    function onOpen() { setOpen(true) }
+    window.addEventListener(OPEN_EVENING_RECAP_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_EVENING_RECAP_EVENT, onOpen)
   }, [user, isTemp])
 
   /* Listeners données */

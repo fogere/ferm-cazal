@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import {
   Plus, X, CheckCircle2, Circle, AlertTriangle, RotateCcw, ChevronDown, ChevronRight,
-  Trash2, Hand, Bell, BellRing,
+  Trash2, Hand, Bell, BellRing, Pencil, ArrowRight, MapPin as MapPinIcon, Droplets, Square,
 } from 'lucide-react'
 import {
   collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc,
@@ -9,7 +9,8 @@ import {
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
 import { timeAgo } from '../services/map/time'
-import type { Task, UserProfile } from '../types'
+import type { Task, UserProfile, MapPin } from '../types'
+import MapPicker from '../components/MapPicker'
 
 /* ─── helpers ─── */
 
@@ -92,6 +93,10 @@ interface FormState {
   priority: Task['priority']
   mode: 'pool' | 'assigned' | 'broadcast'  // 3 modes possibles
   assignedTo: string        // uid spécifique (super admin) ou '' (pool)
+  // Lien à un élément carte. linkedKind === undefined → aucun lien.
+  linkedKind?: 'water_manual' | 'land_plot'
+  linkedId?:   string
+  linkedName?: string
 }
 
 function blankForm(): FormState {
@@ -108,6 +113,34 @@ function blankForm(): FormState {
   }
 }
 
+// Construit un FormState à partir d'une tâche existante (mode édition).
+function formFromTask(t: Task): FormState {
+  const d = new Date(t.dueDate)
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const time = t.hasDueTime
+    ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    : ''
+  let mode: FormState['mode'] = 'pool'
+  if (t.broadcast) mode = 'broadcast'
+  else if (t.assignedTo && t.assignedTo !== 'auto') mode = 'assigned'
+  return {
+    title:        t.title,
+    zone:         t.zone ?? '',
+    dueDate:      `${yyyy}-${mm}-${dd}`,
+    dueTime:      time,
+    recurrence:   t.recurrence,
+    intervalDays: t.intervalDays ?? 3,
+    priority:     t.priority,
+    mode,
+    assignedTo:   mode === 'assigned' ? (t.assignedTo ?? '') : '',
+    linkedKind:   t.linkedKind,
+    linkedId:     t.linkedId,
+    linkedName:   t.linkedName,
+  }
+}
+
 /* ─── component ─── */
 
 export default function Tasks() {
@@ -116,12 +149,17 @@ export default function Tasks() {
 
   const [allTasks, setAllTasks]   = useState<Task[]>([])
   const [users, setUsers]         = useState<UserProfile[]>([])
+  const [mapPins, setMapPins]     = useState<MapPin[]>([])
   const [showForm, setShowForm]   = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)  // null = création
   const [form, setForm]           = useState<FormState>(blankForm)
   const [saving, setSaving]       = useState(false)
   const [showDone, setShowDone]   = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [urgentForId, setUrgentForId] = useState<string | null>(null)
+  // Picker carte (open quand on clique "Choisir sur la carte" depuis le form)
+  const [pickerKind, setPickerKind] = useState<'water_manual' | 'land_plot' | null>(null)
+  const [postponingId, setPostponingId] = useState<string | null>(null)
   // Bug Nils 23/05/2026 (BUGV3 #2) : animation visible quand on coche une tâche.
   // L'id reste setté ~700ms le temps de l'animation CSS, puis revient à null.
   const [justCheckedId, setJustCheckedId] = useState<string | null>(null)
@@ -141,6 +179,14 @@ export default function Tasks() {
   useEffect(() => {
     const unsub = onSnapshot(query(collection(db, 'users')), snap =>
       setUsers(snap.docs.map(d => d.data() as UserProfile))
+    )
+    return unsub
+  }, [])
+
+  // Pins carte (pour résoudre le nom du linkedId si différent du snapshot)
+  useEffect(() => {
+    const unsub = onSnapshot(query(collection(db, 'map_pins')), snap =>
+      setMapPins(snap.docs.map(d => ({ id: d.id, ...d.data() } as MapPin)))
     )
     return unsub
   }, [])
@@ -294,8 +340,45 @@ export default function Tasks() {
   }
 
   function openForm() {
+    setEditingId(null)
     setForm(blankForm())
     setShowForm(true)
+  }
+
+  function openEditForm(task: Task) {
+    // Audit : édition réservée aux réguliers (rules + permissions Firestore).
+    if (isTemp) return
+    setEditingId(task.id)
+    setForm(formFromTask(task))
+    setShowForm(true)
+  }
+
+  // Reporter une tâche à demain midi (bouton "→ Demain" dans la liste + bilan).
+  // Conserve récurrence, mode broadcast, assignedTo. Reset les flags de notif
+  // pour qu'une notif programmée parte bien à la nouvelle heure (si hasDueTime).
+  async function postponeToTomorrow(task: Task) {
+    if (isTemp) return
+    setPostponingId(task.id)
+    try {
+      const d = new Date()
+      d.setDate(d.getDate() + 1)
+      d.setHours(12, 0, 0, 0)
+      const updates: Record<string, unknown> = {
+        dueDate: d.getTime(),
+        reminderSentAt: null,
+        broadcastNotifiedAt: null,
+      }
+      await updateDoc(doc(db, 'tasks', task.id), updates)
+    } finally {
+      setPostponingId(null)
+    }
+  }
+
+  // Résout le nom d'un pin lié pour l'affichage badge (priorité au live, sinon snapshot).
+  function linkedDisplayName(t: Task): string | null {
+    if (!t.linkedKind || !t.linkedId) return null
+    const live = mapPins.find(p => p.id === t.linkedId)
+    return live?.name ?? t.linkedName ?? '?'
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -310,32 +393,62 @@ export default function Tasks() {
       //   - 'assigned'  : assignedTo=uid choisi (super-admin uniquement — l'UI ne propose
       //                   pas ce mode aux autres)
       //   - 'broadcast' : assignedTo=null + broadcast:true, tâche partagée et notifiée
-      //                   à TOUS. Demande Nils 21/05/2026 : ouvert à tous les regular users
-      //                   (avant : super-admin uniquement). L'envoi de notif au cron requiert
-      //                   toujours hasDueTime, lui-même restreint aux super-admins.
+      //                   à TOUS.
       const isAssigned  = superAdmin && form.mode === 'assigned' && !!form.assignedTo
       const isBroadcast = form.mode === 'broadcast'
-      await addDoc(collection(db, 'tasks'), {
-        title:        form.title.trim(),
-        zone:         form.zone.trim(),
-        assignedTo:   isAssigned ? form.assignedTo : null,
-        claimedAt:    isAssigned ? Date.now() : null,
-        recurrence:   form.recurrence,
-        intervalDays: form.recurrence === 'every_n_days' ? form.intervalDays : null,
-        priority:     form.priority,
-        completed:    false,
-        completedAt:  null,
-        completedBy:  null,
-        createdAt:    Date.now(),
-        createdBy:    user.uid,
-        dueDate:      dateTimeToTs(form.dueDate, form.dueTime),
-        hasDueTime:   !!form.dueTime,
-        reminderSentAt: null,
-        nextOccurrenceCreated: false,
-        broadcast:    isBroadcast,
-        broadcastNotifiedAt: null,
-      })
+      const dueDate = dateTimeToTs(form.dueDate, form.dueTime)
+      const linked = form.linkedKind && form.linkedId
+        ? {
+            linkedKind: form.linkedKind,
+            linkedId:   form.linkedId,
+            linkedName: form.linkedName ?? null,
+          }
+        : { linkedKind: null, linkedId: null, linkedName: null }
+
+      if (editingId) {
+        // Mode édition : update en place. Reset des flags de notif si la planification
+        // a changé (heure ou broadcast/assigné) pour que la prochaine notif parte.
+        const updates: Record<string, unknown> = {
+          title:        form.title.trim(),
+          zone:         form.zone.trim(),
+          assignedTo:   isAssigned ? form.assignedTo : (isBroadcast ? null : null),
+          claimedAt:    isAssigned ? Date.now() : null,
+          recurrence:   form.recurrence,
+          intervalDays: form.recurrence === 'every_n_days' ? form.intervalDays : null,
+          priority:     form.priority,
+          dueDate,
+          hasDueTime:   !!form.dueTime,
+          reminderSentAt: null,
+          broadcast:    isBroadcast,
+          broadcastNotifiedAt: null,
+          ...linked,
+        }
+        await updateDoc(doc(db, 'tasks', editingId), updates)
+      } else {
+        await addDoc(collection(db, 'tasks'), {
+          title:        form.title.trim(),
+          zone:         form.zone.trim(),
+          assignedTo:   isAssigned ? form.assignedTo : null,
+          claimedAt:    isAssigned ? Date.now() : null,
+          recurrence:   form.recurrence,
+          intervalDays: form.recurrence === 'every_n_days' ? form.intervalDays : null,
+          priority:     form.priority,
+          completed:    false,
+          completedAt:  null,
+          completedBy:  null,
+          createdAt:    Date.now(),
+          createdBy:    user.uid,
+          dueDate,
+          hasDueTime:   !!form.dueTime,
+          reminderSentAt: null,
+          nextOccurrenceCreated: false,
+          broadcast:    isBroadcast,
+          broadcastNotifiedAt: null,
+          ...linked,
+        })
+      }
       setShowForm(false)
+      setEditingId(null)
     } finally {
       setSaving(false)
     }
@@ -417,6 +530,16 @@ export default function Tasks() {
                   <span className="text-xs text-muted bg-cream px-2 py-0.5 rounded-full border border-border">
                     {task.zone}
                   </span>
+                )}
+                {/* Lien carte : badge cliquable qui ouvre la carte centrée sur le pin */}
+                {task.linkedKind && task.linkedId && (
+                  <a
+                    href={`/map?focusPin=${encodeURIComponent(task.linkedId)}`}
+                    className="text-xs font-semibold text-sky bg-sky/10 px-2 py-0.5 rounded-full border border-sky/30 inline-flex items-center gap-1"
+                  >
+                    {task.linkedKind === 'water_manual' ? <Droplets size={10} /> : <Square size={10} />}
+                    {linkedDisplayName(task) ?? (task.linkedKind === 'water_manual' ? 'Point d\'eau' : 'Espace')}
+                  </a>
                 )}
                 {task.recurrence !== 'once' && (
                   <span className="text-xs text-sky flex items-center gap-0.5">
@@ -507,6 +630,16 @@ export default function Tasks() {
                       Reprendre
                     </button>
                   )}
+                  {/* Reporter à demain — demande Nils 25/05/2026 (visible sur toutes les tâches non faites) */}
+                  <button
+                    onClick={() => postponeToTomorrow(task)}
+                    disabled={postponingId === task.id}
+                    className="text-xs font-semibold text-muted border border-border bg-cream
+                               px-2.5 py-1.5 rounded-lg active:bg-cream/80 disabled:opacity-50
+                               flex items-center gap-1"
+                  >
+                    <ArrowRight size={11} /> Demain
+                  </button>
                 </div>
               )}
             </div>
@@ -521,10 +654,19 @@ export default function Tasks() {
                   {dateLabel(task.dueDate)}
                 </span>
               )}
+              {!isTemp && !task.completed && (
+                <button
+                  onClick={() => openEditForm(task)}
+                  className="p-1 mt-1 text-border active:text-forest transition-colors"
+                  aria-label="Modifier"
+                >
+                  <Pencil size={14} />
+                </button>
+              )}
               {!isTemp && (
                 <button
                   onClick={() => setConfirmDeleteId(task.id)}
-                  className="p-1 mt-1 text-border active:text-danger transition-colors"
+                  className="p-1 text-border active:text-danger transition-colors"
                   aria-label="Supprimer"
                 >
                   <Trash2 size={14} />
@@ -688,6 +830,18 @@ export default function Tasks() {
         </div>
       )}
 
+      {/* Picker carte plein écran — au-dessus du form pour ne pas le perdre */}
+      {pickerKind && (
+        <MapPicker
+          kind={pickerKind}
+          onPick={(id, name) => {
+            setForm(f => ({ ...f, linkedId: id, linkedName: name }))
+            setPickerKind(null)
+          }}
+          onCancel={() => setPickerKind(null)}
+        />
+      )}
+
       {/* Bottom sheet : new task */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end">
@@ -695,8 +849,10 @@ export default function Tasks() {
                onClick={() => !saving && setShowForm(false)} />
           <div className="relative bg-card rounded-t-3xl px-5 pt-5 pb-10 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-charcoal text-lg font-bold m-0">Nouvelle tâche</h2>
-              <button onClick={() => !saving && setShowForm(false)}
+              <h2 className="text-charcoal text-lg font-bold m-0">
+                {editingId ? 'Modifier la tâche' : 'Nouvelle tâche'}
+              </h2>
+              <button onClick={() => { if (!saving) { setShowForm(false); setEditingId(null) } }}
                       className="p-2 rounded-xl text-muted active:bg-cream">
                 <X size={20} />
               </button>
@@ -752,6 +908,86 @@ export default function Tasks() {
                   className="w-full px-4 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
                              placeholder:text-muted/50 focus:outline-none focus:ring-2 focus:ring-forest transition-all"
                 />
+              </div>
+
+              {/* Lien carte — point d'eau manuel ou espace défini.
+                  Demande Nils 25/05/2026 : "remplir" sur le pin coche la tâche auto.
+                  Évite de saisir manuellement après être allé sur le terrain. */}
+              <div>
+                <label className="block text-xs font-semibold text-muted uppercase tracking-wider mb-2">
+                  Lien carte (optionnel)
+                </label>
+                <p className="text-[10px] text-muted/80 mb-2 leading-tight">
+                  Si la tâche consiste à remplir un point d'eau ou vérifier un espace, choisis-le ici.
+                  Quand tu agiras dessus sur la carte, la tâche se cochera toute seule.
+                </p>
+                <div className="grid grid-cols-3 gap-1.5 mb-2">
+                  {([
+                    [undefined,      '🚫 Aucun',        'Pas de lien carte'],
+                    ['water_manual', '💧 Point d\'eau', 'Remplir = cocher la tâche'],
+                    ['land_plot',    '🟩 Espace',       'Vu animaux = cocher la tâche'],
+                  ] as const).map(([k, label, hint]) => (
+                    <button key={String(k)}
+                            type="button"
+                            disabled={saving}
+                            title={hint}
+                            onClick={() => setForm(f =>
+                              k === undefined
+                                ? { ...f, linkedKind: undefined, linkedId: undefined, linkedName: undefined }
+                                : { ...f, linkedKind: k })}
+                            className={`py-2 rounded-lg border text-[11px] font-bold transition-all ${
+                              form.linkedKind === k
+                                ? 'border-forest bg-forest text-white'
+                                : 'border-border bg-cream text-muted'
+                            }`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {form.linkedKind && (
+                  form.linkedId ? (
+                    <div className="flex items-center gap-2 bg-sky/5 border border-sky/20 rounded-xl px-3 py-2.5">
+                      <MapPinIcon size={14} className="text-sky flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-charcoal truncate">
+                          {form.linkedName ??
+                            mapPins.find(p => p.id === form.linkedId)?.name ??
+                            'Élément sélectionné'}
+                        </p>
+                        <p className="text-[10px] text-muted">
+                          {form.linkedKind === 'water_manual' ? 'Point d\'eau manuel' : 'Espace défini'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setPickerKind(form.linkedKind!)}
+                        className="text-[11px] font-bold text-sky px-2 py-1 rounded-lg active:bg-sky/10"
+                      >
+                        Changer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setForm(f => ({ ...f, linkedId: undefined, linkedName: undefined }))}
+                        className="p-1 text-muted active:text-danger"
+                        aria-label="Retirer le lien"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => setPickerKind(form.linkedKind!)}
+                      className="w-full py-3 rounded-xl border-2 border-dashed border-sky/40 bg-sky/5
+                                 text-sky text-sm font-bold flex items-center justify-center gap-2
+                                 active:bg-sky/10 transition-all"
+                    >
+                      <MapPinIcon size={15} />
+                      Choisir sur la carte
+                    </button>
+                  )
+                )}
               </div>
 
               {/* Date + heure */}
@@ -907,7 +1143,11 @@ export default function Tasks() {
                 className="w-full py-4 rounded-xl font-semibold text-white text-base bg-forest
                            active:scale-95 disabled:opacity-40 transition-all shadow-lg"
               >
-                {saving ? 'Création…' : 'Ajouter au pool commun'}
+                {saving
+                  ? 'Enregistrement…'
+                  : editingId
+                    ? 'Enregistrer les modifications'
+                    : 'Ajouter au pool commun'}
               </button>
             </form>
           </div>

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   Wind, Thermometer, Droplets, CheckCircle2, Circle,
   AlertTriangle, ChevronRight, RefreshCw, Flame, Stethoscope,
-  Navigation, Zap, Hand, ChevronDown, BellRing, Megaphone,
+  Navigation, Zap, Hand, ChevronDown, BellRing, Megaphone, Moon,
 } from 'lucide-react'
 import { doc, updateDoc, collection, query, where, onSnapshot } from '../services/firestoreMonitor'
 import { db } from '../firebase'
@@ -13,6 +13,8 @@ import { getSpeciesInfo } from '../services/species'
 import { fetchWeather, getWeatherInfo, computeVigilance, computeFireRisk } from '../services/weather'
 import type { WeatherData, Task, Availability, FermeAlert, VigilanceLevel, FireRiskLevel, MapPin, Animal, AnimalCareEntry, Reserve, UserMessage } from '../types'
 import { getVisibleAnnouncements, getReadAnnouncementIds } from '../data/announcements'
+import { OPEN_EVENING_RECAP_EVENT, eveningRecapMinutes } from '../components/EveningRecapModal'
+import { completeLinkedTasks } from '../services/taskAutoComplete'
 
 // Détection super-admin (même règle que Tasks.tsx / Bugs.tsx) — sert à
 // afficher la bannière "nouveaux bug reports" uniquement à Eugénie/Benoît.
@@ -412,6 +414,8 @@ export default function Dashboard() {
         updatedAt:      now,
         updatedBy:      user.uid,
       })
+      // Auto-validation des tâches liées (Nils 25/05/2026)
+      await completeLinkedTasks('water_manual', pin.id, user.uid)
     } finally { setRefillBusy(null) }
   }
 
@@ -447,6 +451,22 @@ export default function Dashboard() {
 
   const done = tasks.filter(t => t.completed).length
   const total = tasks.length
+
+  // Encart "Bilan du soir" : visible à partir de l'heure configurée par le user
+  // (profile.eveningRecapTime, défaut 19:00). annTick (recalcul chaque minute)
+  // déclenche le re-render pour faire apparaître l'encart à l'heure pile sans refresh.
+  const eveningRecapVisible = useMemo(() => {
+    const now = new Date()
+    const nowMin = now.getHours() * 60 + now.getMinutes()
+    return nowMin >= eveningRecapMinutes(profile?.eveningRecapTime)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.eveningRecapTime, annTick])
+  const eveningNotDone = total - done
+  function openEveningRecap() {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event(OPEN_EVENING_RECAP_EVENT))
+    }
+  }
 
   // Pool model — partitions des tâches du jour
   const myTasks    = useMemo(() => tasks.filter(t => !t.completed && t.assignedTo === user?.uid), [tasks, user?.uid])
@@ -599,6 +619,30 @@ export default function Dashboard() {
               <ChevronRight size={18} className="text-white/70 flex-shrink-0" />
             </div>
           </Link>
+        )}
+
+        {/* Bilan du soir — toujours consultable après l'heure configurée.
+            Demande Nils 25/05/2026 : éviter de rater le bilan si on a fermé le modal. */}
+        {eveningRecapVisible && (
+          <button
+            onClick={openEveningRecap}
+            className="w-full bg-forest text-white rounded-2xl p-4 shadow-md active:scale-[0.98] transition-transform text-left"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
+                <Moon size={20} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold">🌙 Bilan du soir</p>
+                <p className="text-xs text-white/80 mt-0.5">
+                  {total === 0
+                    ? 'Aucune tâche programmée aujourd\'hui'
+                    : `${done} faite${done > 1 ? 's' : ''} · ${eveningNotDone} non faite${eveningNotDone > 1 ? 's' : ''} — touche pour ouvrir`}
+                </p>
+              </div>
+              <ChevronRight size={18} className="text-white/70 flex-shrink-0" />
+            </div>
+          </button>
         )}
 
         {/* Disponibilité du jour */}

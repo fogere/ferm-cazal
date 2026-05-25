@@ -1,13 +1,14 @@
 import { useEffect, useState, useMemo } from 'react'
 import {
   Plus, X, CheckCircle2, Circle, AlertTriangle, RotateCcw, ChevronDown, ChevronRight,
-  Trash2, Hand, Bell, BellRing, Pencil, ArrowRight, MapPin as MapPinIcon, Droplets, Square,
+  Trash2, Hand, Bell, BellRing, Pencil, ArrowRight, MapPin as MapPinIcon, Droplets, Square, Heart,
 } from 'lucide-react'
 import {
-  collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc,
+  collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, getDocs, where, writeBatch,
 } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
+import { useUsers } from '../hooks/useUsers'
 import { timeAgo } from '../services/map/time'
 import type { Task, UserProfile, MapPin } from '../types'
 import MapPicker from '../components/MapPicker'
@@ -97,6 +98,10 @@ interface FormState {
   linkedKind?: 'water_manual' | 'land_plot'
   linkedId?:   string
   linkedName?: string
+  // Quand le lien est un land_plot : la complétion de la tâche vaut aussi
+  // "j'ai vu tous les animaux, ils vont bien" (markAllHealthy auto). Activé
+  // par défaut car c'est l'usage typique (cf. V5 #1 Nils 25/05/2026).
+  healthCheckOnComplete: boolean
 }
 
 function blankForm(): FormState {
@@ -110,6 +115,7 @@ function blankForm(): FormState {
     priority:     'normal',
     mode:         'pool',
     assignedTo:   '',
+    healthCheckOnComplete: true,
   }
 }
 
@@ -138,6 +144,7 @@ function formFromTask(t: Task): FormState {
     linkedKind:   t.linkedKind,
     linkedId:     t.linkedId,
     linkedName:   t.linkedName,
+    healthCheckOnComplete: t.healthCheckOnComplete !== false,
   }
 }
 
@@ -148,7 +155,7 @@ export default function Tasks() {
   const superAdmin = isSuperAdmin(profile)
 
   const [allTasks, setAllTasks]   = useState<Task[]>([])
-  const [users, setUsers]         = useState<UserProfile[]>([])
+  const users = useUsers()
   const [mapPins, setMapPins]     = useState<MapPin[]>([])
   const [showForm, setShowForm]   = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)  // null = création
@@ -172,13 +179,6 @@ export default function Tasks() {
   useEffect(() => {
     const unsub = onSnapshot(query(collection(db, 'tasks')), snap =>
       setAllTasks(snap.docs.map(d => ({ id: d.id, ...d.data() } as Task)))
-    )
-    return unsub
-  }, [])
-
-  useEffect(() => {
-    const unsub = onSnapshot(query(collection(db, 'users')), snap =>
-      setUsers(snap.docs.map(d => d.data() as UserProfile))
     )
     return unsub
   }, [])
@@ -276,11 +276,28 @@ export default function Tasks() {
       completedBy: nowDone ? user?.uid  : null,
     }
     if (nowDone && task.recurrence !== 'once' && !task.nextOccurrenceCreated) {
-      // Crée la prochaine occurrence : non assignée (pool), date depuis maintenant
+      // Crée la prochaine occurrence. Bug V5 #2 (Nils 25/05/2026) : on PRÉSERVE
+      // explicitement les champs liés (linkedKind/Id/Name, hasDueTime, broadcast,
+      // healthCheckOnComplete). Avant ces champs étaient perdus à chaque cycle :
+      // la prochaine tâche tombait sans son lien carte ni son mode broadcast.
+      // Si la tâche source a une heure, on la reconduit sur la nouvelle dueDate.
+      const baseDue = nextDueFromNow(task)
+      let dueDate = baseDue
+      if (task.hasDueTime) {
+        const src = new Date(task.dueDate)
+        const d = new Date(baseDue)
+        d.setHours(src.getHours(), src.getMinutes(), 0, 0)
+        dueDate = d.getTime()
+      }
+      // Pour les broadcast : on garde le mode broadcast et assignedTo reste null.
+      // Pour les pool/assigned : retour systématique au pool (assignedTo: null) —
+      // comportement historique conservé pour que la nouvelle occurrence soit
+      // visible par tout le monde.
       await addDoc(collection(db, 'tasks'), {
         title:        task.title,
         zone:         task.zone,
         assignedTo:   null,                // libre → quelqu'un devra la reprendre
+        claimedAt:    null,
         recurrence:   task.recurrence,
         intervalDays: task.intervalDays ?? null,
         priority:     task.priority,
@@ -289,12 +306,54 @@ export default function Tasks() {
         completedBy:  null,
         createdAt:    now,
         createdBy:    task.createdBy,
-        dueDate:      nextDueFromNow(task),
+        dueDate,
+        hasDueTime:   task.hasDueTime ?? false,
+        reminderSentAt: null,
         nextOccurrenceCreated: false,
+        broadcast:    task.broadcast ?? false,
+        broadcastNotifiedAt: null,
+        linkedKind:   task.linkedKind ?? null,
+        linkedId:     task.linkedId ?? null,
+        linkedName:   task.linkedName ?? null,
+        healthCheckOnComplete: task.healthCheckOnComplete ?? null,
       })
       updates.nextOccurrenceCreated = true
     }
     await updateDoc(doc(db, 'tasks', task.id), updates)
+
+    // Bug V5 #1 (Nils 25/05/2026) : si la tâche est liée à un espace défini et
+    // que l'option "valide la santé des animaux" est active (défaut), on fait
+    // l'équivalent du flow geofence : tous les animaux de l'enclos passent
+    // lastCheckedHealthy=now. Évite à l'utilisatrice de devoir aussi ouvrir la
+    // carte pour cocher "tous vus" après avoir coché la tâche.
+    // - Aides temp : autorisées (les rules acceptent ces 2 champs précis).
+    // - Best-effort : on log mais on ne bloque pas l'UI si ça plante.
+    if (
+      nowDone
+      && task.linkedKind === 'land_plot'
+      && task.linkedId
+      && task.healthCheckOnComplete !== false
+      && user
+    ) {
+      try {
+        const animSnap = await getDocs(query(
+          collection(db, 'animals'),
+          where('enclosureId', '==', task.linkedId),
+        ))
+        if (!animSnap.empty) {
+          const batch = writeBatch(db)
+          animSnap.forEach(a => {
+            batch.update(doc(db, 'animals', a.id), {
+              lastCheckedHealthy:   now,
+              lastCheckedHealthyBy: user.uid,
+            })
+          })
+          await batch.commit()
+        }
+      } catch (err) {
+        console.warn('[toggleDone] markAllHealthy failed:', err)
+      }
+    }
   }
 
   async function claimTask(task: Task) {
@@ -402,8 +461,13 @@ export default function Tasks() {
             linkedKind: form.linkedKind,
             linkedId:   form.linkedId,
             linkedName: form.linkedName ?? null,
+            // V5 #1 : option pertinente uniquement quand on lie à un espace.
+            // Pour 'water_manual', healthCheckOnComplete reste null (n'a pas de sens).
+            healthCheckOnComplete: form.linkedKind === 'land_plot'
+              ? form.healthCheckOnComplete
+              : null,
           }
-        : { linkedKind: null, linkedId: null, linkedName: null }
+        : { linkedKind: null, linkedId: null, linkedName: null, healthCheckOnComplete: null }
 
       if (editingId) {
         // Mode édition : update en place. Reset des flags de notif si la planification
@@ -987,6 +1051,43 @@ export default function Tasks() {
                       Choisir sur la carte
                     </button>
                   )
+                )}
+
+                {/* V5 #1 Nils 25/05/2026 : option "valide la santé des animaux"
+                    quand la tâche est liée à un espace défini. Cocher la tâche
+                    revient alors à marquer "tous les animaux vus en bonne santé"
+                    (équivalent du flow geofence). Activé par défaut, désactivable
+                    pour les rares tâches qui ne consistent pas à vérifier les bêtes
+                    (ex : réparer la clôture). */}
+                {form.linkedKind === 'land_plot' && form.linkedId && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => setForm(f => ({ ...f, healthCheckOnComplete: !f.healthCheckOnComplete }))}
+                    className={`w-full mt-2 px-3 py-2.5 rounded-xl border text-left flex items-start gap-2.5 transition-all ${
+                      form.healthCheckOnComplete
+                        ? 'border-meadow/40 bg-meadow/8'
+                        : 'border-border bg-cream/40'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                      form.healthCheckOnComplete
+                        ? 'border-meadow bg-meadow text-white'
+                        : 'border-muted/40 bg-card'
+                    }`}>
+                      {form.healthCheckOnComplete && <Heart size={11} fill="currentColor" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-charcoal leading-tight">
+                        Valide la santé des animaux sur ce terrain
+                      </p>
+                      <p className="text-[10px] text-muted mt-0.5 leading-snug">
+                        {form.healthCheckOnComplete
+                          ? 'Cocher la tâche = "tous vus, ils vont bien" pour tous les animaux du parc.'
+                          : 'La tâche se cochera seule, mais le statut santé des animaux ne sera pas mis à jour.'}
+                      </p>
+                    </div>
+                  </button>
                 )}
               </div>
 

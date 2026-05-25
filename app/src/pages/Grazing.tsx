@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
+import { useUsers } from '../hooks/useUsers'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'
 import { getSpeciesInfo } from '../services/species'
 import type {
@@ -58,7 +59,7 @@ export default function Grazing() {
 
   const [animals,   setAnimals]   = useState<Animal[]>([])
   const [pins,      setPins]      = useState<MapPin[]>([])
-  const [users,     setUsers]     = useState<UserProfile[]>([])
+  const users = useUsers()
   const [movements, setMovements] = useState<EnclosureMovement[]>([])
   const [view, setView] = useState<View>('enclosure')
   const [windowMonths, setWindowMonths] = useState<6 | 12 | 24>(12)
@@ -83,11 +84,10 @@ export default function Grazing() {
       s => setAnimals(s.docs.map(d => ({ id: d.id, ...d.data() } as Animal))))
     const unsubP = onSnapshot(query(collection(db, 'map_pins'), where('type', '==', 'fence')),
       s => setPins(s.docs.map(d => ({ id: d.id, ...d.data() } as MapPin))))
-    const unsubU = onSnapshot(collection(db, 'users'),
-      s => setUsers(s.docs.map(d => ({ uid: d.id, ...d.data() } as UserProfile))))
+    // users → UsersProvider central (cf. hooks/useUsers).
     const unsubM = onSnapshot(collection(db, 'enclosure_movements'),
       s => setMovements(s.docs.map(d => ({ id: d.id, ...d.data() } as EnclosureMovement))))
-    return () => { unsubA(); unsubP(); unsubU(); unsubM() }
+    return () => { unsubA(); unsubP(); unsubM() }
   }, [])
 
   /* ─── Calcul des périodes de présence (segments) ─── */

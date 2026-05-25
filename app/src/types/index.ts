@@ -87,6 +87,12 @@ export interface Task {
   // à requêter map_pins. Mis à jour à la modification du nom du pin via cron
   // (optionnel — on s'en passe pour démarrer).
   linkedName?: string
+  // Bug Nils 25/05/2026 (V5 #1) : pour une tâche liée à un land_plot, cocher
+  // "fait" déclenche aussi un markAllHealthy sur tous les animaux de l'enclos
+  // (équivalent du flow geofence). Cas typique : "voir les juments au pré 1".
+  // Désactivable par tâche au cas où le travail ne consiste pas à vérifier les
+  // animaux (ex : "réparer la clôture"). Défaut implicite = true pour land_plot.
+  healthCheckOnComplete?: boolean
 }
 
 export type WaterPointType = 'natural' | 'manual'

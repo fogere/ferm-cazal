@@ -8,6 +8,7 @@ import {
 import { doc, updateDoc, collection, query, where, onSnapshot } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
+import { useUsers } from '../hooks/useUsers'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'
 import { getSpeciesInfo } from '../services/species'
 import { fetchWeather, getWeatherInfo, computeVigilance, computeFireRisk } from '../services/weather'
@@ -479,14 +480,8 @@ export default function Dashboard() {
     await updateDoc(doc(db, 'tasks', task.id), { assignedTo: user.uid, claimedAt: Date.now() })
   }
 
-  // Liste des autres users pour afficher qui prend quoi
-  const [allUsers, setAllUsers] = useState<Array<{ uid: string; displayName: string; color: string }>>([])
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'users'), snap =>
-      setAllUsers(snap.docs.map(d => d.data() as { uid: string; displayName: string; color: string }))
-    )
-    return unsub
-  }, [])
+  // Liste des autres users : provider central partagé (cf. hooks/useUsers).
+  const allUsers = useUsers()
   function userInfo(uid: string | null | undefined) {
     if (!uid) return null
     return allUsers.find(u => u.uid === uid) ?? null

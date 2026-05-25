@@ -79,7 +79,53 @@ import {
   updateDoc as fsUpdateDoc,
   deleteDoc as fsDeleteDoc,
   writeBatch as fsWriteBatch,
+  doc as fsDoc,
 } from 'firebase/firestore'
+import { db } from '../firebase'
+
+// ─── Auto-bump opti ─────────────────────────────────────────────────────
+//
+// Audit Firebase 25/05/2026 : opti.ts permet de skip les fetchs serveur si
+// rien n'a changé, mais aucun client n'appelait `bumpOpti` après ses écritures.
+// On instrumente les wrappers pour le faire automatiquement sur les collections
+// "froides" surveillées par le cron syncOpti (cron/notify.cjs:549).
+//
+// Coût : 1 write supplémentaire vers /opti/state (doc unique, merge) par
+// écriture sur une collection trackée. Sur une utilisation calme (< 50 writes
+// /jour/utilisatrice), impact négligeable (~ +50 writes vers opti/jour).
+//
+// Bénéfice : le hook geofence + tout futur usage d'optimizedSubscribe peut
+// se baser sur opti pour skip les lectures inutiles. Économie attendue :
+// plusieurs centaines de reads/jour/utilisatrice quand le projet est calme.
+//
+// Exclusions : 'users' est volontairement absent — il est updaté très souvent
+// (mapOpenAt, liveLocation, livePointer) et bumper à chaque fois doublerait
+// les writes vers opti. La fraîcheur du listener users reste gérée par les
+// onSnapshot existants.
+const OPTI_TRACKED = new Set([
+  'tasks',
+  'animals',
+  'map_pins',
+  'enclosure_movements',
+  'alerts',
+  'animal_care',
+  'animal_photos',
+  'animal_measurements',
+  'reserves',
+  'pin_photos',
+])
+
+function maybeBumpOpti(collectionName: string): void {
+  if (collectionName === 'opti') return // jamais récursif
+  if (!OPTI_TRACKED.has(collectionName)) return
+  // Fire-and-forget. On utilise setDoc RAW (pas le wrapper) pour éviter de
+  // re-comptabiliser ces écritures dans les stats par collection — sinon le
+  // ratio cache/serveur affiché dans le panel devient incohérent.
+  fsSetDoc(fsDoc(db, 'opti', 'state'),
+           { [collectionName]: Date.now() },
+           { merge: true })
+    .catch(() => { /* silent : si opti échoue, le cron rattrapera */ })
+}
 
 // ─── Types stats ────────────────────────────────────────────────────────
 
@@ -373,6 +419,7 @@ export const addDoc: typeof fsAddDoc = (async (ref: Parameters<typeof fsAddDoc>[
   c.docsWritten++
   pushRecent({ ts: Date.now(), kind: 'write', path, docs: 1, durationMs: performance.now() - start })
   scheduleNotify()
+  maybeBumpOpti(col)
   return r
 }) as typeof fsAddDoc
 
@@ -391,6 +438,7 @@ export const setDoc: typeof fsSetDoc = (async (...args: unknown[]) => {
   c.docsWritten++
   pushRecent({ ts: Date.now(), kind: 'write', path, docs: 1, durationMs: performance.now() - start })
   scheduleNotify()
+  maybeBumpOpti(col)
   return r
 }) as typeof fsSetDoc
 
@@ -409,6 +457,7 @@ export const updateDoc: typeof fsUpdateDoc = (async (...args: unknown[]) => {
   c.docsWritten++
   pushRecent({ ts: Date.now(), kind: 'write', path, docs: 1, durationMs: performance.now() - start })
   scheduleNotify()
+  maybeBumpOpti(col)
   return r
 }) as typeof fsUpdateDoc
 
@@ -422,6 +471,7 @@ export const deleteDoc: typeof fsDeleteDoc = (async (ref: Parameters<typeof fsDe
   c.deletes++
   pushRecent({ ts: Date.now(), kind: 'delete', path, docs: 1, durationMs: performance.now() - start })
   scheduleNotify()
+  maybeBumpOpti(col)
   return r
 }) as typeof fsDeleteDoc
 
@@ -436,17 +486,27 @@ export const deleteDoc: typeof fsDeleteDoc = (async (ref: Parameters<typeof fsDe
 export const writeBatch: typeof fsWriteBatch = ((firestore: Parameters<typeof fsWriteBatch>[0]) => {
   const batch = fsWriteBatch(firestore)
   let opCount = 0
+  // Collections distinctes touchées par ce batch — pour bumper opti une seule
+  // fois par collection au commit (un batch de 30 updates sur animals = 1 bump,
+  // pas 30).
+  const touchedCollections = new Set<string>()
   const setOriginal = batch.set.bind(batch)
   const updateOriginal = batch.update.bind(batch)
   const deleteOriginal = batch.delete.bind(batch)
   const commitOriginal = batch.commit.bind(batch)
 
+  function trackRef(args: unknown[]) {
+    const ref = args[0]
+    const col = collectionFromPath(refPath(ref))
+    if (col && !col.startsWith('<')) touchedCollections.add(col)
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  batch.set = ((...args: unknown[]) => { opCount++; return (setOriginal as any)(...args) }) as typeof batch.set
+  batch.set = ((...args: unknown[]) => { opCount++; trackRef(args); return (setOriginal as any)(...args) }) as typeof batch.set
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  batch.update = ((...args: unknown[]) => { opCount++; return (updateOriginal as any)(...args) }) as typeof batch.update
+  batch.update = ((...args: unknown[]) => { opCount++; trackRef(args); return (updateOriginal as any)(...args) }) as typeof batch.update
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  batch.delete = ((...args: unknown[]) => { opCount++; return (deleteOriginal as any)(...args) }) as typeof batch.delete
+  batch.delete = ((...args: unknown[]) => { opCount++; trackRef(args); return (deleteOriginal as any)(...args) }) as typeof batch.delete
   batch.commit = (async () => {
     const start = performance.now()
     const r = await commitOriginal()
@@ -454,6 +514,8 @@ export const writeBatch: typeof fsWriteBatch = ((firestore: Parameters<typeof fs
     stats.totalDocsWritten += opCount
     pushRecent({ ts: Date.now(), kind: 'batch-commit', path: '<batch>', docs: opCount, durationMs: performance.now() - start })
     scheduleNotify()
+    // Bump opti pour chaque collection touchée (déduplique par batch).
+    touchedCollections.forEach(maybeBumpOpti)
     return r
   }) as typeof batch.commit
 

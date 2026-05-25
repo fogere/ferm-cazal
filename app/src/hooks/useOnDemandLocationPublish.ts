@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { collection, doc, onSnapshot, updateDoc } from '../services/firestoreMonitor'
+import { doc, updateDoc } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from './useAuth'
+import { useUsers } from './useUsers'
 import { useLocationCore } from './useLocationCore'
 import { locationCore } from '../services/location/locationCore'
 
@@ -46,43 +47,68 @@ export function useOnDemandLocationPublish() {
   const [otherWatcherActive, setOtherWatcherActive] = useState(false)
   const lastPublishAt      = useRef(0)
   const timerRef           = useRef<ReturnType<typeof setInterval> | null>(null)
-  // Bug détecté 24/05/2026 via panel monitoring : si on met `otherWatcherActive`
-  // dans les deps de l'effet plus bas, le listener `users` se ré-attache à
-  // chaque ouverture/fermeture de carte par un autre utilisateur (listener
-  // churn). Le ref ci-dessous reflète la valeur courante du state pour que le
-  // setInterval puisse la lire sans re-créer l'effet.
+  // Ref miroir du state, lu par le setInterval pour éviter de recréer le timer
+  // à chaque flip de otherWatcherActive (audit 24/05/2026 — listener churn).
   const otherWatcherActiveRef = useRef(false)
 
   // Subscribe au core uniquement quand un autre user nous regarde
   const noopUpdate = useCallback(() => { /* updates lus à la demande via getRecentPosition */ }, [])
   useLocationCore(noopUpdate, undefined, !!myUid && shareLocation && otherWatcherActive)
 
+  // Liste users centralisée (UsersProvider) — un seul listener partagé entre
+  // tous les hooks/pages consommateurs au lieu de 9 listeners parallèles.
+  const users = useUsers()
+  // Ref tenant la dernière liste users, pour le polling du timer (le timer ne
+  // doit pas être recréé à chaque changement de users — sinon listener churn).
+  const usersRef = useRef(users)
+  usersRef.current = users
+
+  // Recalcule "un autre user regarde la map" à chaque update de la liste users.
+  // Source primaire de la transition active→inactive lorsqu'un user ferme la map.
+  useEffect(() => {
+    if (!myUid || !shareLocation) {
+      otherWatcherActiveRef.current = false
+      setOtherWatcherActive(false)
+      return
+    }
+    const now = Date.now()
+    let active = false
+    for (const u of users) {
+      if (u.uid === myUid) continue
+      if (u.mapOpenAt && now - u.mapOpenAt < RECENT_WINDOW_MS) {
+        active = true
+        break
+      }
+    }
+    if (active !== otherWatcherActiveRef.current) {
+      otherWatcherActiveRef.current = active
+      setOtherWatcherActive(active)
+    }
+  }, [users, myUid, shareLocation])
+
   useEffect(() => {
     if (!myUid || !shareLocation) return
 
-    // Écoute les autres profils pour savoir si l'un d'eux regarde la map.
-    // Listener stable : ne dépend que de myUid+shareLocation, ne se ré-attache
-    // PAS quand otherWatcherActive bascule.
-    const unsub = onSnapshot(collection(db, 'users'), snap => {
+    // Polling local — quand actif, on publie 1× / minute (throttle).
+    // Le timer recalcule aussi `active` (selon l'horloge) pour gérer le cas
+    // d'un user dont mapOpenAt expire sans qu'un nouveau snapshot Firestore
+    // n'arrive (ex : l'autre user kill l'app sans fermer proprement la map).
+    timerRef.current = setInterval(() => {
+      // Re-check de la fenêtre temporelle indépendamment des snapshots Firestore
       const now = Date.now()
       let active = false
-      snap.forEach(d => {
-        if (d.id === myUid) return
-        const data = d.data() as { mapOpenAt?: number }
-        if (data.mapOpenAt && now - data.mapOpenAt < RECENT_WINDOW_MS) {
+      for (const u of usersRef.current) {
+        if (u.uid === myUid) continue
+        if (u.mapOpenAt && now - u.mapOpenAt < RECENT_WINDOW_MS) {
           active = true
+          break
         }
-      })
-      otherWatcherActiveRef.current = active
-      setOtherWatcherActive(active)
-    }, err => console.warn('[onDemandPublish] users snap:', err?.code))
-
-    // Polling local — quand actif, on publie 1× / minute (throttle).
-    // Lit otherWatcherActiveRef.current au lieu du state pour éviter d'avoir
-    // à recréer le timer (et le listener au-dessus) à chaque flip.
-    timerRef.current = setInterval(() => {
-      if (!otherWatcherActiveRef.current) return
-      const now = Date.now()
+      }
+      if (active !== otherWatcherActiveRef.current) {
+        otherWatcherActiveRef.current = active
+        setOtherWatcherActive(active)
+      }
+      if (!active) return
       if (now - lastPublishAt.current < PUBLISH_INTERVAL) return
 
       const recent = locationCore.getRecentPosition(POSITION_MAX_AGE)
@@ -100,7 +126,6 @@ export function useOnDemandLocationPublish() {
     }, 10_000) // check toutes les 10 s, mais l'écriture est throttlée à 1/minute
 
     return () => {
-      unsub()
       if (timerRef.current) clearInterval(timerRef.current)
     }
   }, [myUid, shareLocation])

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './hooks/useAuth'
+import { UsersProvider } from './hooks/useUsers'
 import { ThemeProvider } from './hooks/useTheme'
 import { DensityProvider } from './hooks/useDensity'
 import { useMessaging } from './hooks/useMessaging'
@@ -206,7 +207,9 @@ export default function App() {
       <ThemeProvider>
         <DensityProvider>
           <AuthProvider>
-            <AppRoutes />
+            <UsersProvider>
+              <AppRoutes />
+            </UsersProvider>
           </AuthProvider>
         </DensityProvider>
       </ThemeProvider>

@@ -39,6 +39,9 @@ scripts/le-cazal-service-account.json
 bug.json
 ferme-bugs-*.json
 
+# ── Rapport audit Firestore (régénéré par scripts/audit-firestore-usage.cjs) ──
+firestore-usage-audit.json
+
 # ── Scripts de migration ponctuels (peuvent contenir mots de passe) ──
 scripts/migrate-users.cjs
 scripts/migration-output.txt

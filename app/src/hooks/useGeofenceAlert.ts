@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react'
 import {
-  collection, doc, getDocs, updateDoc,
+  collection, doc, getDoc, getDocs, updateDoc,
 } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from './useAuth'
 import { pointInPolygonWithHoles } from '../services/map/polygon'
 import { useLocationCore } from './useLocationCore'
-import type { Animal, MapPin } from '../types'
+import type { Animal, MapPin, Task } from '../types'
 
 /**
  * Geofence : quand l'utilisateur entre physiquement dans un enclos contenant
@@ -33,7 +33,14 @@ import type { Animal, MapPin } from '../types'
 
 const STALE_AFTER_MS  = 12 * 60 * 60 * 1000 // 12 h sans check → animal "à vérifier"
 const RENOTIFY_MIN_MS = 6  * 60 * 60 * 1000 // anti-spam : 6 h entre 2 notifs pour le même enclos
-const REFRESH_MS      = 5  * 60 * 1000      // refresh cache enclos/animaux toutes les 5 min
+// Refresh cache enclos/animaux/tâches toutes les 15 min.
+// Audit Firebase 25/05/2026 (Nils) : avec 4 utilisatrices et shareLocation
+// activé, un refresh toutes les 5 min consommait ~1 800 reads/jour/client. En
+// passant à 15 min on économise 2/3 de ces reads sans impact visuel (le
+// geofence est une notif perso à seuil 12 h, pas du temps réel collaboratif).
+// La collaboration multi-user sur clôtures/animaux/tâches reste 100% live via
+// les onSnapshot de Map/Tasks/Dashboard.
+const REFRESH_MS      = 15 * 60 * 1000
 const POS_CHECK_MS    = 60_000              // throttle des checks de position : 1× / minute
 // Bug Eugénie 24/05/2026 : on ignore les positions à >100 m de précision
 // (Wi-Fi/cellulaire). Avec ce niveau d'erreur, on déclencherait des notifs de
@@ -53,22 +60,91 @@ export function useGeofenceAlert() {
 
   const enclosuresRef = useRef<MapPin[]>([])
   const animalsRef    = useRef<Animal[]>([])
+  // V5 #1 anti-pollution (Nils 25/05/2026) : ids de land_plots qui ont déjà une
+  // tâche active (non complétée, due ≤ fin de journée) liée à eux. Si l'utilisateur
+  // entre dans un tel parc, on ne déclenche PAS la notif geofence — la tâche
+  // existante suffit à canaliser l'action terrain.
+  const activeTaskPlotsRef = useRef<Set<string>>(new Set())
   const lastCheckedAt = useRef(0)
   const refreshTimer  = useRef<ReturnType<typeof setInterval> | null>(null)
   const insideEnclosure = useRef<string | null>(null)
   const notifiedMap   = useRef<Record<string, number>>({})
+  // B · Cache opti (Nils 25/05/2026) : on stocke la dernière version vue par
+  // collection pour skip le getDocs si rien n'a bougé. Chaque entrée vaut le
+  // timestamp `opti/state[colName]`. Au premier refresh on lit tout, ensuite
+  // on n'interroge que la collection dont la version a changé.
+  const lastOptiSeen = useRef<{ map_pins: number; animals: number; tasks: number }>({
+    map_pins: 0, animals: 0, tasks: 0,
+  })
 
   // Charge / rafraîchit les enclos candidats au geofence + les animaux du cheptel.
   // Candidats = land_plots valides actifs uniquement (S9 : plus de fallback fence).
+  // Optimisation opti : avant chaque refresh, on lit /opti/state (1 read) et on
+  // compare aux dernières versions vues. Pour chaque collection :
+  //   - version inchangée → on garde le cache local (0 read serveur)
+  //   - version changée   → getDocs serveur + maj du cache et de la version
+  // Filet de sécurité : si opti est introuvable ou plante, on retombe sur le
+  // comportement précédent (re-fetch tout). Pas de risque de cache stale long :
+  // syncOpti côté cron rattrape toutes les 5 min les bumps oubliés.
   async function refreshCache() {
     try {
-      const [pinsSnap, animalsSnap] = await Promise.all([
-        getDocs(collection(db, 'map_pins')),
-        getDocs(collection(db, 'animals')),
-      ])
-      const allPins = pinsSnap.docs.map(d => ({ id: d.id, ...d.data() } as MapPin))
-      enclosuresRef.current = allPins.filter(isValidLandPlot)
-      animalsRef.current = animalsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Animal))
+      // 1 read pour /opti/state. Coût : 1 lecture par refresh (1/15 min).
+      let optiData: { map_pins?: number; animals?: number; tasks?: number } = {}
+      try {
+        const optiSnap = await getDoc(doc(db, 'opti', 'state'))
+        if (optiSnap.exists()) {
+          optiData = optiSnap.data() as typeof optiData
+        }
+      } catch {
+        // Si opti est inaccessible (rules, réseau…), on fetch tout par sécurité
+        // en laissant optiData vide → toutes les versions seront "changées".
+        optiData = {}
+      }
+
+      const needPins    = (optiData.map_pins ?? 0) !== lastOptiSeen.current.map_pins || enclosuresRef.current.length === 0
+      const needAnimals = (optiData.animals  ?? 0) !== lastOptiSeen.current.animals  || animalsRef.current.length === 0
+      const needTasks   = (optiData.tasks    ?? 0) !== lastOptiSeen.current.tasks    || activeTaskPlotsRef.current.size === 0
+
+      // Cas le plus fréquent en utilisation calme : rien n'a bougé. On a alors
+      // payé 1 read d'opti contre 154 reads de fetch complet → économie ~99%.
+      if (!needPins && !needAnimals && !needTasks) return
+
+      const tasks: Promise<unknown>[] = []
+      if (needPins) {
+        tasks.push(getDocs(collection(db, 'map_pins')).then(snap => {
+          const allPins = snap.docs.map(d => ({ id: d.id, ...d.data() } as MapPin))
+          enclosuresRef.current = allPins.filter(isValidLandPlot)
+          lastOptiSeen.current.map_pins = optiData.map_pins ?? Date.now()
+        }))
+      }
+      if (needAnimals) {
+        tasks.push(getDocs(collection(db, 'animals')).then(snap => {
+          animalsRef.current = snap.docs.map(d => ({ id: d.id, ...d.data() } as Animal))
+          lastOptiSeen.current.animals = optiData.animals ?? Date.now()
+        }))
+      }
+      if (needTasks) {
+        tasks.push(getDocs(collection(db, 'tasks')).then(snap => {
+          // Fenêtre "active" = jusqu'à la fin de la journée locale courante. Les
+          // tâches à échéance demain ou plus tard ne bloquent pas la notif (elles
+          // n'orientent pas l'action présente). Pas d'orderBy ici (convention
+          // projet : where seul + filter client).
+          const endOfToday = new Date()
+          endOfToday.setHours(23, 59, 59, 999)
+          const cutoff = endOfToday.getTime()
+          const plots = new Set<string>()
+          snap.forEach(d => {
+            const t = d.data() as Task
+            if (t.completed) return
+            if (t.linkedKind !== 'land_plot' || !t.linkedId) return
+            if (typeof t.dueDate === 'number' && t.dueDate > cutoff) return
+            plots.add(t.linkedId)
+          })
+          activeTaskPlotsRef.current = plots
+          lastOptiSeen.current.tasks = optiData.tasks ?? Date.now()
+        }))
+      }
+      await Promise.all(tasks)
     } catch (e) {
       console.warn('[geofence] refresh:', e)
     }
@@ -124,6 +200,13 @@ export function useGeofenceAlert() {
       (!a.lastCheckedHealthy || now - a.lastCheckedHealthy > STALE_AFTER_MS),
     )
     if (stale.length === 0) return
+
+    // V5 #1 anti-pollution (Nils 25/05/2026) : si une tâche active vise
+    // explicitement ce parc (lien carte land_plot, due aujourd'hui ou en
+    // retard), on n'ajoute pas la notif geofence par-dessus. La tâche en cours
+    // est déjà la consigne ; la cocher (avec healthCheckOnComplete) déclenchera
+    // de toute façon le markAllHealthy.
+    if (activeTaskPlotsRef.current.has(candidate.id)) return
 
     // Anti-spam : 1 notif max / 6 h par enclos
     const lastNotif = notifiedMap.current[candidate.id] ?? 0

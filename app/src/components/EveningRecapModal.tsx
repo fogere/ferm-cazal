@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom'
 import { collection, doc, onSnapshot, query, updateDoc } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
-import type { Task, UserProfile } from '../types'
+import { useUsers } from '../hooks/useUsers'
+import type { Task } from '../types'
 
 /**
  * Bilan du soir : pop-up qui apparaît automatiquement à partir de l'heure
@@ -63,7 +64,7 @@ export default function EveningRecapModal() {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [tasks, setTasks] = useState<Task[]>([])
-  const [users, setUsers] = useState<UserProfile[]>([])
+  const users = useUsers()
   const [postponingId, setPostponingId] = useState<string | null>(null)
 
   /* Décide si on ouvre (timer auto à l'heure du profil) */
@@ -108,13 +109,7 @@ export default function EveningRecapModal() {
     return unsub
   }, [open])
 
-  useEffect(() => {
-    if (!open) return
-    const unsub = onSnapshot(collection(db, 'users'), snap =>
-      setUsers(snap.docs.map(d => d.data() as UserProfile))
-    )
-    return unsub
-  }, [open])
+  // users → UsersProvider central (cf. hooks/useUsers).
 
   /* Filtres */
   const summary = useMemo(() => {

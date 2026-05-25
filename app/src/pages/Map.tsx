@@ -12,6 +12,7 @@ import {
 } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth } from '../hooks/useAuth'
+import { useUsers } from '../hooks/useUsers'
 import { useLiveLocation } from '../hooks/useLiveLocation'
 import { useLocationCore } from '../hooks/useLocationCore'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'
@@ -40,7 +41,7 @@ import { LandPlotPanel } from './map/panels/LandPlotPanel'
 import { ScindageModal, type ScindageChoice } from './map/panels/ScindageModal'
 import { GeofenceCheckSheet } from '../components/GeofenceCheckSheet'
 import { BATTERY_STATUS_CFG } from './map/panels/shared'
-import type { MapPin, PinType, UserProfile, FencePreset, Animal } from '../types'
+import type { MapPin, PinType, FencePreset, Animal } from '../types'
 
 /* ─── ferme ─── */
 
@@ -943,7 +944,7 @@ export default function MapPage() {
   const customSpecies = useCustomSpecies()
 
   const [pins,         setPins]         = useState<MapPin[]>([])
-  const [users,        setUsers]        = useState<UserProfile[]>([])
+  const users = useUsers()
   const [animalGroups, setAnimalGroups] = useState<{ name: string; count: number }[]>([])
   const [layer,        setLayer]        = useState<'aerial' | 'plan' | 'osm'>('aerial')
   // Overlay parcelles cadastrales — persisté dans localStorage, utile pour voir
@@ -1166,11 +1167,8 @@ export default function MapPage() {
       snap => setPins(snap.docs.map(d => ({ id: d.id, ...d.data() } as MapPin))),
       err => console.error('[Map] map_pins subscription error:', err.code, err.message)
     )
-    const u2 = onSnapshot(
-      query(collection(db, 'users')),
-      snap => setUsers(snap.docs.map(d => d.data() as UserProfile)),
-      err => console.error('[Map] users subscription error:', err.code, err.message)
-    )
+    // Le listener `users` vit dans UsersProvider — partagé entre Tasks/Map/Dashboard/etc.
+    // Avant : 1 listener par page consommatrice (9× en parallèle).
     getDoc(doc(db, 'config', 'farm')).then(snap => {
       if (snap.exists() && Array.isArray(snap.data().animalGroups)) {
         setAnimalGroups(snap.data().animalGroups)
@@ -1201,7 +1199,7 @@ export default function MapPage() {
       snap => setAnimals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Animal))),
       err => console.error('[Map] animals subscription error:', err.code, err.message)
     )
-    return () => { u1(); u2(); u3() }
+    return () => { u1(); u3() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

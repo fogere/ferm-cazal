@@ -10,6 +10,7 @@ import {
   tsToDateInput as todayInputValue,
 } from '../services/map/time'
 import { useAuth } from '../hooks/useAuth'
+import { useUsers } from '../hooks/useUsers'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'
 import { getSpeciesInfo } from '../services/species'
 import { compressImage } from '../services/image'
@@ -35,7 +36,7 @@ export default function AnimalDetail() {
 
   const [animal,       setAnimal]       = useState<Animal | null>(null)
   const [allAnimals,   setAllAnimals]   = useState<Animal[]>([])
-  const [users,        setUsers]        = useState<UserProfile[]>([])
+  const users = useUsers()
   const [careEntries,  setCareEntries]  = useState<AnimalCareEntry[]>([])
   const [photos,       setPhotos]       = useState<AnimalPhoto[]>([])
   const [measurements, setMeasurements] = useState<AnimalMeasurement[]>([])
@@ -61,12 +62,7 @@ export default function AnimalDetail() {
     return unsub
   }, [])
 
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'users'), snap => {
-      setUsers(snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserProfile)))
-    }, err => console.warn('[animal] users:', err.code))
-    return unsub
-  }, [])
+  // users → UsersProvider central (cf. hooks/useUsers).
 
   useEffect(() => {
     if (!id) return

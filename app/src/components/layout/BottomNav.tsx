@@ -1,19 +1,24 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Home, CheckSquare, Map, Bell, Settings } from 'lucide-react'
+import { Home, CheckSquare, Map, Bell, Settings, ClipboardList } from 'lucide-react'
 import { collection, query, where, onSnapshot } from '../../services/firestoreMonitor'
 import { db } from '../../firebase'
+import { useAuth } from '../../hooks/useAuth'
 
+// L'onglet "Saisie" (Enrichissement) est masqué pour les aides temporaires :
+// les rules `parcel_answers` n'autorisent les writes qu'aux comptes réguliers.
 const NAV_ITEMS = [
-  { to: '/dashboard', icon: Home,        label: 'Accueil',  badge: false },
-  { to: '/tasks',     icon: CheckSquare, label: 'Tâches',   badge: false },
-  { to: '/map',       icon: Map,         label: 'Carte',    badge: false },
-  { to: '/alerts',    icon: Bell,        label: 'Alertes',  badge: true  },
-  { to: '/settings',  icon: Settings,    label: 'Réglages', badge: false },
+  { to: '/dashboard',     icon: Home,          label: 'Accueil',  badge: false, regularOnly: false },
+  { to: '/tasks',         icon: CheckSquare,   label: 'Tâches',   badge: false, regularOnly: false },
+  { to: '/map',           icon: Map,           label: 'Carte',    badge: false, regularOnly: false },
+  { to: '/enrichissement',icon: ClipboardList, label: 'Saisie',   badge: false, regularOnly: true  },
+  { to: '/alerts',        icon: Bell,          label: 'Alertes',  badge: true,  regularOnly: false },
+  { to: '/settings',      icon: Settings,      label: 'Réglages', badge: false, regularOnly: false },
 ] as const
 
 export default function BottomNav() {
   const [activeAlerts, setActiveAlerts] = useState(0)
+  const { isTemp } = useAuth()
 
   useEffect(() => {
     const q = query(collection(db, 'alerts'), where('resolved', '==', false))
@@ -21,11 +26,13 @@ export default function BottomNav() {
     return unsub
   }, [])
 
+  const items = NAV_ITEMS.filter(item => !(item.regularOnly && isTemp))
+
   return (
     <nav className="flex-shrink-0 bg-card border-t border-border safe-bottom"
          style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
       <div className="flex">
-        {NAV_ITEMS.map(({ to, icon: Icon, label, badge }) => (
+        {items.map(({ to, icon: Icon, label, badge }) => (
           <NavLink
             key={to}
             to={to}

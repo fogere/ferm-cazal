@@ -29,6 +29,7 @@ const BugsPage     = lazy(() => import('./pages/Bugs'))
 const AnimalDetailPage = lazy(() => import('./pages/AnimalDetail'))
 const GrazingPage       = lazy(() => import('./pages/Grazing'))
 const MessagesPage      = lazy(() => import('./pages/Messages'))
+const EnrichissementPage = lazy(() => import('./pages/Enrichissement'))
 
 function LoadingScreen() {
   return (
@@ -127,6 +128,7 @@ function ChunkPrefetcher() {
       import('./pages/Admin').catch(() => {})
       import('./pages/Grazing').catch(() => {})
       import('./pages/Messages').catch(() => {})
+      import('./pages/Enrichissement').catch(() => {})
     })
   }, [user])
   return null
@@ -192,6 +194,7 @@ function AppRoutes() {
             <Route path="/animal/:id" element={<AnimalDetailPage />} />
             <Route path="/grazing"   element={<GrazingPage />} />
             <Route path="/messages"  element={<MessagesPage />} />
+            <Route path="/enrichissement" element={<AdminRoute><EnrichissementPage /></AdminRoute>} />
             <Route path="/admin"     element={<AdminRoute><AdminPage /></AdminRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

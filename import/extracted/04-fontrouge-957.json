@@ -1,0 +1,101 @@
+{
+  "_source": "fichier/Fontrouge 957.docx",
+  "_extractedAt": "2026-05-27",
+  "_status": "DRAFT_AWAITING_USER_VALIDATION",
+
+  "_summary": "Le plus gros doc : 11 parcelles cadastrales (B952 à B975) en îlot PAC 52 (déclaré 2023). Surface totale listée 25 537 m². Le doc parle d'un 'Parc de Fount Rouge du dessus 1ha 4' (14000 m²) ≠ somme des 11 parcelles : seul un sous-ensemble est effectivement cloturé/utilisé. Source au dessus avec journal d'observations très dense. 1 session de pâturage avec 5 chevaux non nommés.",
+
+  "land_plots": [
+    {
+      "_action": "match_existing_or_create",
+      "_matchHint": "Land_plot existant 'fontrouge' en DB (sans majuscule). Probablement le bon — match très fort.",
+      "_matchUncertainty": "BAS",
+      "name_proposed": "Fountrouge du dessus (Bastarou)",
+      "_naming_alt": "Le nom du doc est 'Fount Rouge' / 'Fontrouge' / 'Font Rouge' — orthographes flottantes. Garder l'orthographe Firestore existante.",
+      "pacIlot_proposed": "52",
+      "pacYear_proposed": 2023,
+      "pacStatus_proposed": "declared",
+      "_pacStatusReason": "Le doc dit 'mis à la Pac 2023' (terme 'mis à' = déclaré, pas engagement pluriannuel).",
+      "cadastralRef_proposed": "B957",
+      "_cadastralRefReason": "Parcelle 'centrale' identifiée dans le titre du doc.",
+      "surfaceM2_proposed": 14000,
+      "_surfaceM2Reason": "Le doc dit '1ha 4' pour le parc effectif. La somme des 11 parcelles (25 537 m²) inclut probablement des parcelles bordières non encloses.",
+      "note_proposed": "Parc au dessus étable de Christian Fount Rouge au lieu dit Bastarou. Terrains très sec en période humide, idéal pour les sabots ! Nécessite 80 piquets pour clôture. Bordures secondaires : parcelle 960 (Lucette-Jojo) et 954 (indivision Laffont) ouverture à partir du 3 février ; parcelle 969 de Miquel, ouverture le 17 février 2025 ; tout haut de Allabert (Stop Fabrice !)",
+      "parcels_proposed": [
+        { "cadastralRef": "B952", "surfaceM2": 2170, "landowner": "Lucette Authié et Jojo", "leaseType": "fermage" },
+        { "cadastralRef": "B955", "surfaceM2": 1380, "landowner": "Manenti", "leaseType": "fermage", "leaseNote": "Accord 6/01/25" },
+        { "cadastralRef": "B956", "surfaceM2": 1295, "landowner": "Manenti", "leaseType": "fermage" },
+        { "cadastralRef": "B957", "surfaceM2": 4149, "landowner": "Audinos", "leaseType": "fermage", "note": "Entrée du parc" },
+        { "cadastralRef": "B958", "surfaceM2": 2328, "landowner": "Miquel Thierry et Paul", "leaseType": "fermage" },
+        { "cadastralRef": "B959", "surfaceM2": 4514, "landowner": "Miquel Thierry et Paul", "leaseType": "fermage", "note": "Au dessus de la Fontaine" },
+        { "cadastralRef": "B971", "surfaceM2": 972,  "landowner": "Miquel Thierry et Paul", "leaseType": "fermage" },
+        { "cadastralRef": "B972", "surfaceM2": 1007, "landowner": "Miquel Thierry et Paul", "leaseType": "fermage" },
+        { "cadastralRef": "B970", "surfaceM2": 3610, "landowner": "Allabert Benoît", "leaseType": "fermage" },
+        { "cadastralRef": "B973", "surfaceM2": 3570, "landowner": "Allabert Benoît", "leaseType": "fermage" },
+        { "cadastralRef": "B975", "surfaceM2": 542,  "landowner": "Marie Rumeau", "leaseType": "fermage" }
+      ],
+      "_parcelsLeaseTypeAssumption": "TOUS marqués 'fermage' par défaut — à confirmer. Le doc ne précise pas si c'est fermage légal, accord verbal, prêt gracieux… Hypothèse safe : fermage. Si certaines sont gracieuses (pas de contrepartie), changer leaseType='gracious'."
+    }
+  ],
+
+  "water_stream_candidate": {
+    "_action": "create_or_enrich",
+    "_matchHint": "Le doc parle d'une 'Source au dessus de la Fontaine'. Probablement un water_stream OU water_natural à créer si pas déjà en DB. En DB il y a 1 water_stream et 2 water_natural — vérifier si l'un d'eux est ici.",
+    "streamMode_proposed": "seasonal",
+    "streamActiveMonths_proposed": [12, 1, 2, 3, 4, 5],
+    "_activeMonthsReason": "Observations sur dec 2024 → mai 2025 = écoulement actif. À sec début été (pas observé dans le doc, mais cohérent terrain sec).",
+    "note_proposed": "Source au dessus de la Fontaine de Font rouge. La fontaine située au niveau de la route coule presque toujours (cf. obs 2025-04). Le ruisseau de surface est très sensible aux pluies."
+  },
+
+  "streamObservations_candidates": [
+    { "date_iso": "2024-12-15", "level": "low",    "note": "Petit écoulement permanent en surface (déc 2024)" },
+    { "date_iso": "2025-01-15", "level": "low",    "note": "Petit écoulement permanent en surface (jan 2025)" },
+    { "date_iso": "2025-02-24", "level": "dry",    "note": "Plus d'eau le 24 février 2025" },
+    { "date_iso": "2025-03-20", "level": "low",    "note": "Reprise de l'écoulement en surface" },
+    { "date_iso": "2025-04-02", "level": "low",    "note": "Écoulement en surface" },
+    { "date_iso": "2025-04-12", "level": "dry",    "note": "Stop écoulement (la fontaine au niveau de la route coule)" },
+    { "date_iso": "2025-04-17", "level": "low",    "note": "Reprise après 3 jours de pluie" },
+    { "date_iso": "2025-05-01", "level": "normal", "note": "Écoulement continu suite grosse pluie du 23/04" },
+    { "date_iso": "2025-05-20", "level": "high",   "note": "Gros écoulement après une nuit de pluie" }
+  ],
+
+  "enclosure_movements_candidates": [
+    {
+      "_action": "create_uncertain",
+      "_sourceLine": "29/12/2024 au 25/02/2025 5 chevaux",
+      "_problem": "5 chevaux NON NOMMÉS dans le doc. Impossible de créer des enclosure_movements sans animalId.",
+      "_options": [
+        "Demander à Nils quels 5 chevaux étaient là (probable que les 5 chevaux 'classiques' du cheptel : Quérus, Raggazzo, Kastille, Michka, Saison ? — à confirmer)",
+        "OU skip cette session — perte d'historique",
+        "OU créer 1 mouvement 'placeholder' avec animalId=null + note explicative (mais ça casse les rules Firestore probablement)"
+      ],
+      "_recommendation": "Différer cette session jusqu'à confirmation par Nils.",
+      "movedAt_iso": "2024-12-29",
+      "movedOutAt_iso": "2025-02-25"
+    }
+  ],
+
+  "_unmapped": [
+    {
+      "info": "'Nécessite 80 piquets' (inventaire matériel)",
+      "currentField": "Note libre",
+      "feature_proposed": "Idem doc 1 — laissé dans note."
+    },
+    {
+      "info": "'Stop Fabrice !' — conflit/limite avec un voisin",
+      "currentField": "Note libre",
+      "feature_proposed": "Pas de modèle de conflit voisinage. Laissé en note."
+    },
+    {
+      "info": "Parcelles bordières mentionnées (960 Lucette-Jojo, 954 Laffont, 969 Miquel) ouvertes saisonnièrement",
+      "currentField": "Note libre dans le plot principal",
+      "feature_proposed": "Ce sont des parcelles ADDITIONNELLES, pas du parc principal. À discuter : créer un sous-parc 'Fount Rouge bordures' ? Ou laisser en note ? Hypothèse safe : note + une parcels_extra à part."
+    }
+  ],
+  "_uncertain": [
+    "5 chevaux non nommés — Nils doit clarifier ou cette session est perdue.",
+    "leaseType='fermage' pour les 11 parcelles : assumption à confirmer (peut-être gracious ou autre).",
+    "Différence 14000 m² (parc effectif) vs 25 537 m² (somme parcelles). Lesquelles sont effectivement encloses ?",
+    "Le water_stream est-il déjà en DB ? Si oui, lequel ? Sinon créer."
+  ]
+}

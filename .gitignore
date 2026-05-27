@@ -38,6 +38,11 @@ scripts/le-cazal-service-account.json
 # ── Exports bug reports (artefacts de debug, pas du code) ──
 bug.json
 ferme-bugs-*.json
+V[0-9]*.json
+BUGV*.json
+
+# ── Fiches papier sources (44 Mo de .docx/.odt/.odp — extraits dans import/extracted/) ──
+fichier/
 
 # ── Rapport audit Firestore (régénéré par scripts/audit-firestore-usage.cjs) ──
 firestore-usage-audit.json

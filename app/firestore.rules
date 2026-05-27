@@ -202,6 +202,17 @@ service cloud.firestore {
                            || resource.data.fromUid == request.auth.uid);
     }
 
+    // ── Réponses au questionnaire d'enrichissement des fiches terrain ──
+    // Collection statique de questions générées depuis les fiches papier des
+    // terrains (cf app/src/data/parcelQuestions.ts). Les réponses sont saisies
+    // par la famille en groupe sur 1 seul compte régulier.
+    // - read : tous les authentifiés (transparence des réponses)
+    // - write : utilisateurs réguliers uniquement (pas les aides temporaires)
+    match /parcel_answers/{questionId} {
+      allow read:  if hasAccess();
+      allow write: if isRegularUser();
+    }
+
     // Tout le reste : refusé
     match /{document=**} {
       allow read, write: if false;

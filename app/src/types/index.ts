@@ -74,24 +74,30 @@ export interface Task {
   // Anti-doublon cron pour les tâches avec hasDueTime (rappel personnel).
   reminderSentAt?: number | null
 
-  // ── Lien à un élément carte ──
-  // Demande Nils 25/05/2026 : éviter d'avoir à cocher la tâche manuellement
-  // après être allé physiquement sur le terrain. Quand une tâche est liée à
-  // un point d'eau manuel ou un espace défini :
+  // ── Liens à des éléments carte ──
+  // Bug V6 (Eugénie 27/05/2026) : avant on n'avait qu'UN seul lien
+  // (linkedKind/linkedId/linkedName), donc une tâche ne pouvait être liée
+  // qu'à un point d'eau OU un espace, pas les deux. Refonte : 2 liens
+  // indépendants (water_manual + land_plot), la tâche se coche auto quand
+  // TOUS les liens présents ont été actionnés (DoneAt set).
+  linkedWaterId?:     string
+  linkedWaterName?:   string
+  linkedWaterDoneAt?: number | null  // ts quand le point d'eau a été rempli (reset à chaque cycle)
+  linkedLandId?:      string
+  linkedLandName?:    string
+  linkedLandDoneAt?:  number | null  // ts quand l'espace a été "vu animaux OK" (reset à chaque cycle)
+
+  // Rétrocompat (anciennes tâches créées avant V6 — lecture seule, plus écrites) :
   //   - water_manual : "Remplir maintenant" sur le pin coche la tâche.
   //   - land_plot    : "Vu animaux OK" sur l'espace coche la tâche.
-  // Affichage : badge "💧 Point d'eau X" / "🟩 Espace X" + bouton "Voir sur carte".
+  // Les nouvelles tâches écrivent linkedWaterId/linkedLandId ci-dessus.
   linkedKind?: 'water_manual' | 'land_plot'
   linkedId?:   string
-  // Nom snapshot du pin/espace au moment du lien — pour l'afficher sans avoir
-  // à requêter map_pins. Mis à jour à la modification du nom du pin via cron
-  // (optionnel — on s'en passe pour démarrer).
   linkedName?: string
-  // Bug Nils 25/05/2026 (V5 #1) : pour une tâche liée à un land_plot, cocher
-  // "fait" déclenche aussi un markAllHealthy sur tous les animaux de l'enclos
-  // (équivalent du flow geofence). Cas typique : "voir les juments au pré 1".
-  // Désactivable par tâche au cas où le travail ne consiste pas à vérifier les
-  // animaux (ex : "réparer la clôture"). Défaut implicite = true pour land_plot.
+  // Pour une tâche liée à un land_plot, cocher "fait" déclenche aussi un
+  // markAllHealthy sur tous les animaux de l'enclos (équivalent du flow
+  // geofence). Cas typique : "voir les juments au pré 1". Désactivable au cas
+  // où le travail ne consiste pas à vérifier les animaux. Défaut = true.
   healthCheckOnComplete?: boolean
 }
 

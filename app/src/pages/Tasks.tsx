@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import {
   Plus, X, CheckCircle2, Circle, AlertTriangle, RotateCcw, ChevronDown, ChevronRight,
-  Trash2, Hand, Bell, BellRing, Pencil, ArrowRight, MapPin as MapPinIcon, Droplets, Square, Heart,
+  Trash2, Hand, Bell, BellRing, Pencil, ArrowRight, Droplets, Square, Heart,
 } from 'lucide-react'
 import {
   collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, getDocs, where, writeBatch,
@@ -94,13 +94,15 @@ interface FormState {
   priority: Task['priority']
   mode: 'pool' | 'assigned' | 'broadcast'  // 3 modes possibles
   assignedTo: string        // uid spécifique (super admin) ou '' (pool)
-  // Lien à un élément carte. linkedKind === undefined → aucun lien.
-  linkedKind?: 'water_manual' | 'land_plot'
-  linkedId?:   string
-  linkedName?: string
-  // Quand le lien est un land_plot : la complétion de la tâche vaut aussi
-  // "j'ai vu tous les animaux, ils vont bien" (markAllHealthy auto). Activé
-  // par défaut car c'est l'usage typique (cf. V5 #1 Nils 25/05/2026).
+  // Liens carte (V6, Eugénie 27/05/2026) : on peut maintenant lier une tâche
+  // à 1 point d'eau ET 1 espace simultanément, ou un seul des deux, ou aucun.
+  linkedWaterId?:   string
+  linkedWaterName?: string
+  linkedLandId?:    string
+  linkedLandName?:  string
+  // Quand un land est lié : la complétion de la tâche vaut aussi "j'ai vu
+  // tous les animaux, ils vont bien" (markAllHealthy auto). Activé par défaut
+  // car c'est l'usage typique (cf. V5 #1 Nils 25/05/2026).
   healthCheckOnComplete: boolean
 }
 
@@ -131,6 +133,13 @@ function formFromTask(t: Task): FormState {
   let mode: FormState['mode'] = 'pool'
   if (t.broadcast) mode = 'broadcast'
   else if (t.assignedTo && t.assignedTo !== 'auto') mode = 'assigned'
+  // V6 — lecture des liens : on prend d'abord les nouveaux champs séparés
+  // (linkedWaterId/linkedLandId). Pour les tâches anciennes qui n'ont que
+  // linkedKind/linkedId/linkedName, on dérive vers le bon slot.
+  const linkedWaterId   = t.linkedWaterId   ?? (t.linkedKind === 'water_manual' ? t.linkedId   : undefined)
+  const linkedWaterName = t.linkedWaterName ?? (t.linkedKind === 'water_manual' ? t.linkedName : undefined)
+  const linkedLandId    = t.linkedLandId    ?? (t.linkedKind === 'land_plot'    ? t.linkedId   : undefined)
+  const linkedLandName  = t.linkedLandName  ?? (t.linkedKind === 'land_plot'    ? t.linkedName : undefined)
   return {
     title:        t.title,
     zone:         t.zone ?? '',
@@ -141,9 +150,10 @@ function formFromTask(t: Task): FormState {
     priority:     t.priority,
     mode,
     assignedTo:   mode === 'assigned' ? (t.assignedTo ?? '') : '',
-    linkedKind:   t.linkedKind,
-    linkedId:     t.linkedId,
-    linkedName:   t.linkedName,
+    linkedWaterId,
+    linkedWaterName,
+    linkedLandId,
+    linkedLandName,
     healthCheckOnComplete: t.healthCheckOnComplete !== false,
   }
 }
@@ -277,10 +287,14 @@ export default function Tasks() {
     }
     if (nowDone && task.recurrence !== 'once' && !task.nextOccurrenceCreated) {
       // Crée la prochaine occurrence. Bug V5 #2 (Nils 25/05/2026) : on PRÉSERVE
-      // explicitement les champs liés (linkedKind/Id/Name, hasDueTime, broadcast,
-      // healthCheckOnComplete). Avant ces champs étaient perdus à chaque cycle :
-      // la prochaine tâche tombait sans son lien carte ni son mode broadcast.
-      // Si la tâche source a une heure, on la reconduit sur la nouvelle dueDate.
+      // explicitement les champs liés (hasDueTime, broadcast, liens carte,
+      // healthCheckOnComplete). Sans ça, ces champs étaient perdus à chaque cycle.
+      // V6 (Eugénie 27/05/2026) : on garde les 2 liens indépendants
+      // (linkedWaterId/linkedLandId) et on RESET les flags DoneAt à null pour
+      // que la nouvelle occurrence reparte d'un état neuf (aucun lien encore
+      // actionné). Les anciens champs linkedKind/linkedId/linkedName sont
+      // dérivés depuis les nouveaux pour rester compatibles avec les vieux
+      // composants encore en place (rétrocompat lecture).
       const baseDue = nextDueFromNow(task)
       let dueDate = baseDue
       if (task.hasDueTime) {
@@ -289,6 +303,12 @@ export default function Tasks() {
         d.setHours(src.getHours(), src.getMinutes(), 0, 0)
         dueDate = d.getTime()
       }
+      // Liens : on prend les nouveaux champs en priorité, avec rétrocompat vers
+      // les anciens si la source était au vieux format.
+      const nextWaterId   = task.linkedWaterId   ?? (task.linkedKind === 'water_manual' ? task.linkedId   : null)
+      const nextWaterName = task.linkedWaterName ?? (task.linkedKind === 'water_manual' ? task.linkedName : null)
+      const nextLandId    = task.linkedLandId    ?? (task.linkedKind === 'land_plot'    ? task.linkedId   : null)
+      const nextLandName  = task.linkedLandName  ?? (task.linkedKind === 'land_plot'    ? task.linkedName : null)
       // Pour les broadcast : on garde le mode broadcast et assignedTo reste null.
       // Pour les pool/assigned : retour systématique au pool (assignedTo: null) —
       // comportement historique conservé pour que la nouvelle occurrence soit
@@ -312,10 +332,18 @@ export default function Tasks() {
         nextOccurrenceCreated: false,
         broadcast:    task.broadcast ?? false,
         broadcastNotifiedAt: null,
-        linkedKind:   task.linkedKind ?? null,
-        linkedId:     task.linkedId ?? null,
-        linkedName:   task.linkedName ?? null,
+        // V6 — nouveaux champs (source de vérité)
+        linkedWaterId:     nextWaterId,
+        linkedWaterName:   nextWaterName,
+        linkedWaterDoneAt: null,
+        linkedLandId:      nextLandId,
+        linkedLandName:    nextLandName,
+        linkedLandDoneAt:  null,
         healthCheckOnComplete: task.healthCheckOnComplete ?? null,
+        // Rétrocompat lecture (anciens composants / vieux clients PWA en cache)
+        linkedKind:  nextWaterId ? 'water_manual' : (nextLandId ? 'land_plot' : null),
+        linkedId:    nextWaterId ?? nextLandId ?? null,
+        linkedName:  nextWaterName ?? nextLandName ?? null,
       })
       updates.nextOccurrenceCreated = true
     }
@@ -328,17 +356,20 @@ export default function Tasks() {
     // carte pour cocher "tous vus" après avoir coché la tâche.
     // - Aides temp : autorisées (les rules acceptent ces 2 champs précis).
     // - Best-effort : on log mais on ne bloque pas l'UI si ça plante.
+    // V6 : lit linkedLandId (nouveau) avec fallback sur linkedKind/linkedId
+    // (rétrocompat anciennes tâches).
+    const landId =
+      task.linkedLandId ?? (task.linkedKind === 'land_plot' ? task.linkedId : undefined)
     if (
       nowDone
-      && task.linkedKind === 'land_plot'
-      && task.linkedId
+      && landId
       && task.healthCheckOnComplete !== false
       && user
     ) {
       try {
         const animSnap = await getDocs(query(
           collection(db, 'animals'),
-          where('enclosureId', '==', task.linkedId),
+          where('enclosureId', '==', landId),
         ))
         if (!animSnap.empty) {
           const batch = writeBatch(db)
@@ -433,11 +464,24 @@ export default function Tasks() {
     }
   }
 
-  // Résout le nom d'un pin lié pour l'affichage badge (priorité au live, sinon snapshot).
-  function linkedDisplayName(t: Task): string | null {
-    if (!t.linkedKind || !t.linkedId) return null
-    const live = mapPins.find(p => p.id === t.linkedId)
-    return live?.name ?? t.linkedName ?? '?'
+  // V6 — renvoie tous les liens carte d'une tâche (0, 1 ou 2). Lit d'abord les
+  // nouveaux champs et fallback sur linkedKind/linkedId pour les anciennes tâches.
+  // Le nom prend le live (map_pins) en priorité, sinon le snapshot stocké.
+  function linkedItems(t: Task): Array<{ kind: 'water_manual' | 'land_plot', id: string, name: string }> {
+    const items: Array<{ kind: 'water_manual' | 'land_plot', id: string, name: string }> = []
+    const waterId   = t.linkedWaterId   ?? (t.linkedKind === 'water_manual' ? t.linkedId   : undefined)
+    const waterName = t.linkedWaterName ?? (t.linkedKind === 'water_manual' ? t.linkedName : undefined)
+    const landId    = t.linkedLandId    ?? (t.linkedKind === 'land_plot'    ? t.linkedId   : undefined)
+    const landName  = t.linkedLandName  ?? (t.linkedKind === 'land_plot'    ? t.linkedName : undefined)
+    if (waterId) {
+      const live = mapPins.find(p => p.id === waterId)
+      items.push({ kind: 'water_manual', id: waterId, name: live?.name ?? waterName ?? 'Point d\'eau' })
+    }
+    if (landId) {
+      const live = mapPins.find(p => p.id === landId)
+      items.push({ kind: 'land_plot', id: landId, name: live?.name ?? landName ?? 'Espace' })
+    }
+    return items
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -456,18 +500,28 @@ export default function Tasks() {
       const isAssigned  = superAdmin && form.mode === 'assigned' && !!form.assignedTo
       const isBroadcast = form.mode === 'broadcast'
       const dueDate = dateTimeToTs(form.dueDate, form.dueTime)
-      const linked = form.linkedKind && form.linkedId
-        ? {
-            linkedKind: form.linkedKind,
-            linkedId:   form.linkedId,
-            linkedName: form.linkedName ?? null,
-            // V5 #1 : option pertinente uniquement quand on lie à un espace.
-            // Pour 'water_manual', healthCheckOnComplete reste null (n'a pas de sens).
-            healthCheckOnComplete: form.linkedKind === 'land_plot'
-              ? form.healthCheckOnComplete
-              : null,
-          }
-        : { linkedKind: null, linkedId: null, linkedName: null, healthCheckOnComplete: null }
+      // V6 (Eugénie 27/05/2026) : 2 liens indépendants. On écrit les nouveaux
+      // champs séparés + on miroir linkedKind/linkedId/linkedName (anciens) pour
+      // que les vieux clients PWA en cache ou composants pas encore migrés
+      // continuent d'afficher au moins UN lien. healthCheckOnComplete reste
+      // pertinent uniquement si un land est lié.
+      const waterId   = form.linkedWaterId ?? null
+      const waterName = form.linkedWaterId ? (form.linkedWaterName ?? null) : null
+      const landId    = form.linkedLandId  ?? null
+      const landName  = form.linkedLandId  ? (form.linkedLandName  ?? null) : null
+      const linked = {
+        linkedWaterId:     waterId,
+        linkedWaterName:   waterName,
+        linkedWaterDoneAt: null,  // reset à la création/édition : nouveau cycle
+        linkedLandId:      landId,
+        linkedLandName:    landName,
+        linkedLandDoneAt:  null,
+        healthCheckOnComplete: landId ? form.healthCheckOnComplete : null,
+        // Rétrocompat (lecture seule pour vieux composants)
+        linkedKind:  waterId ? 'water_manual' : (landId ? 'land_plot' : null),
+        linkedId:    waterId ?? landId ?? null,
+        linkedName:  waterName ?? landName ?? null,
+      }
 
       if (editingId) {
         // Mode édition : update en place. Reset des flags de notif si la planification
@@ -595,16 +649,17 @@ export default function Tasks() {
                     {task.zone}
                   </span>
                 )}
-                {/* Lien carte : badge cliquable qui ouvre la carte centrée sur le pin */}
-                {task.linkedKind && task.linkedId && (
-                  <a
-                    href={`/map?focusPin=${encodeURIComponent(task.linkedId)}`}
-                    className="text-xs font-semibold text-sky bg-sky/10 px-2 py-0.5 rounded-full border border-sky/30 inline-flex items-center gap-1"
+                {/* Liens carte (V6 : 0, 1 ou 2 — point d'eau et/ou espace). Badge
+                    cliquable qui ouvre la carte centrée sur le pin. */}
+                {linkedItems(task).map(it => (
+                  <a key={`${it.kind}-${it.id}`}
+                     href={`/map?focusPin=${encodeURIComponent(it.id)}`}
+                     className="text-xs font-semibold text-sky bg-sky/10 px-2 py-0.5 rounded-full border border-sky/30 inline-flex items-center gap-1"
                   >
-                    {task.linkedKind === 'water_manual' ? <Droplets size={10} /> : <Square size={10} />}
-                    {linkedDisplayName(task) ?? (task.linkedKind === 'water_manual' ? 'Point d\'eau' : 'Espace')}
+                    {it.kind === 'water_manual' ? <Droplets size={10} /> : <Square size={10} />}
+                    {it.name}
                   </a>
-                )}
+                ))}
                 {task.recurrence !== 'once' && (
                   <span className="text-xs text-sky flex items-center gap-0.5">
                     <RotateCcw size={10} />
@@ -894,12 +949,15 @@ export default function Tasks() {
         </div>
       )}
 
-      {/* Picker carte plein écran — au-dessus du form pour ne pas le perdre */}
+      {/* Picker carte plein écran — au-dessus du form pour ne pas le perdre.
+          V6 : le slot rempli (water ou land) dépend du kind sélectionné. */}
       {pickerKind && (
         <MapPicker
           kind={pickerKind}
           onPick={(id, name) => {
-            setForm(f => ({ ...f, linkedId: id, linkedName: name }))
+            setForm(f => pickerKind === 'water_manual'
+              ? { ...f, linkedWaterId: id, linkedWaterName: name }
+              : { ...f, linkedLandId:  id, linkedLandName:  name })
             setPickerKind(null)
           }}
           onCancel={() => setPickerKind(null)}
@@ -974,66 +1032,46 @@ export default function Tasks() {
                 />
               </div>
 
-              {/* Lien carte — point d'eau manuel ou espace défini.
-                  Demande Nils 25/05/2026 : "remplir" sur le pin coche la tâche auto.
-                  Évite de saisir manuellement après être allé sur le terrain. */}
+              {/* Liens carte — 0, 1 ou 2 liens indépendants.
+                  V6 (Eugénie 27/05/2026) : avant on ne pouvait choisir qu'UN
+                  seul lien (water OU land). Maintenant on peut lier la tâche
+                  à un point d'eau ET un espace : la tâche se coche auto quand
+                  TOUS les liens ont été actionnés sur la carte. */}
               <div>
                 <label className="block text-xs font-semibold text-muted uppercase tracking-wider mb-2">
-                  Lien carte (optionnel)
+                  Liens carte (optionnel)
                 </label>
-                <p className="text-[10px] text-muted/80 mb-2 leading-tight">
-                  Si la tâche consiste à remplir un point d'eau ou vérifier un espace, choisis-le ici.
-                  Quand tu agiras dessus sur la carte, la tâche se cochera toute seule.
+                <p className="text-[10px] text-muted/80 mb-3 leading-tight">
+                  Tu peux lier la tâche à un point d'eau et/ou à un espace. Quand tu
+                  agiras dessus sur la carte (remplir, vu animaux OK), la tâche se
+                  cochera toute seule — quand tous les liens auront été faits.
                 </p>
-                <div className="grid grid-cols-3 gap-1.5 mb-2">
-                  {([
-                    [undefined,      '🚫 Aucun',        'Pas de lien carte'],
-                    ['water_manual', '💧 Point d\'eau', 'Remplir = cocher la tâche'],
-                    ['land_plot',    '🟩 Espace',       'Vu animaux = cocher la tâche'],
-                  ] as const).map(([k, label, hint]) => (
-                    <button key={String(k)}
-                            type="button"
-                            disabled={saving}
-                            title={hint}
-                            onClick={() => setForm(f =>
-                              k === undefined
-                                ? { ...f, linkedKind: undefined, linkedId: undefined, linkedName: undefined }
-                                : { ...f, linkedKind: k })}
-                            className={`py-2 rounded-lg border text-[11px] font-bold transition-all ${
-                              form.linkedKind === k
-                                ? 'border-forest bg-forest text-white'
-                                : 'border-border bg-cream text-muted'
-                            }`}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                {form.linkedKind && (
-                  form.linkedId ? (
+
+                {/* Slot 1 : Point d'eau */}
+                <div className="mb-2">
+                  {form.linkedWaterId ? (
                     <div className="flex items-center gap-2 bg-sky/5 border border-sky/20 rounded-xl px-3 py-2.5">
-                      <MapPinIcon size={14} className="text-sky flex-shrink-0" />
+                      <Droplets size={14} className="text-sky flex-shrink-0" />
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold text-charcoal truncate">
-                          {form.linkedName ??
-                            mapPins.find(p => p.id === form.linkedId)?.name ??
-                            'Élément sélectionné'}
+                          {form.linkedWaterName
+                            ?? mapPins.find(p => p.id === form.linkedWaterId)?.name
+                            ?? 'Point d\'eau sélectionné'}
                         </p>
-                        <p className="text-[10px] text-muted">
-                          {form.linkedKind === 'water_manual' ? 'Point d\'eau manuel' : 'Espace défini'}
-                        </p>
+                        <p className="text-[10px] text-muted">💧 Point d'eau manuel</p>
                       </div>
                       <button
                         type="button"
-                        onClick={() => setPickerKind(form.linkedKind!)}
+                        onClick={() => setPickerKind('water_manual')}
                         className="text-[11px] font-bold text-sky px-2 py-1 rounded-lg active:bg-sky/10"
                       >
                         Changer
                       </button>
                       <button
                         type="button"
-                        onClick={() => setForm(f => ({ ...f, linkedId: undefined, linkedName: undefined }))}
+                        onClick={() => setForm(f => ({ ...f, linkedWaterId: undefined, linkedWaterName: undefined }))}
                         className="p-1 text-muted active:text-danger"
-                        aria-label="Retirer le lien"
+                        aria-label="Retirer le point d'eau"
                       >
                         <X size={14} />
                       </button>
@@ -1042,24 +1080,68 @@ export default function Tasks() {
                     <button
                       type="button"
                       disabled={saving}
-                      onClick={() => setPickerKind(form.linkedKind!)}
-                      className="w-full py-3 rounded-xl border-2 border-dashed border-sky/40 bg-sky/5
-                                 text-sky text-sm font-bold flex items-center justify-center gap-2
+                      onClick={() => setPickerKind('water_manual')}
+                      className="w-full py-2.5 rounded-xl border-2 border-dashed border-sky/40 bg-sky/5
+                                 text-sky text-xs font-bold flex items-center justify-center gap-2
                                  active:bg-sky/10 transition-all"
                     >
-                      <MapPinIcon size={15} />
-                      Choisir sur la carte
+                      <Droplets size={14} />
+                      + Lier à un point d'eau
                     </button>
-                  )
-                )}
+                  )}
+                </div>
+
+                {/* Slot 2 : Espace */}
+                <div>
+                  {form.linkedLandId ? (
+                    <div className="flex items-center gap-2 bg-meadow/5 border border-meadow/20 rounded-xl px-3 py-2.5">
+                      <Square size={14} className="text-meadow flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-charcoal truncate">
+                          {form.linkedLandName
+                            ?? mapPins.find(p => p.id === form.linkedLandId)?.name
+                            ?? 'Espace sélectionné'}
+                        </p>
+                        <p className="text-[10px] text-muted">🟩 Espace défini</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setPickerKind('land_plot')}
+                        className="text-[11px] font-bold text-meadow px-2 py-1 rounded-lg active:bg-meadow/10"
+                      >
+                        Changer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setForm(f => ({ ...f, linkedLandId: undefined, linkedLandName: undefined }))}
+                        className="p-1 text-muted active:text-danger"
+                        aria-label="Retirer l'espace"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => setPickerKind('land_plot')}
+                      className="w-full py-2.5 rounded-xl border-2 border-dashed border-meadow/40 bg-meadow/5
+                                 text-meadow text-xs font-bold flex items-center justify-center gap-2
+                                 active:bg-meadow/10 transition-all"
+                    >
+                      <Square size={14} />
+                      + Lier à un espace
+                    </button>
+                  )}
+                </div>
 
                 {/* V5 #1 Nils 25/05/2026 : option "valide la santé des animaux"
-                    quand la tâche est liée à un espace défini. Cocher la tâche
-                    revient alors à marquer "tous les animaux vus en bonne santé"
-                    (équivalent du flow geofence). Activé par défaut, désactivable
-                    pour les rares tâches qui ne consistent pas à vérifier les bêtes
+                    quand un espace est lié. Cocher la tâche revient alors à
+                    marquer "tous les animaux vus en bonne santé" (équivalent
+                    flow geofence). Activé par défaut, désactivable pour les
+                    rares tâches qui ne consistent pas à vérifier les bêtes
                     (ex : réparer la clôture). */}
-                {form.linkedKind === 'land_plot' && form.linkedId && (
+                {form.linkedLandId && (
                   <button
                     type="button"
                     disabled={saving}

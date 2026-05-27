@@ -136,9 +136,13 @@ export function useGeofenceAlert() {
           snap.forEach(d => {
             const t = d.data() as Task
             if (t.completed) return
-            if (t.linkedKind !== 'land_plot' || !t.linkedId) return
+            // V6 : lit le nouveau linkedLandId (lien indépendant de l'eau) avec
+            // fallback sur linkedKind/linkedId pour les anciennes tâches.
+            const landId =
+              t.linkedLandId ?? (t.linkedKind === 'land_plot' ? t.linkedId : undefined)
+            if (!landId) return
             if (typeof t.dueDate === 'number' && t.dueDate > cutoff) return
-            plots.add(t.linkedId)
+            plots.add(landId)
           })
           activeTaskPlotsRef.current = plots
           lastOptiSeen.current.tasks = optiData.tasks ?? Date.now()

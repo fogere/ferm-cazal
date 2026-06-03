@@ -343,4 +343,15 @@ Plainte Nils : zoom trop rapide, clôtures qui sautent, carte qui "recharge" à 
 
 ---
 
+## CE QUI EST FAIT — 3 juin 2026 (animation validation tâche, enfin visible + nettoyage V7)
+
+- **Animation de validation maintenant RÉELLEMENT visible.** Le rapport jSWkOcxJ demandait une animation au "valider une tâche". Elle avait été ajoutée mais **ne se voyait pas** : en cochant, la tâche quittait instantanément la liste (passage en "fait") → l'élément se démontait avant la fin de l'animation. Fix : on joue l'animation D'ABORD, puis on écrit en Firestore (différé ~550 ms) → la ligne reste visible le temps du balayage vert + ✓ qui "pop". Appliqué au **Dashboard** (`toggleTask`) ET à la page **Tâches** (`toggleDone` scindé en `applyToggle` + délai). Nouvelles classes CSS `task-completing` + `check-pop`. Boutons désactivés pendant l'animation (anti double-clic).
+- **CSP violation gapi silencieuse.** `apis.google.com/js/api.js` (iframe Firebase Auth pour providers fédérés, qu'on n'utilise pas) était bloqué par la CSP et polluait chaque bug report en "error". On ignore désormais cette violation connue et inoffensive dans le bugReporter (CSP inchangée, toutes les autres violations restent capturées).
+- **Revue complète V7** : les 5 rapports sont traités (édition animaux, snap édition ×3 + anti-oscillation, animation tâche) + le crash bugReporter `connection: undefined`.
+
+### Fichiers touchés
+- `app/src/pages/Dashboard.tsx`, `app/src/pages/Tasks.tsx`, `app/src/index.css`, `app/src/services/bugReporter.ts`
+
+---
+
 *Dernière mise à jour : 3 juin 2026*

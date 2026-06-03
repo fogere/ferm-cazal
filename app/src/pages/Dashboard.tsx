@@ -438,15 +438,29 @@ export default function Dashboard() {
   }
 
   async function toggleTask(task: Task) {
-    // Animation immédiate (optimistic) quand on coche, avant l'écriture Firestore.
+    // Bug Nils V7 : quand on coche, la tâche quitte "Pour toi" instantanément et
+    // l'animation ne se voyait pas. On joue donc l'animation D'ABORD, puis on écrit
+    // en Firestore (~550 ms) — le temps que le balayage vert + le ✓ soient visibles.
     if (!task.completed) {
       setJustCheckedId(task.id)
-      setTimeout(() => setJustCheckedId(curr => (curr === task.id ? null : curr)), 800)
+      setTimeout(async () => {
+        try {
+          await updateDoc(doc(db, 'tasks', task.id), {
+            completed:   true,
+            completedAt: Date.now(),
+            completedBy: user?.uid ?? null,
+          })
+        } finally {
+          setJustCheckedId(curr => (curr === task.id ? null : curr))
+        }
+      }, 550)
+      return
     }
+    // Dé-cocher : immédiat, pas d'animation.
     await updateDoc(doc(db, 'tasks', task.id), {
-      completed:   !task.completed,
-      completedAt: !task.completed ? Date.now() : null,
-      completedBy: !task.completed ? user?.uid : null,
+      completed:   false,
+      completedAt: null,
+      completedBy: null,
     })
   }
 
@@ -872,13 +886,18 @@ export default function Dashboard() {
                     <Hand size={11} /> Pour toi ({myTasks.length})
                   </p>
                   <ul className="space-y-0.5">
-                    {myTasks.map(task => (
-                      <li key={task.id} className={`rounded-xl ${justCheckedId === task.id ? 'task-just-checked' : ''}`}>
+                    {myTasks.map(task => {
+                      const completing = justCheckedId === task.id
+                      return (
+                      <li key={task.id} className={`rounded-xl ${completing ? 'task-completing' : ''}`}>
                         <button
                           onClick={() => toggleTask(task)}
+                          disabled={completing}
                           className="w-full flex items-center gap-3 py-2.5 px-1 rounded-xl active:bg-cream transition-colors text-left"
                         >
-                          <Circle size={20} className="text-forest flex-shrink-0" />
+                          {completing
+                            ? <CheckCircle2 size={20} className="text-meadow flex-shrink-0 check-pop" />
+                            : <Circle size={20} className="text-forest flex-shrink-0" />}
                           <span className="flex-1 text-sm font-medium text-charcoal">{task.title}</span>
                           {task.priority === 'urgent' && (
                             <span className="text-danger text-[10px] font-bold">URGENT</span>
@@ -888,7 +907,8 @@ export default function Dashboard() {
                           )}
                         </button>
                       </li>
-                    ))}
+                      )
+                    })}
                   </ul>
                 </div>
               )}

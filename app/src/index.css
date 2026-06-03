@@ -260,6 +260,31 @@ button {
   }
 }
 
+/* Bug Nils V7 (03/06/2026) : l'animation de validation ne se voyait pas car la tâche
+   quittait la liste "Pour toi" instantanément (passage en "fait"). On joue désormais
+   l'animation AVANT de basculer en fait (écriture Firestore différée ~550 ms) : balayage
+   vert + léger zoom + sortie en fondu, et la pastille passe en ✓ qui "pop". */
+@keyframes taskCompleting {
+  0%   { background-color: rgba(82,183,136,0.00); transform: scale(1);    opacity: 1; }
+  18%  { background-color: rgba(82,183,136,0.50); transform: scale(1.04); opacity: 1; }
+  55%  { background-color: rgba(82,183,136,0.32); transform: scale(1);    opacity: 1; }
+  100% { background-color: rgba(82,183,136,0.00); transform: scale(0.97); opacity: 0.25; }
+}
+.task-completing {
+  animation: taskCompleting 0.55s ease-out forwards;
+  will-change: background-color, transform, opacity;
+}
+@keyframes checkPop {
+  0%   { transform: scale(0.4); }
+  45%  { transform: scale(1.35); }
+  70%  { transform: scale(0.92); }
+  100% { transform: scale(1); }
+}
+.check-pop { animation: checkPop 0.45s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .task-completing, .check-pop { animation: none; }
+}
+
 /* Bug Nils 22/05/2026 : animation "le courant circule" sur les clôtures
    électriques alimentées. Marching ants subtil — l'œil capte que ça bouge
    sans que ce soit envahissant. Conditionnel au zoom (cf. getFencePathOptions).

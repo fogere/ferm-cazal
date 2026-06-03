@@ -325,12 +325,23 @@ export default function Tasks() {
 
   async function toggleDone(task: Task) {
     const nowDone = !task.completed
-    const now = Date.now()
-    // Animation : déclenchée immédiatement (optimistic UI) sans attendre l'écriture Firestore
-    if (nowDone) {
-      setJustCheckedId(task.id)
-      setTimeout(() => setJustCheckedId(curr => (curr === task.id ? null : curr)), 800)
+    if (!nowDone) {
+      // Dé-cocher : immédiat, pas d'animation.
+      await applyToggle(task, false)
+      return
     }
+    // Bug Nils V7 : on joue l'animation D'ABORD (balayage vert + ✓), puis on écrit en
+    // Firestore (~550 ms). Sans ce délai, la tâche quittait la liste instantanément et
+    // l'animation ne se voyait jamais.
+    setJustCheckedId(task.id)
+    setTimeout(() => {
+      applyToggle(task, true).finally(() =>
+        setJustCheckedId(curr => (curr === task.id ? null : curr)))
+    }, 550)
+  }
+
+  async function applyToggle(task: Task, nowDone: boolean) {
+    const now = Date.now()
     const updates: Record<string, unknown> = {
       completed:   nowDone,
       completedAt: nowDone ? now : null,
@@ -631,8 +642,10 @@ export default function Tasks() {
     const doneClass = task.completed
       ? 'bg-meadow/5 border-l-4 border-meadow rounded-r-lg pl-2'
       : ''
-    // Bug Nils 23/05/2026 (BUGV3 #2) : animation visible au moment où on coche.
-    const animClass = justCheckedId === task.id ? 'task-just-checked' : ''
+    // Bug Nils 23/05 puis V7 : animation visible au moment où on coche. La tâche
+    // reste affichée pendant le balayage (écriture différée dans toggleDone).
+    const completing = justCheckedId === task.id
+    const animClass = completing ? 'task-completing' : ''
 
     return (
       <li className={`py-3 px-1 transition-colors ${doneClass} ${animClass}`}>
@@ -697,11 +710,12 @@ export default function Tasks() {
             {/* Checkbox done */}
             <button
               onClick={() => toggleDone(task)}
+              disabled={completing}
               className="mt-0.5 flex-shrink-0"
               aria-label={task.completed ? 'Marquer non-fait' : 'Cocher fait'}
             >
-              {task.completed
-                ? <CheckCircle2 size={22} className="text-meadow" />
+              {task.completed || completing
+                ? <CheckCircle2 size={22} className={`text-meadow ${completing ? 'check-pop' : ''}`} />
                 : <Circle size={22} className="text-border" />}
             </button>
 

@@ -184,6 +184,12 @@ function installErrorListeners() {
   // Bug Nils 23/05/2026 (BUGV3 #5) : capter les violations CSP (sécurité +
   // bugs de chargement de ressource externe).
   window.addEventListener('securitypolicyviolation', (ev) => {
+    // Bug Nils V7 : Firebase Auth tente de charger gapi (apis.google.com/js/api.js)
+    // pour son iframe de providers fédérés — qu'on n'utilise PAS (email/mot de passe
+    // + anonyme). La CSP la bloque, c'est sans aucun impact fonctionnel, mais ça
+    // polluait CHAQUE bug report en "error". On ignore cette violation connue et
+    // inoffensive ; toutes les autres restent capturées.
+    if (ev.blockedURI?.includes('apis.google.com/js/api.js')) return
     pushConsole({
       level: 'error',
       ts: Date.now(),

@@ -3946,7 +3946,7 @@ export default function MapPage() {
         <button
           onClick={() => setLayer(l => l === 'aerial' ? 'plan' : l === 'plan' ? 'osm' : 'aerial')}
           title="Changer de fond de carte (Aérien IGN → Plan IGN → OSM)"
-          className="bg-card/95 backdrop-blur-sm shadow-lg rounded-xl p-3 active:scale-95 transition-all"
+          className="bg-card shadow-lg rounded-xl p-3 active:scale-95 transition-all"
         >
           <Layers size={20} className="text-forest" />
         </button>
@@ -3954,8 +3954,8 @@ export default function MapPage() {
           onClick={() => setShowParcels(v => !v)}
           title={showParcels ? 'Masquer les parcelles cadastrales' : 'Afficher les parcelles cadastrales IGN'}
           aria-pressed={showParcels}
-          className={`backdrop-blur-sm shadow-lg rounded-xl p-3 active:scale-95 transition-all
-            ${showParcels ? 'bg-forest text-white' : 'bg-card/95 text-forest'}`}
+          className={`shadow-lg rounded-xl p-3 active:scale-95 transition-all
+            ${showParcels ? 'bg-forest text-white' : 'bg-card text-forest'}`}
         >
           {/* Picto "parcelles" : carré quadrillé. On utilise un SVG inline plutôt
               qu'une icône Lucide pour rester compact et lisible. */}
@@ -3967,15 +3967,15 @@ export default function MapPage() {
         </button>
         <button
           onClick={() => setFlyTrigger(n => n + 1)}
-          className="bg-card/95 backdrop-blur-sm shadow-lg rounded-xl p-3 active:scale-95 transition-all"
+          className="bg-card shadow-lg rounded-xl p-3 active:scale-95 transition-all"
           title="Recentrer sur la ferme"
         >
           <LocateFixed size={20} className="text-forest" />
         </button>
         <button
           onClick={() => { setSearchOpen(v => !v); if (searchOpen) setSearchQuery('') }}
-          className={`backdrop-blur-sm shadow-lg rounded-xl p-3 active:scale-95 transition-all ${
-            searchOpen ? 'bg-forest text-white' : 'bg-card/95'
+          className={`shadow-lg rounded-xl p-3 active:scale-95 transition-all ${
+            searchOpen ? 'bg-forest text-white' : 'bg-card'
           }`}
           title="Rechercher une épingle par nom"
         >
@@ -3986,7 +3986,7 @@ export default function MapPage() {
       {/* ── Panneau recherche (déroulant au top-center) ── */}
       {searchOpen && (
         <div className="absolute top-4 left-4 right-20 z-[1000] flex flex-col gap-1.5 max-w-md">
-          <div className="flex items-center gap-2 bg-card/95 backdrop-blur-sm shadow-lg rounded-xl px-3 py-2.5">
+          <div className="flex items-center gap-2 bg-card shadow-lg rounded-xl px-3 py-2.5">
             <Search size={16} className="text-muted flex-shrink-0" />
             <input
               type="text"
@@ -4008,7 +4008,7 @@ export default function MapPage() {
               .filter(p => p.name && p.name.toLowerCase().includes(q))
               .slice(0, 8)
             return (
-              <div className="bg-card/95 backdrop-blur-sm shadow-lg rounded-xl max-h-[50vh] overflow-y-auto">
+              <div className="bg-card shadow-lg rounded-xl max-h-[50vh] overflow-y-auto">
                 {results.length === 0 ? (
                   <p className="px-3 py-3 text-xs text-muted italic">Aucune épingle trouvée pour « {searchQuery.trim()} »</p>
                 ) : (
@@ -4502,7 +4502,7 @@ export default function MapPage() {
           </div>
         )}
         {/* Indicateur couche — tout en bas */}
-        <div className="bg-card/90 backdrop-blur-sm rounded-xl px-3 py-1.5 shadow-md">
+        <div className="bg-card rounded-xl px-3 py-1.5 shadow-md">
           <span className="text-xs font-semibold text-muted">
             {layer === 'aerial' ? '📷 Aérien IGN' : layer === 'plan' ? '🗺 Plan IGN' : '🌍 OSM'}
             {showParcels && <span className="ml-1 text-forest">+ parcelles</span>}

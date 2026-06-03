@@ -394,4 +394,17 @@ Diagnostic affiné avec Nils : lent **sur PC 4070 Ti aussi** + « zones blanches
 
 ---
 
+## CE QUI EST FAIT — 3 juin 2026 (LA cause de la carte saccadée : backdrop-blur)
+
+Diagnostic final via tests Nils : saccadé **sur TOUS les fonds** (Aérien/Plan/OSM) ET **sur une zone vide** (sans clôtures/marqueurs), **sur 4070 Ti**. Donc ni les tuiles IGN, ni le rendu des couches, ni le matériel → quelque chose de **global** sur toute la carte.
+
+**Cause** : les contrôles flottants TOUJOURS visibles par-dessus la carte (boutons calques/parcelles/recentrage/recherche en haut à droite + indicateur de couche en bas) utilisaient `backdrop-blur-sm`. Un `backdrop-filter: blur()` au-dessus d'un contenu qui bouge force le navigateur à **recalculer le flou de l'arrière-plan à chaque image (60/s)** — cas pathologique connu qui rame même sur GPU puissant. C'est ce qui saccadait tout pan/zoom, indépendamment du contenu.
+
+**Fix** : `backdrop-blur-sm` retiré de tous les overlays de carte toujours visibles, remplacé par un fond `bg-card` solide (visuellement quasi identique, le flou était sous un fond déjà à 95 % d'opacité). Les modales plein écran (affichées sur carte figée) gardent leur flou — sans impact perf.
+
+### Fichiers touchés
+- `app/src/pages/Map.tsx`
+
+---
+
 *Dernière mise à jour : 3 juin 2026*

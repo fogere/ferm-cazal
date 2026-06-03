@@ -12,6 +12,7 @@ import { useUsers } from '../hooks/useUsers'
 import { timeAgo } from '../services/map/time'
 import type { Task, UserProfile, MapPin } from '../types'
 import MapPicker from '../components/MapPicker'
+import TaskDoneFlash from '../components/TaskDoneFlash'
 
 /* ─── helpers ─── */
 
@@ -180,6 +181,8 @@ export default function Tasks() {
   // Bug Nils 23/05/2026 (BUGV3 #2) : animation visible quand on coche une tâche.
   // L'id reste setté ~700ms le temps de l'animation CSS, puis revient à null.
   const [justCheckedId, setJustCheckedId] = useState<string | null>(null)
+  // Compteur qui déclenche le badge plein écran "Validé !" à chaque tâche cochée.
+  const [doneFlash, setDoneFlash] = useState(0)
   const [urgentReason, setUrgentReason] = useState('')
   // Filtre : "à prendre" (libres) | "toutes" (incluant prises)
   const [filter, setFilter] = useState<'all' | 'unclaimed' | 'mine'>('all')
@@ -332,7 +335,8 @@ export default function Tasks() {
     }
     // Bug Nils V7 : on joue l'animation D'ABORD (balayage vert + ✓), puis on écrit en
     // Firestore (~550 ms). Sans ce délai, la tâche quittait la liste instantanément et
-    // l'animation ne se voyait jamais.
+    // l'animation ne se voyait jamais. + badge plein écran garanti visible.
+    setDoneFlash(n => n + 1)
     setJustCheckedId(task.id)
     setTimeout(() => {
       applyToggle(task, true).finally(() =>
@@ -900,6 +904,7 @@ export default function Tasks() {
 
   return (
     <div className="pb-4">
+      <TaskDoneFlash trigger={doneFlash} />
       {/* Header */}
       <div className="px-5 pt-12 pb-5"
            style={{ background: 'linear-gradient(160deg, #1A4731 0%, #2D6A4F 100%)' }}>

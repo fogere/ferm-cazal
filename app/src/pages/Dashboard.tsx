@@ -16,6 +16,7 @@ import type { WeatherData, Task, Availability, FermeAlert, VigilanceLevel, FireR
 import { getVisibleAnnouncements, getReadAnnouncementIds } from '../data/announcements'
 import { OPEN_EVENING_RECAP_EVENT, eveningRecapMinutes } from '../components/EveningRecapModal'
 import { completeLinkedTasks } from '../services/taskAutoComplete'
+import TaskDoneFlash from '../components/TaskDoneFlash'
 
 // Détection super-admin (même règle que Tasks.tsx / Bugs.tsx) — sert à
 // afficher la bannière "nouveaux bug reports" uniquement à Eugénie/Benoît.
@@ -153,6 +154,8 @@ export default function Dashboard() {
   // Bug Nils V7 : animation visible quand on valide une tâche depuis le Dashboard
   // (même flash vert que sur la page Tâches). Optimistic : déclenché avant l'écriture.
   const [justCheckedId, setJustCheckedId] = useState<string | null>(null)
+  // Compteur qui déclenche le badge plein écran "Validé !" à chaque tâche cochée.
+  const [doneFlash, setDoneFlash] = useState(0)
   const [careEntries, setCareEntries] = useState<AnimalCareEntry[]>([])
   const [animals, setAnimals] = useState<Animal[]>([])
 
@@ -442,6 +445,7 @@ export default function Dashboard() {
     // l'animation ne se voyait pas. On joue donc l'animation D'ABORD, puis on écrit
     // en Firestore (~550 ms) — le temps que le balayage vert + le ✓ soient visibles.
     if (!task.completed) {
+      setDoneFlash(n => n + 1)   // badge "Validé !" immédiat, garanti visible
       setJustCheckedId(task.id)
       setTimeout(async () => {
         try {
@@ -511,6 +515,7 @@ export default function Dashboard() {
 
   return (
     <div className="pb-4">
+      <TaskDoneFlash trigger={doneFlash} />
       {/* En-tête vert */}
       <div className="px-5 pt-12 pb-6"
            style={{ background: 'linear-gradient(160deg, #1A4731 0%, #2D6A4F 100%)' }}>

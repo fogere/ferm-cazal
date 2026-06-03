@@ -354,4 +354,16 @@ Plainte Nils : zoom trop rapide, clôtures qui sautent, carte qui "recharge" à 
 
 ---
 
+## CE QUI EST FAIT — 3 juin 2026 (badge "Validé !" garanti visible)
+
+Nils ne voyait TOUJOURS aucune animation de validation. Diagnostic : updates bien reçues (il a rapporté le bug d'oscillation snap), donc le code était live — ce qui pointe vers le réglage Android "réduire les animations" (prefers-reduced-motion) qui tuait toutes les animations CSS gardées derrière ce media query (l'ancienne `task-just-checked` ET la nouvelle `task-completing`).
+
+- **Nouveau composant `TaskDoneFlash`** : badge plein écran "✓ Validé !" affiché ~1 s à chaque validation, **piloté par l'état React** (donc visible même si le navigateur ignore les animations) et **non gardé par prefers-reduced-motion** (l'utilisateur a explicitement demandé ce retour). Le "pop" CSS n'est qu'un bonus.
+- Câblé sur le **Dashboard** (`toggleTask`) et la page **Tâches** (`toggleDone`) — déclenché immédiatement au clic, en plus des animations de ligne existantes.
+
+### Fichiers touchés
+- `app/src/components/TaskDoneFlash.tsx` (nouveau), `app/src/pages/Dashboard.tsx`, `app/src/pages/Tasks.tsx`, `app/src/index.css`
+
+---
+
 *Dernière mise à jour : 3 juin 2026*

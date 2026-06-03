@@ -285,6 +285,18 @@ button {
   .task-completing, .check-pop { animation: none; }
 }
 
+/* Badge plein écran "Validé !" (TaskDoneFlash). Volontairement NON désactivé par
+   prefers-reduced-motion : l'utilisateur a explicitement demandé un retour visuel
+   fort à la validation. Et même sans animation, le badge reste affiché 1 s (piloté
+   par l'état React), donc toujours visible. */
+@keyframes taskDonePop {
+  0%   { transform: scale(0.6); opacity: 0; }
+  20%  { transform: scale(1.10); opacity: 1; }
+  70%  { transform: scale(1);    opacity: 1; }
+  100% { transform: scale(1);    opacity: 0; }
+}
+.task-done-pop { animation: taskDonePop 1s ease-out forwards; }
+
 /* Bug Nils 22/05/2026 : animation "le courant circule" sur les clôtures
    électriques alimentées. Marching ants subtil — l'œil capte que ça bouge
    sans que ce soit envahissant. Conditionnel au zoom (cf. getFencePathOptions).

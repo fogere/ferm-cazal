@@ -235,6 +235,10 @@ button {
 .leaflet-container {
   font-family: var(--font-sans) !important;
   border-radius: 16px;
+  /* Perf Nils 03/06 : fond doux pendant le chargement des tuiles IGN (lentes) —
+     les zones non encore chargées apparaissent en gris-vert "carte" au lieu de
+     blanc cru, c'est moins moche le temps que les tuiles arrivent. */
+  background: #e7e9e1;
 }
 
 .leaflet-control-attribution {

@@ -2958,6 +2958,10 @@ export default function MapPage() {
           attribution={layer === 'osm' ? OSM_ATTR : IGN_ATTR}
           maxNativeZoom={layer === 'osm' ? 19 : 19}
           maxZoom={22}
+          // Perf Nils 03/06 : pré-charge un anneau de tuiles AUTOUR de l'écran pour
+          // qu'au déplacement elles soient déjà là (moins de "zones blanches"). Une
+          // fois en cache (CacheFirst, cf. sw.ts), elles sont instantanées au retour.
+          keepBuffer={4}
           eventHandlers={{
             tileloadstart: () => { if (tileError) setTileError(null) },
             tileerror: (e) => {

@@ -2945,13 +2945,11 @@ export default function MapPage() {
         maxZoom={22}
         style={{ height: '100%', width: '100%' }}
         zoomControl={false}
-        // Perf Nils 03/06 : rendu des clôtures/espaces/ruisseaux (vecteurs) sur un
-        // seul canvas au lieu d'un élément SVG par tracé → pan/zoom bien plus fluides.
-        preferCanvas={true}
-        // Zoom plus progressif (pas de 0.5 au lieu de 1) → moins "brutal" au pinch.
-        zoomSnap={0.5}
-        zoomDelta={0.5}
-        // Molette desktop plus douce.
+        // Molette desktop plus douce (réglage inoffensif, répond au "zoom trop rapide").
+        // Perf Nils 03/06 : preferCanvas / zoomSnap fractionnel / keepBuffer ont été
+        // RETIRÉS — avec le serveur de tuiles IGN (lent), ils chargeaient plus de tuiles
+        // et redessinaient les vecteurs sur canvas à chaque frame, ce qui empirait le pan.
+        // On revient au rendu SVG natif (transformé par le navigateur au pan = quasi gratuit).
         wheelPxPerZoomLevel={120}
       >
         <TileLayer
@@ -2960,10 +2958,6 @@ export default function MapPage() {
           attribution={layer === 'osm' ? OSM_ATTR : IGN_ATTR}
           maxNativeZoom={layer === 'osm' ? 19 : 19}
           maxZoom={22}
-          // E : garde plus de tuiles hors écran en mémoire et ne recharge pas pendant
-          // le zoom → moins de clignotement gris au pan/zoom.
-          keepBuffer={4}
-          updateWhenZooming={false}
           eventHandlers={{
             tileloadstart: () => { if (tileError) setTileError(null) },
             tileerror: (e) => {

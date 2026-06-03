@@ -328,4 +328,19 @@ projet farm/
 
 ---
 
+## CE QUI EST FAIT — 3 juin 2026 (fluidité carte)
+
+Plainte Nils : zoom trop rapide, clôtures qui sautent, carte qui "recharge" à chaque visite. Diagnostic + 5 optimisations (A→E), toutes behavior-preserving. `tsc`/`build` verts.
+
+- **A — Re-render 1 Hz supprimé (cause #1).** Un `setInterval(setNow, 1000)` re-rendait TOUT le composant Map (4400 lignes, toutes les clôtures) chaque seconde, même quand personne ne partageait sa position → c'est ce qui faisait "sauter" les barrières. Désormais le tick ne tourne QUE s'il y a une activité live à expirer (pointeur < 60 s ou position < 10 min), et à 3 s. Cas courant (personne en live) = zéro re-render.
+- **B — Carte plus fluide.** `preferCanvas` (clôtures/espaces/ruisseaux rendus sur un canvas au lieu d'un SVG par tracé), `zoomSnap/zoomDelta=0.5` (zoom progressif, moins brutal), `wheelPxPerZoomLevel=120` (molette douce).
+- **C — Couches lourdes mémoïsées.** `landPlotLayers` / `fenceLayers` / `landPlotLabels` extraits en `useMemo` sur leurs vraies dépendances → ne se reconstruisent plus à chaque ouverture de panneau / update GPS / frappe. (`computeGrazingStatus` par espace ne tourne plus en boucle.)
+- **D — Réouverture au dernier endroit.** Centre + zoom persistés dans localStorage (`le-cazal:mapView`, throttle 400 ms via `ZoomTracker`) et restaurés au montage → fini le "ça repart du défaut" à chaque visite.
+- **E — Tuiles.** `keepBuffer={4}` + `updateWhenZooming={false}` sur le TileLayer → moins de clignotement gris au pan/zoom.
+
+### Fichiers touchés
+- `app/src/pages/Map.tsx`
+
+---
+
 *Dernière mise à jour : 3 juin 2026*

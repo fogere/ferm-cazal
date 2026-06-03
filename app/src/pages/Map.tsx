@@ -861,8 +861,38 @@ function FlyToTarget({ target }: { target: { lat: number; lng: number; zoom?: nu
   return null
 }
 
+// Perf/confort Nils 03/06 : on mémorise le dernier centre+zoom de la carte pour
+// la rouvrir là où elle était (au lieu de toujours repartir du défaut, ce qui
+// donnait l'impression que "ça recharge" à chaque visite).
+const MAP_VIEW_KEY = 'le-cazal:mapView'
+function readSavedView(): { center: [number, number]; zoom: number } | null {
+  try {
+    const raw = localStorage.getItem(MAP_VIEW_KEY)
+    if (!raw) return null
+    const v = JSON.parse(raw)
+    if (typeof v?.lat === 'number' && typeof v?.lng === 'number' && typeof v?.zoom === 'number') {
+      return { center: [v.lat, v.lng], zoom: v.zoom }
+    }
+  } catch { /* localStorage indispo / JSON cassé : on ignore */ }
+  return null
+}
+let _persistViewTimer: ReturnType<typeof setTimeout> | null = null
+function persistView(map: L.Map) {
+  if (_persistViewTimer) clearTimeout(_persistViewTimer)
+  _persistViewTimer = setTimeout(() => {
+    try {
+      const c = map.getCenter()
+      localStorage.setItem(MAP_VIEW_KEY, JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }))
+    } catch { /* ignore */ }
+  }, 400)
+}
+
 function ZoomTracker({ onZoom }: { onZoom: (z: number) => void }) {
-  useMapEvents({ zoomend(e) { onZoom((e.target as L.Map).getZoom()) } })
+  // zoomend → maj du zoom (seuils d'affichage labels) ; move/zoom → persistance de la vue.
+  useMapEvents({
+    zoomend(e)  { const m = e.target as L.Map; onZoom(m.getZoom()); persistView(m) },
+    moveend(e)  { persistView(e.target as L.Map) },
+  })
   return null
 }
 
@@ -1023,6 +1053,9 @@ export default function MapPage() {
   // remettait le marqueur à sa position d'origine et ça oscillait à toute vitesse.
   // On déplace donc l'indicateur directement via Leaflet, sans aucun re-render.
   const snapMarkerRef = useRef<L.Marker | null>(null)
+  // Vue initiale = dernière vue mémorisée (centre+zoom), sinon défaut ferme. Lue une
+  // seule fois au montage (MapContainer ne lit center/zoom qu'à l'init).
+  const initialView = useRef(readSavedView()).current
   type EditMode = 'move' | 'add' | 'delete' | 'cut'
   const [editMode, setEditMode] = useState<EditMode>('move')
 
@@ -1079,7 +1112,7 @@ export default function MapPage() {
 
   // Animaux + zoom + snap
   const [animals,                 setAnimals]                 = useState<Animal[]>([])
-  const [mapZoom,                 setMapZoom]                 = useState(ZOOM_DEFAULT)
+  const [mapZoom,                 setMapZoom]                 = useState(readSavedView()?.zoom ?? ZOOM_DEFAULT)
   const [fenceIsClosed,           setFenceIsClosed]           = useState(false)
   const [fenceSnapTarget,         setFenceSnapTarget]         = useState<{ lat: number; lng: number; isClose: boolean } | null>(null)
   const [editEnclosureAnimals,    setEditEnclosureAnimals]    = useState(false)
@@ -1130,12 +1163,28 @@ export default function MapPage() {
     )
     return unsub
   }, [])
-  // Tick interne (1Hz) pour faire disparaître les pointeurs expirés sans nouveau snapshot Firestore
+  // Tick pour faire expirer les marqueurs "live" des autres (pointeurs 60 s, positions
+  // 10 min). Perf Nils 03/06 : avant, ce tick re-rendait TOUTE la carte (4400 lignes,
+  // toutes les clôtures) chaque seconde — même quand personne ne partageait sa position,
+  // ce qui faisait "sauter" les barrières et saccader le zoom/pan. Désormais :
+  //   1. on ne tourne QUE s'il y a effectivement une activité live à expirer,
+  //   2. à 3 s au lieu de 1 s (l'expiration n'a pas besoin d'être à la seconde près).
   const [now, setNow] = useState(Date.now())
+  const hasLiveActivity = useMemo(() => {
+    const t = Date.now()
+    if (localPointer && (t - localPointer.at) < 60_000) return true
+    return users.some(u => u.uid !== user?.uid && (
+      (u.livePointer  && (t - (u.livePointer.updatedAt  ?? 0)) < 60_000) ||
+      (u.liveLocation && (t - (u.liveLocation.updatedAt ?? 0)) < 10 * 60_000)
+    ))
+    // `now` en dépendance : réévalue l'activité au fil des ticks pour stopper l'interval
+    // dès que tout est expiré.
+  }, [users, user?.uid, localPointer, now])
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000)
+    if (!hasLiveActivity) return
+    const t = setInterval(() => setNow(Date.now()), 3000)
     return () => clearInterval(t)
-  }, [])
+  }, [hasLiveActivity])
 
   // Vibration mobile quand un autre membre te pointe (Android Chrome)
   // — pas au montage initial : on capture l'état initial sans vibrer
@@ -2763,6 +2812,77 @@ export default function MapPage() {
     return base
   }
 
+  /* ─── couches lourdes mémoïsées (Perf Nils 03/06, lot C) ──────────────────
+     Ces trois groupes (espaces, clôtures, labels) étaient reconstruits à CHAQUE
+     render du composant (ouverture d'un panneau, update GPS, frappe dans un
+     formulaire…). On les mémoïse sur leurs vraies dépendances : ils ne se
+     recalculent plus que quand leurs données bougent. Comportement identique. */
+  const landPlotLayers = useMemo(() => landPlotPins.map(pin => {
+    const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
+    const outer = pin.points!.map(p => [p.lat, p.lng] as [number, number])
+    const holesPos = (pin.holes ?? [])
+      .filter(h => h.points.length >= 3)
+      .map(h => h.points.map(p => [p.lat, p.lng] as [number, number]))
+    const positions = holesPos.length > 0 ? [outer, ...holesPos] : outer
+    const status = computeGrazingStatus(pin, fencePins, animals, allMovements)
+    const fill = GRAZING_FILL[status]
+    return (
+      <Polygon
+        key={pin.id + '-plot'}
+        positions={positions}
+        pathOptions={{
+          color:       '#52B788',
+          weight:      enc.length > 0 ? 3 : 2,
+          opacity:     0.85,
+          fillColor:   fill.color,
+          fillOpacity: fill.opacity,
+          dashArray:   enc.length > 0 ? undefined : '6 4',
+        }}
+        eventHandlers={{
+          click: () => {
+            if (!anyModeActive) setSelected(pin)
+          },
+        }}
+      />
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [landPlotPins, animals, fencePins, allMovements, anyModeActive])
+
+  const fenceLayers = useMemo(() =>
+    fencePins
+      .filter(pin => !pin.fillOnly)
+      .map(pin => (
+        <Polyline
+          key={pin.id}
+          positions={pin.points!.map(p => [p.lat, p.lng] as [number, number])}
+          pathOptions={getFencePathOptions(pin)}
+          interactive={false}
+        />
+      )),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fencePins, fencePresets, pins, mapZoom])
+
+  const landPlotLabels = useMemo(() => landPlotPins
+    .filter(pin => {
+      if (mapZoom < LABEL_ZOOM_LOW) return false
+      if (mapZoom >= LABEL_ZOOM)    return true
+      return animals.some(a => a.enclosureId === pin.id)
+    })
+    .map(pin => {
+      const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
+      const labelPos = pin.points ? insidePolygonCentroid(pin.points) : { lat: pin.lat, lng: pin.lng }
+      return (
+        <Marker
+          key={`label-${pin.id}`}
+          position={[labelPos.lat, labelPos.lng]}
+          icon={makeEnclosureLabelIcon(enc, mapZoom, customSpecies, pin.rotationDueAt)}
+          interactive={false}
+        />
+      )
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [landPlotPins, animals, mapZoom, customSpecies])
+
   /* ─── render ─── */
 
   return (
@@ -2793,11 +2913,19 @@ export default function MapPage() {
 
       <MapContainer
         ref={mapRef}
-        center={FARM}
-        zoom={ZOOM_DEFAULT}
+        center={initialView?.center ?? FARM}
+        zoom={initialView?.zoom ?? ZOOM_DEFAULT}
         maxZoom={22}
         style={{ height: '100%', width: '100%' }}
         zoomControl={false}
+        // Perf Nils 03/06 : rendu des clôtures/espaces/ruisseaux (vecteurs) sur un
+        // seul canvas au lieu d'un élément SVG par tracé → pan/zoom bien plus fluides.
+        preferCanvas={true}
+        // Zoom plus progressif (pas de 0.5 au lieu de 1) → moins "brutal" au pinch.
+        zoomSnap={0.5}
+        zoomDelta={0.5}
+        // Molette desktop plus douce.
+        wheelPxPerZoomLevel={120}
       >
         <TileLayer
           key={layer}
@@ -2805,6 +2933,10 @@ export default function MapPage() {
           attribution={layer === 'osm' ? OSM_ATTR : IGN_ATTR}
           maxNativeZoom={layer === 'osm' ? 19 : 19}
           maxZoom={22}
+          // E : garde plus de tuiles hors écran en mémoire et ne recharge pas pendant
+          // le zoom → moins de clignotement gris au pan/zoom.
+          keepBuffer={4}
+          updateWhenZooming={false}
           eventHandlers={{
             tileloadstart: () => { if (tileError) setTileError(null) },
             tileerror: (e) => {
@@ -2924,78 +3056,19 @@ export default function MapPage() {
             ici : leur fence jumeau couvre déjà le visuel.
             Les holes (zones vides intérieures) sont rendus comme polygons imbriqués —
             Leaflet supporte le format [outer, ...holes] pour découper le fill. */}
-        {landPlotPins.map(pin => {
-          const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
-          const outer = pin.points!.map(p => [p.lat, p.lng] as [number, number])
-          const holesPos = (pin.holes ?? [])
-            .filter(h => h.points.length >= 3)
-            .map(h => h.points.map(p => [p.lat, p.lng] as [number, number]))
-          // Leaflet : positions[0] = outer, positions[1..n] = holes
-          const positions = holesPos.length > 0 ? [outer, ...holesPos] : outer
-          // S9 : le fill couleur d'herbe (algo vert → jaune selon fraîcheur du
-          // pâturage) est désormais porté par les land_plot, pas par les fences.
-          const status = computeGrazingStatus(pin, fencePins, animals, allMovements)
-          const fill = GRAZING_FILL[status]
-          return (
-            <Polygon
-              key={pin.id + '-plot'}
-              positions={positions}
-              pathOptions={{
-                color:       '#52B788',                         // contour vert : identifie l'espace
-                weight:      enc.length > 0 ? 3 : 2,
-                opacity:     0.85,
-                fillColor:   fill.color,                        // fill = couleur d'herbe (algo)
-                fillOpacity: fill.opacity,
-                dashArray:   enc.length > 0 ? undefined : '6 4',
-              }}
-              eventHandlers={{
-                click: () => {
-                  if (!anyModeActive) setSelected(pin)
-                },
-              }}
-            />
-          )
-        })}
+        {landPlotLayers}
 
         {/* ── Clôtures ──
             S9 : une clôture est TOUJOURS une polyline, peu importe son état
             (ouverte, bouclée, ex-enclos). Le rôle d'espace appartient
-            uniquement aux land_plot. Demande Nils 22/05/2026. */}
-        {fencePins
-          .filter(pin => !pin.fillOnly)
-          .map(pin => (
-            <Polyline
-              key={pin.id}
-              positions={pin.points!.map(p => [p.lat, p.lng] as [number, number])}
-              pathOptions={getFencePathOptions(pin)}
-              interactive={false}
-            />
-          ))}
+            uniquement aux land_plot. Demande Nils 22/05/2026.
+            (Couches mémoïsées — cf. landPlotLayers/fenceLayers/landPlotLabels.) */}
+        {fenceLayers}
 
         {/* Labels animaux dans les espaces (land_plot) — position GARANTIE à l'intérieur du polygone.
             S9 : les labels appartiennent désormais aux land_plot, pas aux fences fermés.
             Bug Eugénie 20/05/2026 : ne pas afficher "Vide" en vue large — ça surcharge la carte. */}
-        {landPlotPins
-          // Bug Nils 22/05/2026 : on cache complètement les labels en vue très large
-          // pour éviter le brouillon d'emojis empilés. En vue moyenne, on garde
-          // uniquement les enclos avec animaux.
-          .filter(pin => {
-            if (mapZoom < LABEL_ZOOM_LOW) return false
-            if (mapZoom >= LABEL_ZOOM)    return true
-            return animals.some(a => a.enclosureId === pin.id)
-          })
-          .map(pin => {
-            const enc = sortAnimalsByName(animals.filter(a => a.enclosureId === pin.id))
-            const labelPos = pin.points ? insidePolygonCentroid(pin.points) : { lat: pin.lat, lng: pin.lng }
-            return (
-              <Marker
-                key={`label-${pin.id}`}
-                position={[labelPos.lat, labelPos.lng]}
-                icon={makeEnclosureLabelIcon(enc, mapZoom, customSpecies, pin.rotationDueAt)}
-                interactive={false}
-              />
-            )
-          })}
+        {landPlotLabels}
 
         {/* Clôture en cours de dessin */}
         {fenceMode && fencePoints.length > 0 && (

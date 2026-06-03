@@ -52,6 +52,11 @@ export interface Task {
   createdBy: string
   dueDate: number
   nextOccurrenceCreated?: boolean
+  // V7 : identifiant de série partagé par toutes les occurrences d'une tâche
+  // récurrente (la chaîne créée à chaque complétion). Permet "supprimer
+  // définitivement" (balayer toute la série). Absent sur les tâches 'once' et
+  // sur les anciennes tâches d'avant la V7 (repli par titre+zone+récurrence).
+  seriesId?: string
   // Quand quelqu'un libère en urgence ("je peux plus"), le cron ping tous.
   urgentReleaseAt?: number | null
   urgentReleaseBy?: string | null

@@ -308,4 +308,24 @@ projet farm/
 
 ---
 
+## CE QUI EST FAIT — 3 juin 2026 (suite V7 : régression snap + suppression tâche)
+
+### Fix régression : oscillation du snap en mode édition
+- Le snap édition (Lot 2 ci-dessus) faisait osciller le poteau à toute vitesse entre la cible et l'origine (~1 fois sur 4). **Cause** : `setFenceSnapTarget` appelé pendant le `drag` re-rendait toute la carte → react-leaflet remettait le marqueur à sa position prop pendant que Leaflet le déplaçait.
+- **Fix** : l'anneau de snap en édition est désormais piloté en **impératif** (`showSnapRing` + `snapMarkerRef`, `L.marker().setLatLng()`) — zéro `setState` pendant le drag, donc zéro re-render et zéro oscillation. Le snap se fige proprement au relâché. Le snap en création (mousemove) reste inchangé.
+
+### Feature : suppression d'une tâche récurrente à 3 portées (demande Nils)
+- Le bouton 🗑️ d'une tâche **récurrente** ouvre un menu : **Définitivement** (ne revient plus jamais), **Cette semaine** (revient dans 7 j), **Juste aujourd'hui** (revient au prochain cycle). Les tâches `once` gardent le simple *Supprimer ? Oui/Non*.
+- Nouveau champ `Task.seriesId` : identifiant partagé par toutes les occurrences d'une chaîne récurrente. Posé à la création (récurrente) et **propagé** à chaque régénération — côté client (`toggleDone` → `createNextOccurrence`) **et** côté serveur (`cron/notify.cjs`). Repli par titre+zone+récurrence pour les anciennes tâches sans seriesId.
+- "Définitivement" balaie l'occurrence courante + toutes les futures non faites de la série (writeBatch). "Cette semaine"/"Juste aujourd'hui" recréent la prochaine occurrence (en gardant la série) puis suppriment l'actuelle.
+- Refactor behavior-preserving : le bloc de création d'occurrence de `toggleDone` est extrait en `createNextOccurrence` + `withDueTime` (réutilisés par le skip).
+
+### ⚠️ À pousser sur GitHub pour activer côté cron
+- La modif `cron/notify.cjs` (propagation seriesId) ne s'active qu'une fois **poussée sur GitHub** (le cron tourne via GitHub Actions). **Push bloqué** : le PAT fourni appartient à `shazamifius`, sans droit d'écriture sur `fogere/ferm-cazal` (403). Impact limité : le client pose déjà le seriesId ; le cron n'est qu'un filet offline, et le repli titre+zone couvre les occurrences sans seriesId.
+
+### Fichiers touchés (suite)
+- `app/src/pages/Map.tsx`, `app/src/pages/Tasks.tsx`, `app/src/types/index.ts`, `cron/notify.cjs`
+
+---
+
 *Dernière mise à jour : 3 juin 2026*

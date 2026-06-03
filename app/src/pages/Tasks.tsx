@@ -272,6 +272,57 @@ export default function Tasks() {
     return now // ne devrait pas être utilisé pour 'once'
   }
 
+  // Reporte l'heure précise (hasDueTime) d'une tâche sur une nouvelle date d'échéance.
+  function withDueTime(task: Task, baseDue: number): number {
+    if (!task.hasDueTime) return baseDue
+    const src = new Date(task.dueDate)
+    const d = new Date(baseDue)
+    d.setHours(src.getHours(), src.getMinutes(), 0, 0)
+    return d.getTime()
+  }
+
+  // Crée la prochaine occurrence d'une tâche récurrente (réutilisé par "marquer fait"
+  // et par les options "supprimer juste cette fois / cette semaine"). Préserve tous les
+  // champs liés + le seriesId pour garder la chaîne d'occurrences traçable.
+  async function createNextOccurrence(task: Task, dueDate: number, seriesId: string | null) {
+    const now = Date.now()
+    const nextWaterId   = task.linkedWaterId   ?? (task.linkedKind === 'water_manual' ? task.linkedId   : null)
+    const nextWaterName = task.linkedWaterName ?? (task.linkedKind === 'water_manual' ? task.linkedName : null)
+    const nextLandId    = task.linkedLandId    ?? (task.linkedKind === 'land_plot'    ? task.linkedId   : null)
+    const nextLandName  = task.linkedLandName  ?? (task.linkedKind === 'land_plot'    ? task.linkedName : null)
+    await addDoc(collection(db, 'tasks'), {
+      title:        task.title,
+      zone:         task.zone,
+      assignedTo:   null,
+      claimedAt:    null,
+      recurrence:   task.recurrence,
+      intervalDays: task.intervalDays ?? null,
+      priority:     task.priority,
+      completed:    false,
+      completedAt:  null,
+      completedBy:  null,
+      createdAt:    now,
+      createdBy:    task.createdBy,
+      dueDate,
+      hasDueTime:   task.hasDueTime ?? false,
+      reminderSentAt: null,
+      nextOccurrenceCreated: false,
+      broadcast:    task.broadcast ?? false,
+      broadcastNotifiedAt: null,
+      linkedWaterId:     nextWaterId,
+      linkedWaterName:   nextWaterName,
+      linkedWaterDoneAt: null,
+      linkedLandId:      nextLandId,
+      linkedLandName:    nextLandName,
+      linkedLandDoneAt:  null,
+      healthCheckOnComplete: task.healthCheckOnComplete ?? null,
+      linkedKind:  nextWaterId ? 'water_manual' : (nextLandId ? 'land_plot' : null),
+      linkedId:    nextWaterId ?? nextLandId ?? null,
+      linkedName:  nextWaterName ?? nextLandName ?? null,
+      seriesId:    seriesId ?? null,
+    })
+  }
+
   async function toggleDone(task: Task) {
     const nowDone = !task.completed
     const now = Date.now()
@@ -286,65 +337,12 @@ export default function Tasks() {
       completedBy: nowDone ? user?.uid  : null,
     }
     if (nowDone && task.recurrence !== 'once' && !task.nextOccurrenceCreated) {
-      // Crée la prochaine occurrence. Bug V5 #2 (Nils 25/05/2026) : on PRÉSERVE
-      // explicitement les champs liés (hasDueTime, broadcast, liens carte,
-      // healthCheckOnComplete). Sans ça, ces champs étaient perdus à chaque cycle.
-      // V6 (Eugénie 27/05/2026) : on garde les 2 liens indépendants
-      // (linkedWaterId/linkedLandId) et on RESET les flags DoneAt à null pour
-      // que la nouvelle occurrence reparte d'un état neuf (aucun lien encore
-      // actionné). Les anciens champs linkedKind/linkedId/linkedName sont
-      // dérivés depuis les nouveaux pour rester compatibles avec les vieux
-      // composants encore en place (rétrocompat lecture).
-      const baseDue = nextDueFromNow(task)
-      let dueDate = baseDue
-      if (task.hasDueTime) {
-        const src = new Date(task.dueDate)
-        const d = new Date(baseDue)
-        d.setHours(src.getHours(), src.getMinutes(), 0, 0)
-        dueDate = d.getTime()
-      }
-      // Liens : on prend les nouveaux champs en priorité, avec rétrocompat vers
-      // les anciens si la source était au vieux format.
-      const nextWaterId   = task.linkedWaterId   ?? (task.linkedKind === 'water_manual' ? task.linkedId   : null)
-      const nextWaterName = task.linkedWaterName ?? (task.linkedKind === 'water_manual' ? task.linkedName : null)
-      const nextLandId    = task.linkedLandId    ?? (task.linkedKind === 'land_plot'    ? task.linkedId   : null)
-      const nextLandName  = task.linkedLandName  ?? (task.linkedKind === 'land_plot'    ? task.linkedName : null)
-      // Pour les broadcast : on garde le mode broadcast et assignedTo reste null.
-      // Pour les pool/assigned : retour systématique au pool (assignedTo: null) —
-      // comportement historique conservé pour que la nouvelle occurrence soit
-      // visible par tout le monde.
-      await addDoc(collection(db, 'tasks'), {
-        title:        task.title,
-        zone:         task.zone,
-        assignedTo:   null,                // libre → quelqu'un devra la reprendre
-        claimedAt:    null,
-        recurrence:   task.recurrence,
-        intervalDays: task.intervalDays ?? null,
-        priority:     task.priority,
-        completed:    false,
-        completedAt:  null,
-        completedBy:  null,
-        createdAt:    now,
-        createdBy:    task.createdBy,
-        dueDate,
-        hasDueTime:   task.hasDueTime ?? false,
-        reminderSentAt: null,
-        nextOccurrenceCreated: false,
-        broadcast:    task.broadcast ?? false,
-        broadcastNotifiedAt: null,
-        // V6 — nouveaux champs (source de vérité)
-        linkedWaterId:     nextWaterId,
-        linkedWaterName:   nextWaterName,
-        linkedWaterDoneAt: null,
-        linkedLandId:      nextLandId,
-        linkedLandName:    nextLandName,
-        linkedLandDoneAt:  null,
-        healthCheckOnComplete: task.healthCheckOnComplete ?? null,
-        // Rétrocompat lecture (anciens composants / vieux clients PWA en cache)
-        linkedKind:  nextWaterId ? 'water_manual' : (nextLandId ? 'land_plot' : null),
-        linkedId:    nextWaterId ?? nextLandId ?? null,
-        linkedName:  nextWaterName ?? nextLandName ?? null,
-      })
+      // Crée la prochaine occurrence (filet cron en doublon côté serveur).
+      // Bug V5 #2 / V6 : tous les champs liés sont préservés par createNextOccurrence.
+      // V7 : on propage le seriesId pour garder la chaîne traçable ("supprimer
+      // définitivement" peut alors balayer toute la série).
+      const dueDate = withDueTime(task, nextDueFromNow(task))
+      await createNextOccurrence(task, dueDate, task.seriesId ?? null)
       updates.nextOccurrenceCreated = true
     }
     await updateDoc(doc(db, 'tasks', task.id), updates)
@@ -427,6 +425,43 @@ export default function Tasks() {
     if (isTemp) return
     setConfirmDeleteId(null)
     await deleteDoc(doc(db, 'tasks', id))
+  }
+
+  // V7 (Nils) : suppression d'une tâche récurrente avec 3 portées.
+  // Deux tâches font partie de la même série si elles partagent un seriesId ;
+  // repli par (titre + zone + récurrence) pour les anciennes tâches sans seriesId.
+  function sameSeries(a: Task, b: Task): boolean {
+    if (a.seriesId && b.seriesId) return a.seriesId === b.seriesId
+    if (a.seriesId || b.seriesId) return false
+    return a.title === b.title && a.zone === b.zone && a.recurrence === b.recurrence
+  }
+
+  // « Définitivement » : la tâche ne revient plus jamais. On supprime l'occurrence
+  // courante + toutes les occurrences futures (non faites) de la même série.
+  // L'historique des occurrences déjà faites est conservé.
+  async function deleteSeriesForever(task: Task) {
+    if (isTemp) return
+    setConfirmDeleteId(null)
+    const targets = allTasks.filter(t => sameSeries(t, task) && (!t.completed || t.id === task.id))
+    if (!targets.some(t => t.id === task.id)) targets.push(task)
+    const batch = writeBatch(db)
+    for (const t of targets) batch.delete(doc(db, 'tasks', t.id))
+    await batch.commit()
+  }
+
+  // « Juste cette fois » (mode 'once') ou « Cette semaine » (mode 'week') : on saute
+  // l'occurrence courante mais on garde la série vivante en recréant la prochaine.
+  //   - once : prochaine échéance = cycle normal (demain / +intervalle).
+  //   - week : prochaine échéance = dans 7 jours (la tâche revient la semaine prochaine).
+  async function skipOccurrence(task: Task, mode: 'once' | 'week') {
+    if (isTemp) return
+    setConfirmDeleteId(null)
+    const base = mode === 'week' ? Date.now() + 7 * 24 * 3_600_000 : nextDueFromNow(task)
+    const dueDate = withDueTime(task, base)
+    // Legacy sans seriesId : on en assigne un pour que la nouvelle chaîne soit traçable.
+    const seriesId = task.seriesId ?? crypto.randomUUID()
+    await createNextOccurrence(task, dueDate, seriesId)
+    await deleteDoc(doc(db, 'tasks', task.id))
   }
 
   function openForm() {
@@ -523,9 +558,15 @@ export default function Tasks() {
         linkedName:  waterName ?? landName ?? null,
       }
 
+      // V7 : seriesId pour les tâches récurrentes (chaîne d'occurrences traçable).
+      // 'once' → null. En édition, on préserve le seriesId existant (ou on en crée un
+      // si la tâche devient récurrente).
+      const isRecurring = form.recurrence !== 'once'
       if (editingId) {
         // Mode édition : update en place. Reset des flags de notif si la planification
         // a changé (heure ou broadcast/assigné) pour que la prochaine notif parte.
+        const existing = allTasks.find(t => t.id === editingId)
+        const seriesId = isRecurring ? (existing?.seriesId ?? crypto.randomUUID()) : null
         const updates: Record<string, unknown> = {
           title:        form.title.trim(),
           zone:         form.zone.trim(),
@@ -539,6 +580,7 @@ export default function Tasks() {
           reminderSentAt: null,
           broadcast:    isBroadcast,
           broadcastNotifiedAt: null,
+          seriesId,
           ...linked,
         }
         await updateDoc(doc(db, 'tasks', editingId), updates)
@@ -562,6 +604,7 @@ export default function Tasks() {
           nextOccurrenceCreated: false,
           broadcast:    isBroadcast,
           broadcastNotifiedAt: null,
+          seriesId:     isRecurring ? crypto.randomUUID() : null,
           ...linked,
         })
       }
@@ -594,6 +637,44 @@ export default function Tasks() {
     return (
       <li className={`py-3 px-1 transition-colors ${doneClass} ${animClass}`}>
         {confirming ? (
+          task.recurrence !== 'once' ? (
+            /* V7 : tâche récurrente → 3 portées de suppression. */
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <Trash2 size={16} className="text-danger flex-shrink-0" />
+                <span className="flex-1 text-sm text-danger font-medium leading-snug truncate">
+                  Supprimer « {task.title} » ?
+                </span>
+                <button
+                  onClick={() => setConfirmDeleteId(null)}
+                  className="px-2.5 py-1 rounded-lg border border-border text-muted text-xs font-semibold active:bg-cream flex-shrink-0"
+                >
+                  Annuler
+                </button>
+              </div>
+              <button
+                onClick={() => deleteSeriesForever(task)}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-danger text-white text-xs font-semibold active:opacity-80"
+              >
+                <span>Définitivement</span>
+                <span className="text-white/80 font-normal">ne revient plus jamais</span>
+              </button>
+              <button
+                onClick={() => skipOccurrence(task, 'week')}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-border text-charcoal text-xs font-semibold active:bg-cream"
+              >
+                <span>Cette semaine</span>
+                <span className="text-muted font-normal">revient dans 7 jours</span>
+              </button>
+              <button
+                onClick={() => skipOccurrence(task, 'once')}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-border text-charcoal text-xs font-semibold active:bg-cream"
+              >
+                <span>Juste aujourd'hui</span>
+                <span className="text-muted font-normal">revient au prochain cycle</span>
+              </button>
+            </div>
+          ) : (
           <div className="flex items-center gap-3">
             <Trash2 size={18} className="text-danger flex-shrink-0" />
             <span className="flex-1 text-sm text-danger font-medium">Supprimer cette tâche ?</span>
@@ -610,6 +691,7 @@ export default function Tasks() {
               Non
             </button>
           </div>
+          )
         ) : (
           <div className="flex items-start gap-2.5">
             {/* Checkbox done */}

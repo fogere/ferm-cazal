@@ -1018,6 +1018,11 @@ export default function MapPage() {
   // Référence vers la carte Leaflet (react-leaflet v5 : forwardée via ref).
   // Utilisée par le snap en mode édition pour projeter lat/lng → pixels.
   const mapRef = useRef<L.Map | null>(null)
+  // Anneau de snap en mode édition, piloté en IMPÉRATIF (hors React). Bug Nils :
+  // un setState pendant le drag d'un poteau re-rendait toute la carte → react-leaflet
+  // remettait le marqueur à sa position d'origine et ça oscillait à toute vitesse.
+  // On déplace donc l'indicateur directement via Leaflet, sans aucun re-render.
+  const snapMarkerRef = useRef<L.Marker | null>(null)
   type EditMode = 'move' | 'add' | 'delete' | 'cut'
   const [editMode, setEditMode] = useState<EditMode>('move')
 
@@ -1468,7 +1473,7 @@ export default function MapPage() {
     setEditRangeStart(null)
     setEditRangeEnd(null)
     setEditMode('move')
-    setFenceSnapTarget(null)
+    showSnapRing(null)
   }
 
   // Déplace le point #idx vers (lat, lng). Si le polygone est fermé
@@ -1509,6 +1514,24 @@ export default function MapPage() {
       for (const h of pin.holes ?? []) for (const v of h.points) consider(v)
     }
     return best
+  }
+
+  // Affiche/déplace/efface l'anneau de snap en mode édition SANS passer par React
+  // (cf. snapMarkerRef) — indispensable pour ne pas perturber le drag Leaflet en cours.
+  function showSnapRing(pos: { lat: number; lng: number } | null) {
+    const map = mapRef.current
+    if (!map) return
+    if (!pos) {
+      if (snapMarkerRef.current) { snapMarkerRef.current.remove(); snapMarkerRef.current = null }
+      return
+    }
+    if (snapMarkerRef.current) {
+      snapMarkerRef.current.setLatLng([pos.lat, pos.lng])
+    } else {
+      snapMarkerRef.current = L.marker([pos.lat, pos.lng], {
+        icon: makeSnapIcon(false), interactive: false, zIndexOffset: 1000,
+      }).addTo(map)
+    }
   }
 
   // Insère un nouveau poteau au milieu du segment [idx, idx+1].
@@ -1578,6 +1601,7 @@ export default function MapPage() {
       setFenceEditPoints([])
       setEditRangeStart(null)
       setEditRangeEnd(null)
+      showSnapRing(null)
     } catch (err) {
       console.error('[saveEditFence]', err)
       alert("Échec enregistrement. Réessaye dans un instant.")
@@ -3138,19 +3162,19 @@ export default function MapPage() {
                     // de chevauchement hitbox → le doigt tape sur le poteau réel.
                     zIndexOffset={200}
                     eventHandlers={canDrag ? {
-                      // Snap "constant" pendant le drag : feedback visuel via l'anneau
-                      // magnétique tant qu'on survole un sommet d'une autre clôture/espace.
+                      // Snap "constant" pendant le drag : l'anneau magnétique suit le
+                      // sommet ciblé, piloté en impératif (showSnapRing) pour ne PAS
+                      // re-rendre la carte et éviter l'oscillation marqueur/origine.
                       drag: (e) => {
                         const ll = e.target.getLatLng()
-                        const s = snapEditPoint(ll.lat, ll.lng)
-                        setFenceSnapTarget(s ? { ...s, isClose: false } : null)
+                        showSnapRing(snapEditPoint(ll.lat, ll.lng))
                       },
                       dragend: (e) => {
                         const ll = e.target.getLatLng()
                         const s = snapEditPoint(ll.lat, ll.lng)
                         const target = s ?? { lat: ll.lat, lng: ll.lng }
+                        showSnapRing(null)
                         dragEditPoint(i, target.lat, target.lng)
-                        setFenceSnapTarget(null)
                       },
                     } : {}}
                   />
@@ -3218,9 +3242,10 @@ export default function MapPage() {
           )
         })()}
 
-        {/* Indicateur snap (point magnétique) — création (fenceMode) ET édition
-            (fenceEditPin) : on cale les poteaux sur les autres clôtures/espaces. */}
-        {(fenceMode || fenceEditPin) && fenceSnapTarget && (
+        {/* Indicateur snap (point magnétique) en CRÉATION. En édition, l'anneau est
+            piloté en impératif via showSnapRing (cf. snapMarkerRef) pour ne pas
+            re-rendre la carte pendant le drag. */}
+        {fenceMode && fenceSnapTarget && (
           <Marker
             position={[fenceSnapTarget.lat, fenceSnapTarget.lng]}
             icon={makeSnapIcon(fenceSnapTarget.isClose)}

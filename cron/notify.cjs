@@ -271,6 +271,8 @@ async function processRecurringTasks() {
       createdBy:    task.createdBy,
       dueDate:      nextDueDate,
       nextOccurrenceCreated: false,
+      // V7 : conserve la série pour que "supprimer définitivement" balaie toute la chaîne.
+      seriesId:     task.seriesId ?? null,
     })
     await doc.ref.update({ nextOccurrenceCreated: true })
     createdCount++

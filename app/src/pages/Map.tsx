@@ -1015,6 +1015,9 @@ export default function MapPage() {
   const [fenceEditPin,    setFenceEditPin]    = useState<MapPin | null>(null)
   const [fenceEditPoints, setFenceEditPoints] = useState<{ lat: number; lng: number }[]>([])
   const [fenceEditSaving, setFenceEditSaving] = useState(false)
+  // Référence vers la carte Leaflet (react-leaflet v5 : forwardée via ref).
+  // Utilisée par le snap en mode édition pour projeter lat/lng → pixels.
+  const mapRef = useRef<L.Map | null>(null)
   type EditMode = 'move' | 'add' | 'delete' | 'cut'
   const [editMode, setEditMode] = useState<EditMode>('move')
 
@@ -1465,6 +1468,7 @@ export default function MapPage() {
     setEditRangeStart(null)
     setEditRangeEnd(null)
     setEditMode('move')
+    setFenceSnapTarget(null)
   }
 
   // Déplace le point #idx vers (lat, lng). Si le polygone est fermé
@@ -1480,6 +1484,31 @@ export default function MapPage() {
       }
       return next
     })
+  }
+
+  // Bug Nils V7 (rapports snap édition) : en mode édition, un poteau qu'on déplace
+  // doit se caler ("snap") sur le sommet/contour le plus proche d'une AUTRE clôture
+  // ou d'un espace (land_plot), comme c'est déjà le cas en mode création. Retourne
+  // la cible magnétique dans le rayon SNAP_RADIUS_PX, ou null si rien d'assez proche.
+  function snapEditPoint(lat: number, lng: number): { lat: number; lng: number } | null {
+    const map = mapRef.current
+    if (!map) return null
+    const editId = fenceEditPin?.id
+    const dragPx = map.latLngToContainerPoint(L.latLng(lat, lng))
+    let best: { lat: number; lng: number } | null = null
+    let bestDist = SNAP_RADIUS_PX
+    const consider = (v: { lat: number; lng: number }) => {
+      const vp = map.latLngToContainerPoint(L.latLng(v.lat, v.lng))
+      const d  = Math.hypot(dragPx.x - vp.x, dragPx.y - vp.y)
+      if (d < bestDist) { bestDist = d; best = { lat: v.lat, lng: v.lng } }
+    }
+    for (const pin of pins) {
+      if (pin.id === editId) continue                              // jamais soi-même
+      if (pin.type !== 'fence' && pin.type !== 'land_plot') continue
+      for (const v of pin.points ?? []) consider(v)
+      for (const h of pin.holes ?? []) for (const v of h.points) consider(v)
+    }
+    return best
   }
 
   // Insère un nouveau poteau au milieu du segment [idx, idx+1].
@@ -2739,6 +2768,7 @@ export default function MapPage() {
       )}
 
       <MapContainer
+        ref={mapRef}
         center={FARM}
         zoom={ZOOM_DEFAULT}
         maxZoom={22}
@@ -3108,9 +3138,19 @@ export default function MapPage() {
                     // de chevauchement hitbox → le doigt tape sur le poteau réel.
                     zIndexOffset={200}
                     eventHandlers={canDrag ? {
+                      // Snap "constant" pendant le drag : feedback visuel via l'anneau
+                      // magnétique tant qu'on survole un sommet d'une autre clôture/espace.
+                      drag: (e) => {
+                        const ll = e.target.getLatLng()
+                        const s = snapEditPoint(ll.lat, ll.lng)
+                        setFenceSnapTarget(s ? { ...s, isClose: false } : null)
+                      },
                       dragend: (e) => {
                         const ll = e.target.getLatLng()
-                        dragEditPoint(i, ll.lat, ll.lng)
+                        const s = snapEditPoint(ll.lat, ll.lng)
+                        const target = s ?? { lat: ll.lat, lng: ll.lng }
+                        dragEditPoint(i, target.lat, target.lng)
+                        setFenceSnapTarget(null)
                       },
                     } : {}}
                   />
@@ -3178,8 +3218,9 @@ export default function MapPage() {
           )
         })()}
 
-        {/* Indicateur snap (point magnétique) */}
-        {fenceMode && fenceSnapTarget && (
+        {/* Indicateur snap (point magnétique) — création (fenceMode) ET édition
+            (fenceEditPin) : on cale les poteaux sur les autres clôtures/espaces. */}
+        {(fenceMode || fenceEditPin) && fenceSnapTarget && (
           <Marker
             position={[fenceSnapTarget.lat, fenceSnapTarget.lng]}
             icon={makeSnapIcon(fenceSnapTarget.isClose)}

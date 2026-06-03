@@ -286,4 +286,26 @@ projet farm/
 
 ---
 
-*Dernière mise à jour : 23 mai 2026*
+## CE QUI EST FAIT — 3 juin 2026 (rapports V7.json)
+
+5 bug reports traités en 3 lots. `tsc --noEmit` + `npm run build` verts.
+
+### Lot 1 : édition des animaux + bugReporter (cause commune `undefined`)
+- **Vraie cause** du bug récurrent "on ne peut pas éditer les autres animaux" (5 tentatives Claude restées vaines) : vider un champ (parent, date de naissance, notes) envoyait `undefined` à `updateDoc`, refusé par Firestore → "Échec enregistrement". Le bugReporter plantait pour la même raison (`connection: undefined` rejeté par `addDoc`).
+- `firebase.ts` : `ignoreUndefinedProperties: true` sur les 2 `initializeFirestore` → plus de crash sur les `undefined` (corrige animaux **et** bugReporter d'un coup).
+- `Admin.tsx` (`updateAnimalDetails`) : chaque `undefined` traduit en `deleteField()` → vider un parent/une date efface réellement le champ.
+
+### Lot 2 : snap en mode édition de tracé (3 rapports : clôtures, terrains, espaces)
+- Le snap n'existait qu'en **création**. En **édition**, déplacer un poteau posait la position brute, sans magnétisme.
+- Nouveau helper `snapEditPoint` (Map.tsx) : cale sur le sommet/contour le plus proche d'une **autre** clôture ou d'un espace (`land_plot` + holes), dans `SNAP_RADIUS_PX`, en excluant le pin édité.
+- Handlers `drag`/`dragend` des poteaux d'édition : anneau magnétique **constant** pendant le drag + commit snappé au relâché. Indicateur de snap affiché aussi en édition. Référence carte récupérée via `ref={mapRef}` sur `MapContainer` (react-leaflet v5).
+
+### Lot 3 : animation validation tâche sur le Dashboard
+- L'animation `task-just-checked` existait sur `/tasks` mais pas sur `/dashboard` (d'où venait le rapport). Recâblée sur le bouton de validation du Dashboard (`toggleTask`), en optimistic UI.
+
+### Fichiers touchés
+- `app/src/firebase.ts`, `app/src/pages/Admin.tsx`, `app/src/pages/Map.tsx`, `app/src/pages/Dashboard.tsx`
+
+---
+
+*Dernière mise à jour : 3 juin 2026*

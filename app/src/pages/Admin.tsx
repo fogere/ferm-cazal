@@ -571,7 +571,14 @@ export default function Admin() {
   /* Fiche détaillée animal : mise à jour générique partielle */
   async function updateAnimalDetails(animalId: string, patch: Partial<Animal>) {
     try {
-      await updateDoc(doc(db, 'animals', animalId), patch as never)
+      // Bug Nils V7 : vider un parent / une date d'un animal envoyait `undefined`.
+      // On traduit chaque `undefined` en deleteField() pour réellement effacer le
+      // champ dans Firestore (sinon ignoreUndefinedProperties le laisse intact).
+      const clean: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(patch)) {
+        clean[k] = v === undefined ? deleteField() : v
+      }
+      await updateDoc(doc(db, 'animals', animalId), clean as never)
     } catch (e) {
       console.error('[updateAnimalDetails]', e)
       alert("Échec enregistrement. Réessaye dans un instant.")

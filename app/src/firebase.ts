@@ -36,13 +36,22 @@ export const auth = getAuth(app)
 function initDb() {
   try {
     return initializeFirestore(app, {
+      // Bug Nils V7 (édition animaux + bugReporter) : un patch contenant un
+      // champ `undefined` (parent vidé, date effacée, connection indispo…) faisait
+      // lever `Unsupported field value: undefined` à updateDoc/addDoc. On ignore
+      // ces champs au lieu de crasher (les effacements réels passent par
+      // deleteField() côté appelant).
+      ignoreUndefinedProperties: true,
       localCache: persistentLocalCache({
         tabManager: persistentMultipleTabManager(),
       }),
     })
   } catch (e) {
     console.warn('[firebase] Cache persistant indisponible, fallback mémoire :', e)
-    return initializeFirestore(app, { localCache: memoryLocalCache() })
+    return initializeFirestore(app, {
+      ignoreUndefinedProperties: true,
+      localCache: memoryLocalCache(),
+    })
   }
 }
 

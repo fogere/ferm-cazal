@@ -150,6 +150,9 @@ export default function Dashboard() {
   const [availability, setAvailability] = useState<Availability>(profile?.availability ?? 'available')
   const [waterPins, setWaterPins] = useState<MapPin[]>([])
   const [refillBusy, setRefillBusy] = useState<string | null>(null)
+  // Bug Nils V7 : animation visible quand on valide une tâche depuis le Dashboard
+  // (même flash vert que sur la page Tâches). Optimistic : déclenché avant l'écriture.
+  const [justCheckedId, setJustCheckedId] = useState<string | null>(null)
   const [careEntries, setCareEntries] = useState<AnimalCareEntry[]>([])
   const [animals, setAnimals] = useState<Animal[]>([])
 
@@ -435,6 +438,11 @@ export default function Dashboard() {
   }
 
   async function toggleTask(task: Task) {
+    // Animation immédiate (optimistic) quand on coche, avant l'écriture Firestore.
+    if (!task.completed) {
+      setJustCheckedId(task.id)
+      setTimeout(() => setJustCheckedId(curr => (curr === task.id ? null : curr)), 800)
+    }
     await updateDoc(doc(db, 'tasks', task.id), {
       completed:   !task.completed,
       completedAt: !task.completed ? Date.now() : null,
@@ -865,7 +873,7 @@ export default function Dashboard() {
                   </p>
                   <ul className="space-y-0.5">
                     {myTasks.map(task => (
-                      <li key={task.id}>
+                      <li key={task.id} className={`rounded-xl ${justCheckedId === task.id ? 'task-just-checked' : ''}`}>
                         <button
                           onClick={() => toggleTask(task)}
                           className="w-full flex items-center gap-3 py-2.5 px-1 rounded-xl active:bg-cream transition-colors text-left"

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   LogOut, Check, User, Bell, Shield, ChevronRight, MapPin, Moon, Sun, Bug,
   Lock, Eye, EyeOff, Minimize2, Maximize2, BatteryLow, Battery, BatteryFull,
-  BellOff, AlertCircle, ExternalLink,
+  BellOff, AlertCircle, ExternalLink, Download,
 } from 'lucide-react'
 import { doc, deleteField } from '../services/firestoreMonitor'
 import {
@@ -16,6 +16,7 @@ import { useDensity } from '../hooks/useDensity'
 import { registerFcmTokenManually } from '../hooks/useMessaging'
 import { updateDocBounded, FirestoreWriteTimeoutError } from '../services/firestoreWrite'
 import { locationCore, type GpsMode } from '../services/location/locationCore'
+import OfflineMapButton from '../components/OfflineMapButton'
 
 export default function Settings() {
   const { user, profile, logout, isTemp } = useAuth()
@@ -513,6 +514,23 @@ export default function Settings() {
             </p>
           </div>
         </div>
+
+        {/* Carte hors-ligne — pré-téléchargement des tuiles de la ferme (Nils 03/06/2026).
+            IGN est lent à la 1ʳᵉ visite d'une zone ; on télécharge une fois la zone ferme
+            pour qu'elle soit ensuite instantanée et dispo sans réseau. */}
+        {!isTemp && (
+          <div className="bg-card rounded-2xl p-4 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <Download size={16} className="text-muted" />
+              <p className="text-xs font-semibold text-muted uppercase tracking-wider">Carte hors-ligne</p>
+            </div>
+            <p className="text-xs text-muted mb-3">
+              La carte IGN est lente à charger la première fois (zones blanches). Télécharge une fois
+              la zone de la ferme : ensuite elle s'affiche instantanément, même sans réseau.
+            </p>
+            <OfflineMapButton />
+          </div>
+        )}
 
         {/* Sécurité — changement de mot de passe (utilisateurs réguliers uniquement) */}
         {!isTemp && user?.email && (

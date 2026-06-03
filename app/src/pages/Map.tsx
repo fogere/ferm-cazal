@@ -2942,7 +2942,7 @@ export default function MapPage() {
         ref={mapRef}
         center={initialView?.center ?? FARM}
         zoom={initialView?.zoom ?? ZOOM_DEFAULT}
-        maxZoom={22}
+        maxZoom={20}
         style={{ height: '100%', width: '100%' }}
         zoomControl={false}
         // Molette desktop plus douce (réglage inoffensif, répond au "zoom trop rapide").
@@ -2957,7 +2957,7 @@ export default function MapPage() {
           url={layer === 'osm' ? OSM_TILES : layer === 'plan' ? IGN_PLAN : IGN_AERIAL}
           attribution={layer === 'osm' ? OSM_ATTR : IGN_ATTR}
           maxNativeZoom={layer === 'osm' ? 19 : 19}
-          maxZoom={22}
+          maxZoom={20}
           // Perf Nils 03/06 : pré-charge un anneau de tuiles AUTOUR de l'écran pour
           // qu'au déplacement elles soient déjà là (moins de "zones blanches"). Une
           // fois en cache (CacheFirst, cf. sw.ts), elles sont instantanées au retour.
@@ -2980,7 +2980,7 @@ export default function MapPage() {
             url={IGN_PARCELS}
             attribution=""
             maxNativeZoom={20}
-            maxZoom={22}
+            maxZoom={20}
             opacity={0.7}
             zIndex={400}
           />

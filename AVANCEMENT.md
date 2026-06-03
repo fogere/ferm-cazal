@@ -379,4 +379,19 @@ Nils : carte toujours "horrible", saccadée au pinch/pan ET au repos, **sur PC c
 
 ---
 
+## CE QUI EST FAIT — 3 juin 2026 (vrai diagnostic lenteur carte = tuiles IGN + carte hors-ligne)
+
+Diagnostic affiné avec Nils : lent **sur PC 4070 Ti aussi** + « zones blanches longues à charger au déplacement » = ce n'est NI le matériel NI le rendu, c'est la **latence du serveur de tuiles IGN** (data.geopf.fr) à la 1ʳᵉ visite d'une zone. Le cache (CacheFirst, sw.ts) rend les zones déjà vues instantanées, mais les nouvelles zones subissent IGN.
+
+- **Revert des réglages spéculatifs** : `preferCanvas` (redessinait les vecteurs sur canvas à chaque frame → pan plus lourd), `zoomSnap/zoomDelta` fractionnels (scaling de tuiles), retirés. Retour au rendu SVG natif (transformé par le navigateur au pan = quasi gratuit).
+- **`keepBuffer={4}`** (re-ajouté) : pré-charge un anneau de tuiles autour de l'écran → moins de zones blanches au déplacement.
+- **Fond gris-vert** des zones non chargées (au lieu du blanc cru) → moins moche pendant le chargement.
+- **Carte ferme hors-ligne (LE vrai fix usage)** : nouveau bouton dans Réglages → « Carte hors-ligne » qui pré-télécharge les tuiles aériennes de la zone ferme (centre le Cazal, rayon 1,2 km, zooms 15→19, ~qq Mo) via `services/map/precacheTiles.ts` + `components/OfflineMapButton.tsx`. Une fois fait : carte de la ferme **instantanée et hors-réseau**, plus de zones blanches. Barre de progression + annulation.
+- **Zoom plafonné 22→20** : évite le sur-agrandissement flou au-delà de la résolution native IGN (z19) et réduit la charge/jank au zoom.
+
+### Fichiers touchés
+- `app/src/services/map/precacheTiles.ts` (nouveau), `app/src/components/OfflineMapButton.tsx` (nouveau), `app/src/pages/Settings.tsx`, `app/src/pages/Map.tsx`, `app/src/index.css`
+
+---
+
 *Dernière mise à jour : 3 juin 2026*

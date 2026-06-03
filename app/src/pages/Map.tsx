@@ -896,6 +896,36 @@ function ZoomTracker({ onZoom }: { onZoom: (z: number) => void }) {
   return null
 }
 
+/**
+ * Marker temps réel "ma position" + cercle de précision, ISOLÉ dans son propre
+ * composant. Perf Nils 03/06 : avant, `selfPos` vivait dans MapPage et le flux GPS
+ * (~1 update/s en haute précision) faisait re-render TOUTE la carte chaque seconde,
+ * en continu — saccades au pan/zoom et même à l'arrêt. Désormais seul ce petit
+ * composant se re-rend à chaque position ; MapPage ne bouge plus.
+ */
+function SelfLocationMarker({ enabled, color, label }: { enabled: boolean; color: string; label: string }) {
+  const [selfPos, setSelfPos] = useState<{ lat: number; lng: number; accuracy: number; timestamp: number } | null>(null)
+  useLocationCore(setSelfPos, undefined, enabled)
+  if (!enabled || !selfPos) return null
+  return (
+    <>
+      <Circle
+        center={[selfPos.lat, selfPos.lng]}
+        radius={Math.max(3, Math.min(200, selfPos.accuracy))}
+        pathOptions={{ color, weight: 1, opacity: 0.4, fillColor: color, fillOpacity: 0.08 }}
+        interactive={false}
+      />
+      <Marker
+        key="live-self"
+        position={[selfPos.lat, selfPos.lng]}
+        icon={makeUserLocationIcon(color, label)}
+        interactive={false}
+        zIndexOffset={400}
+      />
+    </>
+  )
+}
+
 /* ─── formulaire ─── */
 
 interface FormState {
@@ -944,14 +974,11 @@ export default function MapPage() {
   // n'est utile qu'aux utilisateurs qui ont la carte ouverte.
   useLiveLocation()
 
-  // Bug Eugénie 24/05/2026 (qualité GPS) : son propre marker sur la carte est
-  // rendu DIRECTEMENT depuis le flux GPS local (~1 update/s), pas depuis
-  // Firestore qui est throttled à 90 s. Sans ça, sur son propre téléphone, sa
-  // pastille bougeait toutes les 90 s, d'où le sentiment "GPS nul" comparé à
-  // Google Maps. Les AUTRES utilisateurs continuent d'être lus via Firestore
-  // (cf. plus bas dans le rendu).
-  const [selfPos, setSelfPos] = useState<{ lat: number; lng: number; accuracy: number; timestamp: number } | null>(null)
-  useLocationCore(setSelfPos, undefined, !!user && !!profile?.shareLocation)
+  // Bug Eugénie 24/05/2026 (qualité GPS) : son propre marker est rendu DIRECTEMENT
+  // depuis le flux GPS local (~1 update/s), pas depuis Firestore (throttle 90 s).
+  // Perf Nils 03/06 : ce flux ~1/s est désormais consommé par le composant isolé
+  // <SelfLocationMarker> (cf. plus bas dans le rendu) et NON par un state de MapPage,
+  // sinon toute la carte se re-rendait chaque seconde → saccades permanentes.
 
   /* Signal "carte ouverte" : pose `mapOpenAt` + heartbeat 60 s tant que
      cette page est montée. Sert aux autres clients pour décider de publier
@@ -3436,29 +3463,11 @@ export default function MapPage() {
             GPS (3 m = excellent, 80 m = mauvais). Permet à l'utilisatrice de
             voir si son GPS est fiable AVANT de prendre une décision (placer un
             poteau, valider un check geofence). */}
-        {selfPos && profile?.shareLocation && (
-          <>
-            <Circle
-              center={[selfPos.lat, selfPos.lng]}
-              radius={Math.max(3, Math.min(200, selfPos.accuracy))}
-              pathOptions={{
-                color:       profile.color || '#2D6A4F',
-                weight:      1,
-                opacity:     0.4,
-                fillColor:   profile.color || '#2D6A4F',
-                fillOpacity: 0.08,
-              }}
-              interactive={false}
-            />
-            <Marker
-              key="live-self"
-              position={[selfPos.lat, selfPos.lng]}
-              icon={makeUserLocationIcon(profile.color || '#2D6A4F', (profile.displayName || '?').charAt(0).toUpperCase())}
-              interactive={false}
-              zIndexOffset={400}
-            />
-          </>
-        )}
+        <SelfLocationMarker
+          enabled={!!user && !!profile?.shareLocation}
+          color={profile?.color || '#2D6A4F'}
+          label={(profile?.displayName || '?').charAt(0).toUpperCase()}
+        />
 
         {/* Pointeurs partagés des AUTRES utilisateurs (depuis Firestore).
             Le sien à soi est rendu séparément via localPointer (cf. en dessous)

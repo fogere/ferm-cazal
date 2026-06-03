@@ -366,4 +366,17 @@ Nils ne voyait TOUJOURS aucune animation de validation. Diagnostic : updates bie
 
 ---
 
+## CE QUI EST FAIT — 3 juin 2026 (LE vrai goulot de fluidité carte)
+
+Nils : carte toujours "horrible", saccadée au pinch/pan ET au repos, **sur PC comme sur téléphone**. Le fait que ce soit lent même sur un PC 16 Go au repos = ce n'est pas la faiblesse du device, c'est un **re-render en boucle continue**.
+
+**Cause trouvée** : le marker "ma position" lisait le flux GPS local (`useLocationCore` → `setSelfPos`) **dans un state de MapPage**. En haute précision, `watchPosition` émet ~1 fois/seconde → `setSelfPos` re-rendait TOUTE la carte (toutes les clôtures, marqueurs, tuiles à réconcilier) chaque seconde, en continu, tant que la carte était ouverte. D'où les saccades permanentes, y compris pendant les gestes (le re-render interrompait le pinch/pan).
+
+**Fix** : extraction dans un composant isolé `<SelfLocationMarker>` qui possède son propre `selfPos`. Seul ce petit composant se re-rend à chaque position GPS ; MapPage ne bouge plus. (Les optimisations A–E précédentes — tick 1 Hz, preferCanvas, memo, vue persistée — restent valables, mais ce `setSelfPos` 1/s était LE goulot principal qu'elles ne couvraient pas.)
+
+### Fichiers touchés
+- `app/src/pages/Map.tsx`
+
+---
+
 *Dernière mise à jour : 3 juin 2026*

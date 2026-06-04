@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  collection, doc, onSnapshot, query, where, updateDoc, addDoc, deleteDoc,
+  collection, doc, onSnapshot, query, where, updateDoc, addDoc,
 } from '../services/firestoreMonitor'
-import { X, Plus, Check, Calendar, Stethoscope, Trash2 } from 'lucide-react'
+import { X, Plus, Check } from 'lucide-react'
 import { db } from '../firebase'
 import {
   dateInputToTs,
@@ -16,7 +16,7 @@ import { getSpeciesInfo } from '../services/species'
 import { compressImage } from '../services/image'
 import type {
   Animal, AnimalCareEntry, AnimalCondition, AnimalMeasurement, AnimalPhoto,
-  EnclosureMovement, UserProfile,
+  EnclosureMovement,
 } from '../types'
 
 import AnimalHeader      from '../components/animal/AnimalHeader'
@@ -25,6 +25,7 @@ import AnimalGrowth      from '../components/animal/AnimalGrowth'
 import AnimalPhotos      from '../components/animal/AnimalPhotos'
 import AnimalLineage     from '../components/animal/AnimalLineage'
 import AnimalReproduction from '../components/animal/AnimalReproduction'
+import CareJournal        from '../components/animal/CareJournal'
 
 type Tab = 'timeline' | 'growth' | 'health' | 'photos' | 'care' | 'family' | 'identity'
 
@@ -265,7 +266,14 @@ export default function AnimalDetail() {
         )}
 
         {tab === 'care' && (
-          <CarePanel animal={animal} careEntries={careEntries} users={users} isTemp={isTemp} currentUid={user?.uid} />
+          <CareJournal
+            animal={animal}
+            careEntries={careEntries}
+            users={users}
+            isTemp={isTemp}
+            currentUid={user?.uid}
+            customSpecies={customSpecies}
+          />
         )}
 
         {tab === 'family' && (
@@ -515,232 +523,6 @@ function StatCell({ label, value, tone }: { label: string; value: number; tone: 
   )
 }
 
-const CARE_CFG_LOCAL = {
-  vaccine:    { icon: '💉', label: 'Vaccin',     color: 'text-sky' },
-  vermifuge:  { icon: '💊', label: 'Vermifuge',  color: 'text-meadow' },
-  parage:     { icon: '🐴', label: 'Parage',     color: 'text-earth' },
-  vet_visit:  { icon: '🩺', label: 'Visite véto', color: 'text-forest' },
-  medication: { icon: '🧪', label: 'Soin',       color: 'text-orange-600' },
-  breeding:   { icon: '💕', label: 'Saillie',    color: 'text-pink-600' },
-  birth:      { icon: '🐣', label: 'Mise bas',   color: 'text-meadow' },
-  food:       { icon: '🥣', label: 'Croquettes', color: 'text-orange-600' },
-  grooming:   { icon: '✂️', label: 'Toilettage', color: 'text-sky' },
-  other:      { icon: '📝', label: 'Autre',      color: 'text-muted' },
-} as const
-type CareKey = keyof typeof CARE_CFG_LOCAL
-
-function CarePanel({ animal, careEntries, users, isTemp, currentUid }: {
-  animal: Animal
-  careEntries: AnimalCareEntry[]
-  users: UserProfile[]
-  isTemp: boolean
-  currentUid?: string
-}) {
-  const [open, setOpen] = useState(false)
-  const [type, setType] = useState<CareKey>('vaccine')
-  const [date, setDate] = useState(todayInputValue())
-  const [note, setNote] = useState('')
-  const [nextDue, setNextDue] = useState('')
-  const [recur, setRecur] = useState(0)
-  const [saving, setSaving] = useState(false)
-
-  // Compteurs par type
-  const counts = useMemo(() => {
-    const c: Partial<Record<CareKey, number>> = {}
-    for (const e of careEntries) c[e.type as CareKey] = (c[e.type as CareKey] ?? 0) + 1
-    return c
-  }, [careEntries])
-
-  const overdueCount = careEntries.filter(e => e.nextDueAt && e.nextDueAt < Date.now()).length
-
-  async function save() {
-    if (!currentUid || isTemp) return
-    setSaving(true)
-    try {
-      const dateTs = dateInputToTs(date)
-      const autoNext = recur > 0 ? dateTs + recur * 86_400_000 : undefined
-      const entry: Omit<AnimalCareEntry, 'id'> = {
-        animalId:    animal.id,
-        type,
-        date:        dateTs,
-        note:        note.trim(),
-        performedBy: currentUid,
-        createdAt:   Date.now(),
-        ...(nextDue
-          ? { nextDueAt: dateInputToTs(nextDue) }
-          : autoNext
-            ? { nextDueAt: autoNext }
-            : {}),
-        ...(recur > 0 && { recurrenceDays: recur }),
-      }
-      await addDoc(collection(db, 'animal_care'), entry)
-      setNote(''); setNextDue(''); setRecur(0)
-      setOpen(false)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function repeat(e: AnimalCareEntry) {
-    if (!currentUid || !e.recurrenceDays || isTemp) return
-    const today = Date.now()
-    await addDoc(collection(db, 'animal_care'), {
-      animalId:       e.animalId,
-      type:           e.type,
-      date:           today,
-      note:           e.note,
-      performedBy:    currentUid,
-      createdAt:      today,
-      nextDueAt:      today + e.recurrenceDays * 86_400_000,
-      recurrenceDays: e.recurrenceDays,
-    })
-  }
-
-  async function removeCare(id: string) {
-    await deleteDoc(doc(db, 'animal_care', id))
-  }
-
-  return (
-    <div className="space-y-2">
-      {/* Compteurs + alerte overdue */}
-      {overdueCount > 0 && (
-        <div className="bg-danger/10 border border-danger/40 rounded-lg p-2 text-[11px] text-danger font-bold flex items-center gap-1">
-          ⏰ {overdueCount} rappel{overdueCount > 1 ? 's' : ''} en retard
-        </div>
-      )}
-      <div className="grid grid-cols-5 gap-1">
-        {(['vaccine', 'vermifuge', 'parage', 'vet_visit', 'medication'] as CareKey[]).map(k => (
-          <div key={k} className="bg-white rounded-lg p-1.5 border border-border/40 text-center">
-            <p className="text-base m-0">{CARE_CFG_LOCAL[k].icon}</p>
-            <p className="text-[9px] text-muted m-0 leading-tight">{CARE_CFG_LOCAL[k].label}</p>
-            <p className="text-xs font-bold text-charcoal m-0">{counts[k] ?? 0}</p>
-          </div>
-        ))}
-      </div>
-
-      {!isTemp && (open ? (
-        <div className="bg-cream rounded-xl p-3 space-y-2 border border-forest/20">
-          <div className="flex items-center gap-1.5 mb-1">
-            <Stethoscope size={13} className="text-forest" />
-            <p className="text-xs font-bold text-forest">Nouveau soin</p>
-          </div>
-          <div className="grid grid-cols-3 gap-1">
-            {(Object.entries(CARE_CFG_LOCAL) as [CareKey, typeof CARE_CFG_LOCAL.other][]).map(([k, v]) => (
-              <button key={k} onClick={() => setType(k)}
-                      className={`flex flex-col items-center gap-0.5 py-2 rounded-lg border text-xs font-semibold transition-all ${
-                        type === k ? 'border-forest bg-forest/10 text-forest' : 'border-border bg-white text-muted'
-                      }`}>
-                <span className="text-base leading-none">{v.icon}</span>
-                <span className="text-[10px]">{v.label}</span>
-              </button>
-            ))}
-          </div>
-          <div className="flex gap-2 items-center">
-            <Calendar size={13} className="text-muted flex-shrink-0" />
-            <input type="date" value={date} onChange={e => setDate(e.target.value)}
-                   className="flex-1 px-2 py-1.5 rounded-lg border border-border bg-white text-xs" />
-          </div>
-          <input type="text" value={note} onChange={e => setNote(e.target.value)}
-                 placeholder="Note (optionnelle)"
-                 className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs" />
-          <div className="flex gap-2 items-center">
-            <span className="text-xs text-muted flex-shrink-0">Rappel:</span>
-            <input type="date" value={nextDue} onChange={e => setNextDue(e.target.value)}
-                   className="flex-1 px-2 py-1.5 rounded-lg border border-border bg-white text-xs" />
-          </div>
-          <div>
-            <p className="text-[10px] font-bold text-muted uppercase tracking-wider mb-1">Récurrence</p>
-            <div className="grid grid-cols-6 gap-1">
-              {([
-                [0,   'Jamais'],
-                [7,   '1 sem.'],
-                [30,  '1 mois'],
-                [90,  '3 mois'],
-                [180, '6 mois'],
-                [365, '1 an'],
-              ] as [number, string][]).map(([d, label]) => (
-                <button key={d} onClick={() => setRecur(d)}
-                        className={`py-1.5 rounded-lg text-[10px] font-semibold border transition-all ${
-                          recur === d ? 'border-forest bg-forest/10 text-forest' : 'border-border bg-white text-muted'
-                        }`}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={save} disabled={saving}
-                    className="flex-1 py-2 rounded-lg bg-forest text-white text-xs font-bold disabled:opacity-40">
-              {saving ? '…' : 'Enregistrer'}
-            </button>
-            <button onClick={() => setOpen(false)}
-                    className="px-3 py-2 rounded-lg border border-border text-xs text-muted">
-              Annuler
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button onClick={() => setOpen(true)}
-                className="w-full py-2 rounded-lg border border-dashed border-forest text-forest text-xs font-bold
-                           active:bg-forest/10 flex items-center justify-center gap-1">
-          <Plus size={12} /> Nouveau soin
-        </button>
-      ))}
-
-      {careEntries.length === 0 ? (
-        <p className="text-xs text-muted text-center italic py-3">
-          Aucun soin enregistré.
-        </p>
-      ) : (
-        <ul className="space-y-1.5">
-          {careEntries.map(e => {
-            const cfg = CARE_CFG_LOCAL[e.type as CareKey] ?? CARE_CFG_LOCAL.other
-            const dueOverdue = e.nextDueAt && e.nextDueAt < Date.now()
-            const canRepeat  = !!e.recurrenceDays && !isTemp
-            return (
-              <li key={e.id} className="flex items-start gap-2 bg-white rounded-lg p-2 border border-border/40">
-                <span className="text-base flex-shrink-0">{cfg.icon}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className={`text-xs font-bold ${cfg.color}`}>
-                      {cfg.label} <span className="text-muted font-normal">· {dateLabelFR(e.date)}</span>
-                      {e.recurrenceDays && (
-                        <span className="ml-1 text-[9px] bg-meadow/15 text-meadow px-1 py-0.5 rounded font-bold">
-                          ↻ tous les {e.recurrenceDays} j
-                        </span>
-                      )}
-                    </p>
-                    {!isTemp && (
-                      <button onClick={() => removeCare(e.id)}
-                              className="text-danger/30 active:text-danger p-0.5">
-                        <Trash2 size={11} />
-                      </button>
-                    )}
-                  </div>
-                  {e.note && <p className="text-xs text-charcoal mt-0.5 leading-snug">{e.note}</p>}
-                  <p className="text-[9px] text-muted">
-                    par {users.find(u => u.uid === e.performedBy)?.displayName ?? '—'}
-                  </p>
-                  {e.nextDueAt && (
-                    <p className={`text-[11px] mt-0.5 ${dueOverdue ? 'text-danger font-semibold' : 'text-muted'}`}>
-                      ⏰ Prochain : {dateLabelFR(e.nextDueAt)}
-                    </p>
-                  )}
-                  {canRepeat && dueOverdue && (
-                    <button onClick={() => repeat(e)}
-                            className="mt-1.5 px-2 py-1 rounded-lg bg-meadow/10 text-meadow text-[10px] font-bold border border-meadow/30 active:bg-meadow/20">
-                      ✓ Fait aujourd'hui · relancer le rappel
-                    </button>
-                  )}
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </div>
-  )
-}
 
 function IdentityPanel({ animal, allAnimals, isTemp }: {
   animal: Animal

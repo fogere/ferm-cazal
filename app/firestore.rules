@@ -150,12 +150,14 @@ service cloud.firestore {
     }
 
     // ── Historique des mouvements d'animaux entre enclos ──
-    // Lecture libre, création par tout utilisateur ayant accès (auto-log lors d'un changement d'enclos)
-    // Pas de update / delete : c'est un log immuable
+    // Lecture libre, création par tout utilisateur ayant accès (auto-log lors d'un changement d'enclos).
+    // Log IMMUABLE : aucune modification ni suppression possible, même pour un compte
+    // régulier. C'est de l'historique de pâturage sensible (calendrier PAC, traçabilité) —
+    // une fois écrit, il ne se perd jamais. Aucun code de l'app ne supprime de mouvement.
     match /enclosure_movements/{moveId} {
       allow read:   if hasAccess();
       allow create: if hasAccess();
-      allow update, delete: if isRegularUser();
+      allow update, delete: if false;
     }
 
     // ── Optimisation des lectures (système opti) ──

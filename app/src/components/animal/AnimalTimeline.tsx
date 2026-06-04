@@ -1,19 +1,9 @@
 import { useMemo, useState } from 'react'
 import type {
-  AnimalCareEntry, AnimalCareType, AnimalMeasurement, AnimalPhoto,
+  AnimalCareEntry, AnimalMeasurement, AnimalPhoto,
   EnclosureMovement, AnimalCondition, UserProfile,
 } from '../../types'
-
-const CARE_ICONS: Record<AnimalCareType, string> = {
-  vaccine: '💉', vermifuge: '💊', parage: '🐴', vet_visit: '🩺',
-  medication: '🧪', breeding: '💕', birth: '🐣',
-  food: '🥣', grooming: '✂️', other: '📝',
-}
-const CARE_LABELS: Record<AnimalCareType, string> = {
-  vaccine: 'Vaccin', vermifuge: 'Vermifuge', parage: 'Parage', vet_visit: 'Visite véto',
-  medication: 'Soin', breeding: 'Saillie', birth: 'Mise bas',
-  food: 'Croquettes', grooming: 'Toilettage', other: 'Autre',
-}
+import { careCfg } from '../../services/animal/careConfig'
 
 type Event =
   | { ts: number; kind: 'care';      title: string; sub: string; icon: string; color: string }
@@ -52,9 +42,9 @@ export default function AnimalTimeline({
       list.push({
         ts:    c.date,
         kind:  'care',
-        title: CARE_LABELS[c.type] ?? 'Soin',
+        title: careCfg(c.type).label,
         sub:   c.note || `Par ${userName(c.performedBy, users)}`,
-        icon:  CARE_ICONS[c.type] ?? '📝',
+        icon:  careCfg(c.type).icon,
         color: 'border-sky/30 bg-sky/5',
       })
     }

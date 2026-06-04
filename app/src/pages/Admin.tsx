@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Plus, X, Pencil, Check, Download,
   PawPrint, FileSpreadsheet, KeyRound, Copy, ClipboardCheck,
-  Stethoscope, ChevronDown, ChevronRight, Calendar, Camera, Trash2,
+  ChevronDown, ChevronRight, Camera, Trash2,
 } from 'lucide-react'
 import { compressImage } from '../services/image'
 import FirestoreMonitorPanel from '../components/admin/FirestoreMonitorPanel'
+import CareJournal from '../components/animal/CareJournal'
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
   doc, getDoc, setDoc, getDocs, query, where, deleteField, writeBatch,
@@ -14,27 +15,13 @@ import {
 import { db } from '../firebase'
 import { useAuth, formatCode } from '../hooks/useAuth'
 import { useCustomSpecies } from '../hooks/useCustomSpecies'
+import { useUsers } from '../hooks/useUsers'
 import { getSpeciesInfo, listAllSpecies, slugifySpecies } from '../services/species'
 import { dateInputToTs, tsToDateInput } from '../services/map/time'
-import type { TempAccessCode, Animal, AnimalSpecies, AnimalCareEntry, AnimalCareType, AnimalGender, AnimalCondition, AnimalPhoto, CustomSpecies, Reserve } from '../types'
+import type { TempAccessCode, Animal, AnimalSpecies, AnimalCareEntry, AnimalGender, AnimalCondition, AnimalPhoto, CustomSpecies, Reserve } from '../types'
 
 // Alias local pour ne pas avoir à renommer les ~30 appels existants
 const todayInputValue = tsToDateInput
-
-/* ─── Carnet de soins : config ─── */
-
-const CARE_CFG: Record<AnimalCareType, { icon: string; label: string; color: string }> = {
-  vaccine:    { icon: '💉', label: 'Vaccin',     color: 'text-sky' },
-  vermifuge:  { icon: '💊', label: 'Vermifuge',  color: 'text-meadow' },
-  parage:     { icon: '🐴', label: 'Parage',     color: 'text-earth' },
-  vet_visit:  { icon: '🩺', label: 'Visite véto', color: 'text-forest' },
-  medication: { icon: '🧪', label: 'Soin',       color: 'text-orange-600' },
-  breeding:   { icon: '💕', label: 'Saillie',    color: 'text-pink-600' },
-  birth:      { icon: '🐣', label: 'Mise bas',   color: 'text-meadow' },
-  food:       { icon: '🥣', label: 'Croquettes', color: 'text-orange-600' },
-  grooming:   { icon: '✂️', label: 'Toilettage', color: 'text-sky' },
-  other:      { icon: '📝', label: 'Autre',      color: 'text-muted' },
-}
 
 // Note : les durées de gestation sont maintenant lues via getSpeciesInfo()
 // (races par défaut + races custom). Voir services/species.ts.
@@ -43,23 +30,6 @@ function dateLabelFR(ts: number): string {
   const d = new Date(ts)
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
 }
-
-function relTimeFR(ts: number): string {
-  const diff = ts - Date.now()
-  const absDays = Math.abs(diff) / 86_400_000
-  if (absDays < 1) return diff > 0 ? "Aujourd'hui" : "Aujourd'hui"
-  if (absDays < 30) {
-    const d = Math.round(absDays)
-    return diff > 0 ? `dans ${d} j` : `il y a ${d} j`
-  }
-  if (absDays < 365) {
-    const m = Math.round(absDays / 30)
-    return diff > 0 ? `dans ${m} mois` : `il y a ${m} mois`
-  }
-  const y = Math.round(absDays / 365)
-  return diff > 0 ? `dans ${y} an${y > 1 ? 's' : ''}` : `il y a ${y} an${y > 1 ? 's' : ''}`
-}
-
 
 interface AnimalGroup {
   name: string
@@ -186,14 +156,11 @@ export default function Admin() {
   const [newCondContag,   setNewCondContag]   = useState(false)
   const [newCondPerm,     setNewCondPerm]     = useState(true)
 
-  /* Carnet de soins */
+  /* Carnet de soins — l'UI (formulaire + liste) vit dans <CareJournal>, partagé
+     à l'identique avec la fiche animal. Ici on ne garde que les données + l'expansion. */
+  const users = useUsers()
   const [careEntries,      setCareEntries]      = useState<AnimalCareEntry[]>([])
   const [expandedAnimal,   setExpandedAnimal]   = useState<string | null>(null)
-  const [careFormType,     setCareFormType]     = useState<AnimalCareType>('vaccine')
-  const [careFormDate,     setCareFormDate]     = useState(todayInputValue())
-  const [careFormNote,     setCareFormNote]     = useState('')
-  const [careFormNextDue,  setCareFormNextDue]  = useState('')
-  const [careSaving,       setCareSaving]       = useState(false)
   const [photoUploadingId, setPhotoUploadingId] = useState<string | null>(null)
   const [photoViewer,      setPhotoViewer]      = useState<{ url: string; name: string } | null>(null)
 
@@ -322,6 +289,15 @@ export default function Admin() {
   }
 
   async function removeAnimal(id: string) {
+    // Donnée sensible : supprimer un animal efface AUSSI tout son carnet de santé.
+    // Confirmation obligatoire avec le détail de ce qui sera perdu.
+    const a = animals.find(x => x.id === id)
+    const careCount = careEntries.filter(c => c.animalId === id).length
+    if (!window.confirm(
+      `Supprimer définitivement ${a?.name ?? 'cet animal'} ?\n\n` +
+      `Son carnet de santé${careCount > 0 ? ` (${careCount} soin${careCount > 1 ? 's' : ''})` : ''} ` +
+      `sera également supprimé. Cette action est irréversible.`
+    )) return
     // Supprime aussi le carnet de soins de cet animal
     const careSnap = await getDocs(query(collection(db, 'animal_care'), where('animalId', '==', id)))
     await Promise.all(careSnap.docs.map(d => deleteDoc(doc(db, 'animal_care', d.id))))
@@ -331,48 +307,8 @@ export default function Admin() {
   /* Actions carnet de soins */
 
   function openCareForm(animalId: string) {
+    // Toggle l'expansion de la fiche animal ; le formulaire de soin vit dans <CareJournal>.
     setExpandedAnimal(prev => prev === animalId ? null : animalId)
-    setCareFormType('vaccine')
-    setCareFormDate(todayInputValue())
-    setCareFormNote('')
-    setCareFormNextDue('')
-  }
-
-  async function saveCareEntry(animalId: string) {
-    if (!user) return
-    setCareSaving(true)
-    try {
-      const entry: Record<string, unknown> = {
-        animalId,
-        type:        careFormType,
-        date:        dateInputToTs(careFormDate),
-        note:        careFormNote.trim(),
-        performedBy: user.uid,
-        createdAt:   Date.now(),
-      }
-      // Auto-calcul date prévue de mise bas pour une saillie sans rappel manuel
-      if (careFormType === 'breeding' && !careFormNextDue) {
-        const animal = animals.find(a => a.id === animalId)
-        if (animal) {
-          // Durée de gestation : récupérée depuis l'espèce (par défaut ou custom).
-          // Fallback 340 j si l'espèce n'a pas de durée définie (ex: race custom sans gestation).
-          const gestDays = getSpeciesInfo(animal.species, customSpecies).gestationDays ?? 340
-          entry.nextDueAt = dateInputToTs(careFormDate) + gestDays * 86_400_000
-        }
-      } else if (careFormNextDue) {
-        entry.nextDueAt = dateInputToTs(careFormNextDue)
-      }
-      await addDoc(collection(db, 'animal_care'), entry)
-      // Reset form sans fermer (pour saisie rapide multiple si besoin)
-      setCareFormNote('')
-      setCareFormNextDue('')
-    } finally {
-      setCareSaving(false)
-    }
-  }
-
-  async function deleteCareEntry(id: string) {
-    await deleteDoc(doc(db, 'animal_care', id))
   }
 
   async function uploadAnimalPhoto(animalId: string, file: File) {
@@ -1624,63 +1560,14 @@ export default function Admin() {
 
                         {tab === 'care' && (
                         <>
-                        <div className="bg-card rounded-xl p-3 space-y-2 border border-forest/20">
-                          <div className="flex items-center gap-1.5 mb-1">
-                            <Stethoscope size={13} className="text-forest" />
-                            <p className="text-xs font-bold text-forest">Nouveau soin</p>
-                          </div>
-                          <div className="grid grid-cols-3 gap-1">
-                            {(Object.entries(CARE_CFG) as [AnimalCareType, typeof CARE_CFG.other][]).map(([k, v]) => (
-                              <button
-                                key={k}
-                                onClick={() => setCareFormType(k)}
-                                className={`flex flex-col items-center gap-0.5 py-2 rounded-lg border text-xs font-semibold transition-all ${
-                                  careFormType === k
-                                    ? 'border-forest bg-forest/10 text-forest'
-                                    : 'border-border bg-white text-muted'
-                                }`}
-                              >
-                                <span className="text-base leading-none">{v.icon}</span>
-                                <span className="text-[10px]">{v.label}</span>
-                              </button>
-                            ))}
-                          </div>
-                          <div className="flex gap-2 items-center">
-                            <Calendar size={13} className="text-muted flex-shrink-0" />
-                            <input
-                              type="date"
-                              value={careFormDate}
-                              onChange={e => setCareFormDate(e.target.value)}
-                              className="flex-1 px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
-                            />
-                          </div>
-                          <input
-                            type="text"
-                            value={careFormNote}
-                            onChange={e => setCareFormNote(e.target.value)}
-                            placeholder="Note (ex : Tétanos + grippe)"
-                            className="w-full px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
-                          />
-                          <div className="flex gap-2 items-center">
-                            <span className="text-xs text-muted flex-shrink-0">Rappel:</span>
-                            <input
-                              type="date"
-                              value={careFormNextDue}
-                              onChange={e => setCareFormNextDue(e.target.value)}
-                              placeholder="(facultatif)"
-                              className="flex-1 px-2 py-1.5 rounded-lg border border-border bg-white text-xs"
-                            />
-                          </div>
-                          <button
-                            onClick={() => saveCareEntry(a.id)}
-                            disabled={careSaving}
-                            className="w-full py-2 rounded-lg bg-forest text-white text-xs font-bold
-                                       active:scale-95 disabled:opacity-40 transition-all flex items-center justify-center gap-1.5"
-                          >
-                            <Check size={13} />
-                            {careSaving ? 'Enregistrement…' : 'Enregistrer le soin'}
-                          </button>
-                        </div>
+                        <CareJournal
+                          animal={a}
+                          careEntries={entries}
+                          users={users}
+                          isTemp={false}
+                          currentUid={user?.uid}
+                          customSpecies={customSpecies}
+                        />
 
                         {/* Bloc photo d'identité */}
                         <div className="bg-card rounded-xl p-3 border border-border/40 flex items-center gap-3">
@@ -1738,43 +1625,6 @@ export default function Admin() {
                           )}
                         </div>
 
-                        {/* Historique */}
-                        {entries.length === 0 ? (
-                          <p className="text-xs text-muted italic text-center py-1">
-                            Aucun soin enregistré pour {a.name}.
-                          </p>
-                        ) : (
-                          <ul className="space-y-1.5">
-                            {entries.map(e => {
-                              const cfg = CARE_CFG[e.type]
-                              const dueOverdue = e.nextDueAt && e.nextDueAt < Date.now()
-                              return (
-                                <li key={e.id} className="flex items-start gap-2 bg-white rounded-lg p-2 border border-border/40">
-                                  <span className="text-base flex-shrink-0">{cfg.icon}</span>
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <p className={`text-xs font-bold ${cfg.color}`}>
-                                        {cfg.label} <span className="text-muted font-normal">· {dateLabelFR(e.date)}</span>
-                                      </p>
-                                      <button
-                                        onClick={() => deleteCareEntry(e.id)}
-                                        className="text-danger/30 active:text-danger p-0.5 flex-shrink-0"
-                                      >
-                                        <X size={11} />
-                                      </button>
-                                    </div>
-                                    {e.note && <p className="text-xs text-charcoal mt-0.5 leading-snug">{e.note}</p>}
-                                    {e.nextDueAt && (
-                                      <p className={`text-[11px] mt-0.5 ${dueOverdue ? 'text-danger font-semibold' : 'text-muted'}`}>
-                                        ⏰ Prochain : {dateLabelFR(e.nextDueAt)} ({relTimeFR(e.nextDueAt)})
-                                      </p>
-                                    )}
-                                  </div>
-                                </li>
-                              )
-                            })}
-                          </ul>
-                        )}
                         </>
                         )}
                       </div>

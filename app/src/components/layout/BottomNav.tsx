@@ -1,17 +1,14 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Home, CheckSquare, Map, Bell, Settings, ClipboardList } from 'lucide-react'
+import { Home, CheckSquare, Map, Bell, Settings } from 'lucide-react'
 import { collection, query, where, onSnapshot } from '../../services/firestoreMonitor'
 import { db } from '../../firebase'
 import { useAuth } from '../../hooks/useAuth'
 
-// L'onglet "Saisie" (Enrichissement) est masqué pour les aides temporaires :
-// les rules `parcel_answers` n'autorisent les writes qu'aux comptes réguliers.
 const NAV_ITEMS = [
   { to: '/dashboard',     icon: Home,          label: 'Accueil',  badge: false, regularOnly: false },
   { to: '/tasks',         icon: CheckSquare,   label: 'Tâches',   badge: false, regularOnly: false },
   { to: '/map',           icon: Map,           label: 'Carte',    badge: false, regularOnly: false },
-  { to: '/enrichissement',icon: ClipboardList, label: 'Saisie',   badge: false, regularOnly: true  },
   { to: '/alerts',        icon: Bell,          label: 'Alertes',  badge: true,  regularOnly: false },
   { to: '/settings',      icon: Settings,      label: 'Réglages', badge: false, regularOnly: false },
 ] as const

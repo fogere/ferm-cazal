@@ -1,6 +1,0 @@
-=== PAGE: page1 ===
-
-
---- IMAGES PRÉSENTES DANS LE DOC ---
-Thumbnails/thumbnail.png
-Pictures/100002010000036F0000025A216C3BD615D12CBC.png

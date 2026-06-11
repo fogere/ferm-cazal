@@ -5,8 +5,11 @@
  * FIXE, on télécharge une fois toutes ses tuiles ; ensuite le service worker les sert
  * depuis le cache (CacheFirst, cf. sw.ts) → carte immédiate, même sans réseau.
  *
- * On `fetch()` chaque tuile en `no-cors` : le SW intercepte, met en cache la réponse
- * (opaque, status 0 autorisé par CacheableResponsePlugin), et le tour est joué.
+ * On `fetch()` chaque tuile en `cors` (IGN renvoie access-control-allow-origin: *) :
+ * le SW intercepte et met en cache UNIQUEMENT les réponses 200. Bug Nils 11/06/2026 :
+ * en `no-cors`, les réponses étaient opaques (status 0) et les erreurs IGN (rate-limit
+ * du téléchargement massif) étaient cachées comme des tuiles valides → couture / bouts
+ * corrompus servis indéfiniment. En CORS, une erreur n'est jamais mise en cache.
  */
 
 // Même couche/URL que la carte (ORTHOPHOTOS JPEG). TILEMATRIXSET=PM = tuilage XYZ standard.
@@ -89,8 +92,10 @@ export async function precacheAerialTiles(opts: PrecacheOptions): Promise<Precac
         .replace('{x}', String(t.x))
         .replace('{y}', String(t.y))
       try {
-        // no-cors : la réponse est opaque mais le SW la met quand même en cache.
-        await fetch(url, { mode: 'no-cors', signal: opts.signal })
+        // CORS : on voit le vrai status. Une tuile en erreur (404/429/5xx) n'est
+        // pas mise en cache par le SW (CacheableResponsePlugin statuses [200]).
+        const resp = await fetch(url, { mode: 'cors', signal: opts.signal })
+        if (!resp.ok) failed++
       } catch {
         failed++
       }

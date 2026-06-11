@@ -18,7 +18,19 @@ self.addEventListener('install', () => { self.skipWaiting() })
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting()
 })
-self.addEventListener('activate', (ev) => ev.waitUntil(self.clients.claim()))
+// Au passage v1→v2 des caches de tuiles (Nils 11/06/2026) : on supprime les
+// anciens caches qui contenaient des tuiles CASSÉES. Cause : le pré-téléchargement
+// hors-ligne fetchait en `no-cors` → réponses OPAQUES (status 0) ; quand IGN renvoyait
+// une erreur (rate-limit du téléchargement massif), cette erreur était mise en cache
+// comme une tuile valide (CacheableResponsePlugin acceptait le status 0), puis servie
+// indéfiniment en CacheFirst → couture / bouts corrompus sur la carte. Désormais les
+// tuiles passent en CORS et on ne cache QUE les 200. On purge les vieux caches v1 ici.
+const STALE_TILE_CACHES = ['ign-tiles-v1', 'osm-tiles-v1', 'ign-parcels-v1']
+self.addEventListener('activate', (ev) => ev.waitUntil((async () => {
+  await self.clients.claim()
+  const names = await caches.keys()
+  await Promise.all(names.filter(n => STALE_TILE_CACHES.includes(n)).map(n => caches.delete(n)))
+})()))
 
 // ── Firebase Messaging (notifications en arrière-plan) ──
 // Config alignée sur projet le-cazal. Si tu changes de projet Firebase,
@@ -115,7 +127,10 @@ registerRoute(
     cacheName: 'ign-parcels-v2',
     networkTimeoutSeconds: 5,
     plugins: [
-      new CacheableResponsePlugin({ statuses: [0, 200] }),
+      // statuses [200] uniquement (plus de status 0) : les tuiles passent en CORS
+      // (crossOrigin côté Leaflet + fetch CORS au pré-cache), donc une erreur IGN
+      // n'est plus une réponse opaque cachable — elle est tout simplement ignorée.
+      new CacheableResponsePlugin({ statuses: [200] }),
       tileQuotaPlugin,
       new ExpirationPlugin({
         maxEntries: 40_000,
@@ -130,9 +145,9 @@ registerRoute(
 registerRoute(
   ({ url }) => url.hostname === 'data.geopf.fr',
   new CacheFirst({
-    cacheName: 'ign-tiles-v1',
+    cacheName: 'ign-tiles-v2',
     plugins: [
-      new CacheableResponsePlugin({ statuses: [0, 200] }),
+      new CacheableResponsePlugin({ statuses: [200] }),
       tileQuotaPlugin,
       new ExpirationPlugin({
         maxEntries: 200_000,
@@ -148,9 +163,9 @@ registerRoute(
 registerRoute(
   ({ url }) => url.hostname.endsWith('.tile.openstreetmap.org'),
   new CacheFirst({
-    cacheName: 'osm-tiles-v1',
+    cacheName: 'osm-tiles-v2',
     plugins: [
-      new CacheableResponsePlugin({ statuses: [0, 200] }),
+      new CacheableResponsePlugin({ statuses: [200] }),
       tileQuotaPlugin,
       new ExpirationPlugin({
         maxEntries: 50_000,

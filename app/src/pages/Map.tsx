@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, Marker, Polyline, Polygon, Circle, useMapEvent
 import L from 'leaflet'
 import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Check, Pencil, Undo2, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search, SlidersHorizontal } from 'lucide-react'
 import { compressImage } from '../services/image'
+import EmojiPicker from '../components/EmojiPicker'
 import type { PinPhoto, EnclosureMovement } from '../types'
 import {
   collection, query, where, onSnapshot, addDoc, deleteDoc, getDocs,
@@ -1269,6 +1270,8 @@ export default function MapPage() {
   const [photoViewer,    setPhotoViewer]    = useState<PinPhoto | null>(null)
   // Édition inline de la description d'un pin perso (Nils 03/06/2026).
   const [customDescEdit, setCustomDescEdit] = useState<string | null>(null)
+  // Sélecteur d'emoji intégré pour les pins perso (Nils 11/06/2026).
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
   // Reset le brouillon de description dès qu'on change (ou ferme) le pin sélectionné.
   useEffect(() => { setCustomDescEdit(null) }, [selected?.id])
 
@@ -3061,6 +3064,10 @@ export default function MapPage() {
           key={layer}
           url={layer === 'osm' ? OSM_TILES : layer === 'plan' ? IGN_PLAN : IGN_AERIAL}
           attribution={layer === 'osm' ? OSM_ATTR : IGN_ATTR}
+          // crossOrigin : charge les tuiles en CORS (IGN/OSM renvoient allow-origin: *)
+          // → le service worker voit le vrai status et ne met en cache que les 200,
+          // jamais une erreur opaque (cf. sw.ts, bug couture/tuiles corrompues).
+          crossOrigin="anonymous"
           maxNativeZoom={layer === 'osm' ? 19 : 19}
           maxZoom={20}
           // Perf Nils 03/06 : pré-charge un anneau de tuiles AUTOUR de l'écran pour
@@ -3090,6 +3097,7 @@ export default function MapPage() {
             key="parcels-overlay"
             url={IGN_PARCELS}
             attribution=""
+            crossOrigin="anonymous"
             maxNativeZoom={19}
             maxZoom={20}
             opacity={0.7}
@@ -5133,22 +5141,14 @@ export default function MapPage() {
                           }`} disabled={saving}>{em}</button>
                       ))}
                     </div>
-                    {/* Emoji libre : l'utilisatrice peut coller/taper n'importe quel emoji
-                        depuis le clavier du téléphone (Nils 11/06/2026). */}
+                    {/* Sélecteur d'emoji intégré (Nils 11/06/2026) : le picker Windows
+                        n'insère pas dans nos inputs, on fournit le nôtre. */}
                     <div className="flex items-center gap-2 mt-2">
-                      <input
-                        type="text" value={form.customEmoji}
-                        onChange={e => {
-                          // Garde le dernier "caractère" emoji saisi (un emoji = plusieurs
-                          // code units → on segmente proprement plutôt que slice(-1)).
-                          const chars = Array.from(e.target.value.trim())
-                          setForm(f => ({ ...f, customEmoji: chars.length ? chars[chars.length - 1] : '' }))
-                        }}
-                        placeholder="Ou tape ton emoji"
-                        className="flex-1 px-3 py-2 rounded-xl border border-border bg-cream text-charcoal text-base
-                                   placeholder:text-muted/50 placeholder:text-sm focus:outline-none focus:ring-2 focus:ring-forest"
-                        disabled={saving} />
-                      <span className="text-xs text-muted">→</span>
+                      <button type="button" onClick={() => setEmojiPickerOpen(true)} disabled={saving}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border-2 border-dashed border-forest/40 text-forest text-sm font-semibold active:bg-forest/5 disabled:opacity-40">
+                        <span className="text-lg leading-none">{form.customEmoji || '📌'}</span>
+                        Choisir un autre emoji…
+                      </button>
                       <span className="w-9 h-9 rounded-full flex items-center justify-center text-lg border-2 border-white shadow flex-shrink-0"
                             style={{ backgroundColor: form.customColor }}>{form.customEmoji || '📌'}</span>
                     </div>
@@ -5190,6 +5190,14 @@ export default function MapPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Sélecteur d'emoji intégré (pin perso) */}
+      {emojiPickerOpen && (
+        <EmojiPicker
+          onPick={em => setForm(f => ({ ...f, customEmoji: em }))}
+          onClose={() => setEmojiPickerOpen(false)}
+        />
       )}
 
       {/* ══════════════════════════════════════════

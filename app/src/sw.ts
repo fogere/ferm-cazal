@@ -100,6 +100,32 @@ const tileQuotaPlugin = {
   },
 }
 
+// ── Parcelles cadastrales IGN (NetworkFirst — cache séparé) ──
+// Bug Nils 03→11/06/2026 : l'overlay parcelles apparaissait "corrompu" / partiel.
+// Cause double : (1) maxNativeZoom=20 réclamait des tuiles z20 inexistantes (corrigé
+// côté Map.tsx → 19), (2) ces tuiles en erreur restaient ensuite SERVIES depuis le
+// cache partagé `ign-tiles-v1` en CacheFirst, jamais rafraîchies. On isole donc les
+// parcelles dans leur propre cache en NetworkFirst : toujours fraîches quand il y a du
+// réseau, le cache ne sert qu'en secours hors-ligne. Le cache aérien hors-ligne
+// (ign-tiles-v1) n'est pas touché — pas de re-téléchargement de la carte de la ferme.
+// IMPORTANT : cette route doit précéder la route geopf générale (Workbox = 1er match).
+registerRoute(
+  ({ url }) => url.hostname === 'data.geopf.fr' && url.search.includes('CADASTRALPARCELS'),
+  new NetworkFirst({
+    cacheName: 'ign-parcels-v2',
+    networkTimeoutSeconds: 5,
+    plugins: [
+      new CacheableResponsePlugin({ statuses: [0, 200] }),
+      tileQuotaPlugin,
+      new ExpirationPlugin({
+        maxEntries: 40_000,
+        maxAgeSeconds: 60 * 60 * 24 * 30, // 30 jours
+        purgeOnQuotaError: true,
+      }),
+    ],
+  })
+)
+
 // ── Tuiles IGN (CacheFirst — carte dispo hors ligne, cap 5 Go, 90 jours) ──
 registerRoute(
   ({ url }) => url.hostname === 'data.geopf.fr',

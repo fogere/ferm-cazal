@@ -27,16 +27,20 @@ interface Props {
   actionBusy: boolean
   /** Persiste un changement sur le pin et met à jour `selected` côté parent. */
   onPatchAttenuations: (next: NonNullable<MapPin['streamAttenuations']> | undefined) => void | Promise<void>
+  /** Persiste le régime (permanent/saisonnier + mois actifs). Bug Nils 03/06/2026. */
+  onPatchSeasonality?: (mode: 'permanent' | 'seasonal', months: number[]) => void | Promise<void>
   /** Active le mode édition du tracé (drag/insert/delete des points). S6. */
   onStartEditTrace?: (pin: MapPin) => void
 }
 
-export function WaterStreamPanel({ pin, isTemp, actionBusy, onPatchAttenuations, onStartEditTrace }: Props) {
+export function WaterStreamPanel({ pin, isTemp, actionBusy, onPatchAttenuations, onPatchSeasonality, onStartEditTrace }: Props) {
   const points = pin.points ?? []
   const attenuations = pin.streamAttenuations ?? []
   const isSeasonal = pin.streamMode === 'seasonal'
   const months = pin.streamActiveMonths ?? []
   const fmtRatio = (r: number) => `${Math.round(r * 100)}%`
+
+  const [regimeEditOpen, setRegimeEditOpen] = useState(false)
 
   const [form, setForm] = useState<{
     open:      boolean
@@ -60,12 +64,41 @@ export function WaterStreamPanel({ pin, isTemp, actionBusy, onPatchAttenuations,
         </button>
       )}
 
-      <DetailRow
-        label="Tracé"
-        value={`${points.length} points · ${isSeasonal ? 'Saisonnier' : 'Permanent'}`}
-      />
-      {isSeasonal && months.length > 0 && (
-        <DetailRow label="Mois actifs" value={months.map(m => MONTHS_FR[m - 1]).join(', ')} />
+      <DetailRow label="Tracé" value={`${points.length} points`} />
+
+      {/* Régime (permanent / saisonnier) — éditable. Bug Nils 03/06/2026 :
+          impossible de changer la saisonnalité après création. */}
+      {!regimeEditOpen && (
+        <div className="flex items-center justify-between">
+          <DetailRow
+            label="Régime"
+            value={isSeasonal
+              ? `Saisonnier${months.length > 0 ? ' · ' + months.map(m => MONTHS_FR[m - 1]).join(', ') : ''}`
+              : 'Permanent'}
+          />
+          {!isTemp && onPatchSeasonality && (
+            <button
+              onClick={() => setRegimeEditOpen(true)}
+              disabled={actionBusy}
+              className="ml-2 flex-shrink-0 text-[10px] font-semibold text-sky underline active:opacity-70 disabled:opacity-40"
+            >
+              Modifier
+            </button>
+          )}
+        </div>
+      )}
+
+      {!isTemp && onPatchSeasonality && regimeEditOpen && (
+        <RegimeEditor
+          initialSeasonal={isSeasonal}
+          initialMonths={months}
+          actionBusy={actionBusy}
+          onCancel={() => setRegimeEditOpen(false)}
+          onSave={async (mode, m) => {
+            await onPatchSeasonality(mode, m)
+            setRegimeEditOpen(false)
+          }}
+        />
       )}
 
       {/* Liste des atténuations existantes */}
@@ -243,6 +276,93 @@ export function WaterStreamPanel({ pin, isTemp, actionBusy, onPatchAttenuations,
           + Marquer une atténuation
         </button>
       )}
+    </div>
+  )
+}
+
+// Éditeur de régime (permanent / saisonnier + mois). Même UI que le formulaire
+// de création dans Map.tsx, mais réutilisable en édition. Mois stockés 1-12.
+function RegimeEditor({
+  initialSeasonal, initialMonths, actionBusy, onCancel, onSave,
+}: {
+  initialSeasonal: boolean
+  initialMonths:   number[]
+  actionBusy:      boolean
+  onCancel:        () => void
+  onSave:          (mode: 'permanent' | 'seasonal', months: number[]) => void | Promise<void>
+}) {
+  const [seasonal, setSeasonal] = useState(initialSeasonal)
+  const [months, setMonths]     = useState<number[]>(initialMonths)
+
+  return (
+    <div className="rounded-xl p-3 bg-sky/5 border border-sky/30 space-y-3">
+      <p className="text-xs font-semibold text-sky uppercase tracking-wider">Régime du cours d'eau</p>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => setSeasonal(false)}
+          className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${
+            !seasonal ? 'border-sky bg-sky text-white' : 'border-border bg-cream text-muted'
+          }`}
+        >
+          Permanent (toute l'année)
+        </button>
+        <button
+          type="button"
+          onClick={() => setSeasonal(true)}
+          className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${
+            seasonal ? 'border-sky bg-sky text-white' : 'border-border bg-cream text-muted'
+          }`}
+        >
+          Saisonnier (subit aléas)
+        </button>
+      </div>
+
+      {seasonal && (
+        <div>
+          <span className="text-[10px] text-muted uppercase tracking-wider block mb-1.5">Mois où il coule</span>
+          <div className="grid grid-cols-6 gap-1">
+            {MONTHS_FR.map((m, idx) => {
+              const monthNum = idx + 1
+              const active = months.includes(monthNum)
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMonths(prev =>
+                    active ? prev.filter(x => x !== monthNum) : [...prev, monthNum].sort((a, b) => a - b),
+                  )}
+                  className={`py-1.5 rounded-lg text-[10px] font-bold transition-all border ${
+                    active ? 'bg-sky text-white border-sky' : 'bg-cream text-muted border-border'
+                  }`}
+                >
+                  {m}
+                </button>
+              )
+            })}
+          </div>
+          <p className="text-[10px] text-muted/80 mt-1.5 leading-tight">
+            Les mois cochés = l'eau coule. Les autres mois, le tracé apparaîtra en gris pointillé.
+          </p>
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button
+          onClick={onCancel}
+          disabled={actionBusy}
+          className="flex-1 py-2 rounded-lg border border-border text-sm font-semibold text-muted bg-card active:bg-cream disabled:opacity-40"
+        >
+          Annuler
+        </button>
+        <button
+          onClick={() => onSave(seasonal ? 'seasonal' : 'permanent', seasonal ? months : [])}
+          disabled={actionBusy}
+          className="flex-1 py-2 rounded-lg bg-sky text-white text-sm font-bold active:opacity-90 disabled:opacity-40"
+        >
+          {actionBusy ? 'Enregistrement…' : 'Enregistrer'}
+        </button>
+      </div>
     </div>
   )
 }

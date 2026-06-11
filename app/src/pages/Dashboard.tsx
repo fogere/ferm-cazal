@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   Wind, Thermometer, Droplets, CheckCircle2, Circle,
   AlertTriangle, ChevronRight, RefreshCw, Flame, Stethoscope,
-  Navigation, Zap, Hand, ChevronDown, BellRing, Megaphone, Moon,
+  Navigation, Zap, Hand, ChevronDown, BellRing, Megaphone, Moon, Package,
 } from 'lucide-react'
 import { doc, updateDoc, collection, query, where, onSnapshot } from '../services/firestoreMonitor'
 import { db } from '../firebase'
@@ -1034,6 +1034,19 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+        {/* Accès rapide : registre des produits donnés aux animaux (Nils 03/06/2026) */}
+        <Link to="/products"
+           className="bg-card rounded-2xl p-4 shadow-sm flex items-center gap-3 active:bg-cream transition-colors">
+          <span className="w-10 h-10 rounded-xl bg-forest/10 flex items-center justify-center flex-shrink-0">
+            <Package size={20} className="text-forest" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-charcoal">Produits donnés</p>
+            <p className="text-xs text-muted">Registre des produits : quoi, à qui, quand</p>
+          </div>
+          <ChevronRight size={18} className="text-muted flex-shrink-0" />
+        </Link>
       </div>
     </div>
   )

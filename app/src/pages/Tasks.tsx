@@ -493,16 +493,18 @@ export default function Tasks() {
     setShowForm(true)
   }
 
-  // Reporter une tâche à demain midi (bouton "→ Demain" dans la liste + bilan).
-  // Conserve récurrence, mode broadcast, assignedTo. Reset les flags de notif
-  // pour qu'une notif programmée parte bien à la nouvelle heure (si hasDueTime).
-  async function postponeToTomorrow(task: Task) {
+  // Décaler une tâche d'un jour (bouton "→ Jour suivant" dans la liste + bilan).
+  // Demande Nils 03/06/2026 : décale de +1 jour RELATIVEMENT à l'échéance actuelle
+  // de la tâche, sans tenir compte de la date du jour. Ainsi une tâche oubliée
+  // (en retard depuis hier) repart sur aujourd'hui, pas sur demain.
+  // Conserve l'heure de la journée (donc la notif programmée si hasDueTime),
+  // la récurrence, le mode broadcast, assignedTo. Reset les flags de notif.
+  async function postponeToNextDay(task: Task) {
     if (isTemp) return
     setPostponingId(task.id)
     try {
-      const d = new Date()
+      const d = new Date(task.dueDate)
       d.setDate(d.getDate() + 1)
-      d.setHours(12, 0, 0, 0)
       const updates: Record<string, unknown> = {
         dueDate: d.getTime(),
         reminderSentAt: null,
@@ -849,15 +851,16 @@ export default function Tasks() {
                       Reprendre
                     </button>
                   )}
-                  {/* Reporter à demain — demande Nils 25/05/2026 (visible sur toutes les tâches non faites) */}
+                  {/* Décaler d'un jour — demande Nils 25/05/2026, ajusté 03/06/2026
+                      (décalage relatif, visible sur toutes les tâches non faites) */}
                   <button
-                    onClick={() => postponeToTomorrow(task)}
+                    onClick={() => postponeToNextDay(task)}
                     disabled={postponingId === task.id}
                     className="text-xs font-semibold text-muted border border-border bg-cream
                                px-2.5 py-1.5 rounded-lg active:bg-cream/80 disabled:opacity-50
                                flex items-center gap-1"
                   >
-                    <ArrowRight size={11} /> Demain
+                    <ArrowRight size={11} /> Jour suivant
                   </button>
                 </div>
               )}

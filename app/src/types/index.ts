@@ -155,7 +155,7 @@ export interface Battery {
   note: string
 }
 
-export type PinType = 'water_natural' | 'water_manual' | 'battery' | 'zone' | 'fence' | 'note' | 'alert' | 'todo' | 'water_stream' | 'land_plot'
+export type PinType = 'water_natural' | 'water_manual' | 'battery' | 'zone' | 'fence' | 'note' | 'alert' | 'todo' | 'water_stream' | 'land_plot' | 'custom'
 
 export interface MapPin {
   id: string
@@ -170,6 +170,13 @@ export interface MapPin {
   updatedAt: number
   updatedBy?: string
   refId?: string
+
+  // ── custom (pin perso purement indicatif — Nils 03/06/2026) ──
+  // Pin libre avec emoji + couleur choisis par l'utilisatrice. La description
+  // est stockée dans `note` (réutilisé). Sert de repère visuel sur la carte
+  // (ex: "rocher dangereux", "passage à gué", "ancien abri").
+  customEmoji?: string
+  customColor?: string
 
   // ── water_manual ──
   intervalHours?: number
@@ -482,6 +489,24 @@ export interface AnimalCareEntry {
   // date + recurrenceDays ; et quand l'utilisateur "marque fait" la prochaine
   // échéance (= crée la nouvelle entrée), la récurrence est chaînée.
   recurrenceDays?: number
+}
+
+// Produit donné aux animaux — registre transversal de la ferme (page /products).
+// Demande Nils 03/06/2026 : tracer "quel produit, à quel(s) animal(aux), quand,
+// par qui". Distinct du carnet de soins (animal_care) qui est PAR animal : ici
+// une saisie peut concerner plusieurs animaux (ou tout le troupeau) en une fois.
+export interface AnimalProduct {
+  id:          string
+  productName: string     // nom du produit (ex: "Vermifuge Eqvalan", "Vitamines hiver")
+  animalIds:   string[]   // animaux concernés (vide = tout le troupeau / non précisé)
+  givenAt:     number     // quand le produit a été donné (timestamp ms)
+  givenBy:     string     // uid de la personne qui l'a donné ("avec qui")
+  dose?:       string     // quantité / dosage (optionnel, texte libre)
+  note?:       string     // remarque libre
+  createdAt:   number
+  createdBy:   string
+  updatedAt:   number
+  updatedBy?:  string
 }
 
 // Message ciblé envoyé d'un utilisateur (super-admin) à un autre. Sert principalement

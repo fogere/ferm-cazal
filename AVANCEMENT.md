@@ -407,4 +407,28 @@ Diagnostic final via tests Nils : saccadé **sur TOUS les fonds** (Aérien/Plan/
 
 ---
 
-*Dernière mise à jour : 3 juin 2026*
+## CE QUI EST FAIT — 11 juin 2026 (lot bug8.json : 3 bugs + 5 propositions)
+
+Traitement complet du lot de signalements `bug8.json`.
+
+### Bugs corrigés
+- **Snap non visualisé en mode "Définir un espace"** : la cible magnétique était calculée (`onSnapHover`) mais le marqueur n'était rendu qu'en mode clôture. Rendu désormais aussi en `plotMode`.
+- **Parcelles IGN "corrompues" / partielles à fort zoom** : la couche cadastrale avait `maxNativeZoom=20` alors que `CADASTRALPARCELS.PARCELLAIRE_EXPRESS` ne sert nativement que jusqu'au z19 (comme l'ortho/plan). Aligné sur 19 → Leaflet up-scale au lieu de réclamer des tuiles z20 inexistantes.
+- **Saisonnalité d'un ruisseau non modifiable après création** : ajout d'un éditeur de régime (permanent/saisonnier + mois) dans `WaterStreamPanel` (`onPatchSeasonality`).
+
+### Propositions implémentées
+- **Bouton "Demain" → "Jour suivant"** (Tasks + bilan du soir) : décale de +1 jour relativement à l'échéance de la tâche (et non par rapport à aujourd'hui) → une tâche oubliée d'hier repart sur aujourd'hui.
+- **Recherche carte étendue** : la barre de recherche trouve aussi les animaux (→ téléportation vers le centre de leur espace) et les espaces définis, en plus des épingles.
+- **Source naturelle intermittente** : ré-exposition du type `water_natural` (pin ponctuel saisonnier ≠ ruisseau tracé), avec rendu grisé 💤 hors saison + indicateur "à sec / coule" dans le panneau.
+- **Pins perso** : nouveau type `custom` (emoji + couleur + description) purement indicatif, éditable depuis son panneau, + **menu déroulant de filtre** sur la carte pour montrer/masquer chaque famille de pins (persisté localStorage).
+- **Page "Produits donnés"** (`/products`) : registre transversal des produits administrés aux animaux (quoi / à qui / quand / par qui) avec CRUD complet. Nouvelle collection `animal_products` + rules. Accès depuis le Dashboard.
+
+### Fichiers touchés
+- `app/src/pages/Map.tsx`, `app/src/pages/Tasks.tsx`, `app/src/pages/Dashboard.tsx`
+- `app/src/pages/map/panels/WaterStreamPanel.tsx`, `app/src/components/EveningRecapModal.tsx`
+- `app/src/pages/Products.tsx` (nouveau), `app/src/App.tsx`
+- `app/src/types/index.ts`, `app/firestore.rules`
+
+---
+
+*Dernière mise à jour : 11 juin 2026*

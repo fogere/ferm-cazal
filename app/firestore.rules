@@ -117,6 +117,15 @@ service cloud.firestore {
       allow write: if isRegularUser();
     }
 
+    // ── Registre des produits donnés aux animaux (page /products) ──
+    // Demande Nils 03/06/2026 : journal transversal "quel produit, à qui, quand,
+    // par qui". Lecture libre, écriture réservée aux réguliers (les aides
+    // temporaires ne saisissent pas de produits).
+    match /animal_products/{productId} {
+      allow read:  if hasAccess();
+      allow write: if isRegularUser();
+    }
+
     // ── Photos de suivi des animaux (galerie d'évolution) ──
     // Lecture pour tout utilisateur ayant accès. Création par tout utilisateur authentifié
     // (les aides peuvent aussi documenter l'évolution d'un problème). Suppression réservée

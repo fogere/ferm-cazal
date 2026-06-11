@@ -142,11 +142,14 @@ export default function EveningRecapModal() {
     return u?.color ?? '#6B7280'
   }
 
-  async function postponeToTomorrow(task: Task) {
+  // Décale de +1 jour relativement à l'échéance de la tâche (Nils 03/06/2026),
+  // en conservant l'heure de la journée. Cohérent avec Tasks.postponeToNextDay.
+  async function postponeToNextDay(task: Task) {
     setPostponingId(task.id)
     try {
-      const newDue = endOfDay(1) - 12 * 3600_000  // demain midi
-      await updateDoc(doc(db, 'tasks', task.id), { dueDate: newDue })
+      const d = new Date(task.dueDate)
+      d.setDate(d.getDate() + 1)
+      await updateDoc(doc(db, 'tasks', task.id), { dueDate: d.getTime() })
     } catch { /* ignoré silencieusement */ }
     finally { setPostponingId(null) }
   }
@@ -263,12 +266,12 @@ export default function EveningRecapModal() {
                     )}
                   </div>
                   <button
-                    onClick={() => postponeToTomorrow(t)}
+                    onClick={() => postponeToNextDay(t)}
                     disabled={postponingId === t.id}
                     className="text-[11px] font-bold text-forest border border-forest/30 bg-forest/5
                                px-2 py-1 rounded-lg active:scale-95 disabled:opacity-40 flex items-center gap-1"
                   >
-                    Demain <ArrowRight size={10} />
+                    Jour suivant <ArrowRight size={10} />
                   </button>
                 </div>
               ))}

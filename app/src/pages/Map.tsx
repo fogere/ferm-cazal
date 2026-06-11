@@ -3,7 +3,7 @@ import { useEffect, useState, useRef, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MapContainer, TileLayer, Marker, Polyline, Polygon, Circle, useMapEvents, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Check, Pencil, Undo2, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search } from 'lucide-react'
+import { Plus, X, Layers, LocateFixed, Trash2, Droplets, Check, Pencil, Undo2, MapPin as MapPinIcon, Camera, Image as ImageIcon, Search, SlidersHorizontal } from 'lucide-react'
 import { compressImage } from '../services/image'
 import type { PinPhoto, EnclosureMovement } from '../types'
 import {
@@ -76,7 +76,7 @@ const OSM_ATTR = '© <a href="https://www.openstreetmap.org/copyright" target="_
 /* ─── config épingles ─── */
 
 const PIN_CFG: Record<PinType, { emoji: string; label: string; color: string }> = {
-  water_natural: { emoji: '💧', label: 'Eau naturelle',    color: '#0EA5E9' },
+  water_natural: { emoji: '💧', label: 'Source naturelle', color: '#0EA5E9' },
   water_manual:  { emoji: '🪣', label: 'Eau manuelle',     color: '#0284C7' },
   battery:       { emoji: '⚡', label: 'Batterie clôture', color: '#F59E0B' },
   zone:          { emoji: '🐴', label: 'Zone animaux',     color: '#52B788' },
@@ -88,13 +88,41 @@ const PIN_CFG: Record<PinType, { emoji: string; label: string; color: string }> 
   // land_plot ajouté en S2 — pas encore d'UI dédiée (vient en S4).
   // Visuel par défaut : vert clair (terrain qui nous appartient).
   land_plot:     { emoji: '⛰',  label: 'Espace défini',  color: '#52B788' },
+  // custom : pin perso indicatif (Nils 03/06/2026). L'emoji/couleur réels viennent
+  // du pin (customEmoji/customColor) ; ces valeurs sont les défauts du sélecteur.
+  custom:        { emoji: '📌', label: 'Pin perso',       color: '#8B5CF6' },
 }
 
+// Palettes proposées dans le formulaire de pin perso.
+const CUSTOM_EMOJIS = ['📌','⭐','❗','🚧','🪨','🌳','🏚️','🕳️','🐍','🍄','🔥','💀','🚪','🧭','⚓','🎯']
+const CUSTOM_COLORS = ['#8B5CF6','#DC2626','#EA580C','#F59E0B','#16A34A','#0284C7','#DB2777','#475569']
+
+// Catégories du filtre d'affichage carte (Nils 03/06/2026 : menu déroulant pour
+// montrer/masquer des familles de pins). Chaque catégorie regroupe un ou plusieurs
+// PinType. La clé sert d'identifiant stable dans le Set des catégories masquées.
+const PIN_CATEGORIES: { key: string; label: string; emoji: string; types: PinType[] }[] = [
+  { key: 'water',   label: 'Points d\'eau', emoji: '💧', types: ['water_manual', 'water_natural', 'water_stream'] },
+  { key: 'battery', label: 'Batteries',     emoji: '⚡', types: ['battery'] },
+  { key: 'fence',   label: 'Clôtures',      emoji: '🔌', types: ['fence'] },
+  { key: 'space',   label: 'Espaces',       emoji: '⛰', types: ['land_plot'] },
+  { key: 'todo',    label: 'À faire',       emoji: '🪓', types: ['todo'] },
+  { key: 'alert',   label: 'Alertes',       emoji: '⚠️', types: ['alert'] },
+  { key: 'note',    label: 'Notes',         emoji: '📍', types: ['note'] },
+  { key: 'custom',  label: 'Mes pins',      emoji: '📌', types: ['custom'] },
+]
+const TYPE_TO_CAT: Partial<Record<PinType, string>> = (() => {
+  const m: Partial<Record<PinType, string>> = {}
+  for (const c of PIN_CATEGORIES) for (const t of c.types) m[t] = c.key
+  return m
+})()
+
 // Types disponibles dans le formulaire de pin ponctuel (fence + water_stream ont leurs outils dédiés).
-// Demande Eugénie 21/05/2026 V2 : remplacer water_natural (pin ponctuel) par water_stream (polyline).
-// On retire water_natural du sélecteur — les anciens points restent affichés tels quels jusqu'à
-// migration manuelle (delete + re-create en cours d'eau).
-const PICKABLE_TYPES: PinType[] = ['water_manual', 'battery', 'note', 'alert', 'todo']
+// Demande Eugénie 21/05/2026 V2 : water_stream (polyline) pour les cours d'eau linéaires.
+// Demande Nils 03/06/2026 : ré-introduire water_natural (pin PONCTUEL) pour les sources
+// naturelles non permanentes qui reviennent selon les mois (≠ ruisseau tracé). Le type, le
+// formulaire saisonnier (availabilityMode/activeMonths) et le rendu existaient déjà — il
+// suffisait de le ré-exposer dans le sélecteur.
+const PICKABLE_TYPES: PinType[] = ['water_manual', 'water_natural', 'battery', 'note', 'alert', 'todo', 'custom']
 
 /* ─── batteries ─── */
 
@@ -137,6 +165,29 @@ const WATER_STATUS_VISUAL: Record<
   frozen:     { bg: '#111827', emoji: '💧', badge: '🧊' }, // fond noir, goutte + petit glaçon
 }
 
+// Vrai si une source naturelle saisonnière est "à sec" ce mois-ci. Attention :
+// activeMonths (water_natural) est indexé 0-11 (janvier=0), contrairement à
+// streamActiveMonths (water_stream) qui est 1-12. On compare donc avec getMonth()
+// brut (0-11). Sert au rendu grisé + au panneau. Nils 03/06/2026.
+function isSeasonalDry(pin: MapPin, currentMonth0to11: number): boolean {
+  if (pin.type !== 'water_natural') return false
+  if (pin.availabilityMode !== 'seasonal') return false
+  const months = pin.activeMonths ?? []
+  if (months.length === 0) return false
+  return !months.includes(currentMonth0to11)
+}
+
+// Prochain mois actif (0-11) à partir du mois courant exclu, en bouclant sur l'année.
+// null si activeMonths est vide. Nils 03/06/2026.
+function nextActiveMonth(activeMonths: number[], currentMonth0to11: number): number | null {
+  if (activeMonths.length === 0) return null
+  for (let i = 1; i <= 12; i++) {
+    const m = (currentMonth0to11 + i) % 12
+    if (activeMonths.includes(m)) return m
+  }
+  return null
+}
+
 function makeDivIcon(
   type: PinType,
   overdue = false,
@@ -144,8 +195,16 @@ function makeDivIcon(
   waterStatus?: MapPin['waterStatus'],
   todoDone = false,
   batteryOff = false,
+  seasonalDry = false,
+  customEmoji?: string,
+  customColor?: string,
 ): L.DivIcon {
   let { emoji, color } = PIN_CFG[type]
+  // Pin perso : emoji + couleur viennent du pin lui-même (Nils 03/06/2026).
+  if (type === 'custom') {
+    if (customEmoji) emoji = customEmoji
+    if (customColor) color = customColor
+  }
   let statusBadge = ''
   if (type === 'water_natural' && waterStatus) {
     const v = WATER_STATUS_VISUAL[waterStatus]
@@ -157,6 +216,14 @@ function makeDivIcon(
         background:white;border:2px solid #111827;display:flex;align-items:center;justify-content:center;
         font-size:10px;line-height:1;box-shadow:0 1px 3px rgba(0,0,0,0.4);">${v.badge}</div>`
     }
+  }
+  // Source naturelle hors saison (Nils 03/06/2026) : grisée + badge 💤 pour signaler
+  // qu'elle est à sec ce mois-ci. La date de retour est lisible dans le panneau.
+  if (type === 'water_natural' && seasonalDry) {
+    color = '#94A3B8'
+    statusBadge = `<div style="position:absolute;bottom:-3px;right:-3px;width:18px;height:18px;border-radius:50%;
+      background:white;border:2px solid #475569;display:flex;align-items:center;justify-content:center;
+      font-size:10px;line-height:1;box-shadow:0 1px 3px rgba(0,0,0,0.4);">💤</div>`
   }
   // Todo "fait" : on grise le pin et on ajoute un badge ✓ pour qu'il reste visible
   // sur la carte (Eugénie peut revoir l'historique) sans crier comme un todo ouvert.
@@ -174,7 +241,7 @@ function makeDivIcon(
       font-size:11px;font-weight:bold;color:white;line-height:1;box-shadow:0 1px 3px rgba(0,0,0,0.4);">⊘</div>`
   }
   const border = overdue ? '3px solid #DC2626' : '2.5px solid white'
-  const opacity = (type === 'todo' && todoDone) || (type === 'battery' && batteryOff) ? '0.7' : '1'
+  const opacity = (type === 'todo' && todoDone) || (type === 'battery' && batteryOff) || (type === 'water_natural' && seasonalDry) ? '0.7' : '1'
   const photoBadge = hasPhotos
     ? `<div style="position:absolute;top:-3px;right:-3px;width:16px;height:16px;border-radius:50%;
         background:#1A4731;border:2px solid white;display:flex;align-items:center;justify-content:center;
@@ -195,8 +262,12 @@ function makeDivIcon(
 }
 
 // Icône fantôme semi-transparente qui suit le curseur
-function makeDivIconGhost(type: PinType): L.DivIcon {
-  const { emoji, color } = PIN_CFG[type]
+function makeDivIconGhost(type: PinType, customEmoji?: string, customColor?: string): L.DivIcon {
+  let { emoji, color } = PIN_CFG[type]
+  if (type === 'custom') {
+    if (customEmoji) emoji = customEmoji
+    if (customColor) color = customColor
+  }
   return L.divIcon({
     html: `<div style="background:${color};width:38px;height:38px;border-radius:50%;
       display:flex;align-items:center;justify-content:center;font-size:20px;
@@ -834,14 +905,14 @@ function FenceEditHitDetector({
 }
 
 // Curseur fantôme : suit la souris en mode ajout
-function CursorMarker({ active, type }: { active: boolean; type: PinType }) {
+function CursorMarker({ active, type, customEmoji, customColor }: { active: boolean; type: PinType; customEmoji?: string; customColor?: string }) {
   const [pos, setPos] = useState<[number, number] | null>(null)
   useMapEvents({
     mousemove(e) { if (active) setPos([e.latlng.lat, e.latlng.lng]) },
     mouseout()   { setPos(null) },
   })
   if (!active || !pos) return null
-  return <Marker position={pos} icon={makeDivIconGhost(type)} interactive={false} />
+  return <Marker position={pos} icon={makeDivIconGhost(type, customEmoji, customColor)} interactive={false} />
 }
 
 function FlyHome({ trigger }: { trigger: number }) {
@@ -947,6 +1018,9 @@ interface FormState {
   zoneCovered: string
   // zone
   currentOccupants: string[]
+  // custom (pin perso)
+  customEmoji: string
+  customColor: string
 }
 
 function blankForm(defaultUid: string): FormState {
@@ -956,6 +1030,7 @@ function blankForm(defaultUid: string): FormState {
     availabilityMode: 'always', activeMonths: [], waterStatus: 'functional', waterAnimals: [],
     batteryStatus: 'good', checkIntervalDays: 7, zoneCovered: '',
     currentOccupants: [],
+    customEmoji: CUSTOM_EMOJIS[0], customColor: CUSTOM_COLORS[0],
   }
 }
 
@@ -1014,6 +1089,24 @@ export default function MapPage() {
     try { localStorage.setItem('fm_map_parcels', showParcels ? '1' : '0') }
     catch { /* ignoré */ }
   }, [showParcels])
+  // Filtre d'affichage : catégories de pins MASQUÉES (Nils 03/06/2026). Persisté.
+  const [filterOpen,  setFilterOpen]  = useState(false)
+  const [hiddenCats,  setHiddenCats]  = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('fm_map_hidden_cats')
+      return raw ? new Set(JSON.parse(raw) as string[]) : new Set()
+    } catch { return new Set() }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('fm_map_hidden_cats', JSON.stringify([...hiddenCats])) }
+    catch { /* ignoré */ }
+  }, [hiddenCats])
+  const isCatHidden = (key: string) => hiddenCats.has(key)
+  const toggleCat = (key: string) => setHiddenCats(prev => {
+    const next = new Set(prev)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    return next
+  })
   const [tileError,    setTileError]    = useState<string | null>(null)
   const [addMode,      setAddMode]      = useState(false)
   const [pendingPos,   setPendingPos]   = useState<{ lat: number; lng: number } | null>(null)
@@ -1174,6 +1267,10 @@ export default function MapPage() {
   const [pinPhotos,      setPinPhotos]      = useState<PinPhoto[]>([])
   const [photoUploading, setPhotoUploading] = useState(false)
   const [photoViewer,    setPhotoViewer]    = useState<PinPhoto | null>(null)
+  // Édition inline de la description d'un pin perso (Nils 03/06/2026).
+  const [customDescEdit, setCustomDescEdit] = useState<string | null>(null)
+  // Reset le brouillon de description dès qu'on change (ou ferme) le pin sélectionné.
+  useEffect(() => { setCustomDescEdit(null) }, [selected?.id])
 
   // Historique mouvements d'animaux (pour enclos sélectionné)
   const [enclosureHistory, setEnclosureHistory] = useState<EnclosureMovement[]>([])
@@ -2389,6 +2486,14 @@ export default function MapPage() {
         Object.assign(base, { todoStatus: 'open' })
       }
 
+      // Pin perso : emoji + couleur indicatifs. La description est dans note.
+      if (form.type === 'custom') {
+        Object.assign(base, {
+          customEmoji: form.customEmoji || CUSTOM_EMOJIS[0],
+          customColor: form.customColor || CUSTOM_COLORS[0],
+        })
+      }
+
       await addDoc(collection(db, 'map_pins'), base)
       cancelAdd()
     } finally {
@@ -2973,13 +3078,19 @@ export default function MapPage() {
         />
 
         {/* Overlay parcelles cadastrales IGN — affichage à la demande
-            (voir limites officielles de terrain par-dessus l'aérien). */}
+            (voir limites officielles de terrain par-dessus l'aérien).
+            Bug Nils 03/06/2026 : depuis le passage de maxZoom à 20, les parcelles
+            apparaissaient "corrompues" / ne chargeaient qu'à certains zooms. Cause :
+            le service IGN CADASTRALPARCELS.PARCELLAIRE_EXPRESS ne sert nativement que
+            jusqu'au zoom 19 (comme l'ortho/plan, plafonnés à 19). Avec maxNativeZoom=20
+            Leaflet réclamait des tuiles z20 inexistantes → tuiles en erreur. On aligne
+            sur 19 : Leaflet up-scale alors la tuile z19 au zoom 20 (parcelles continues). */}
         {showParcels && (
           <TileLayer
             key="parcels-overlay"
             url={IGN_PARCELS}
             attribution=""
-            maxNativeZoom={20}
+            maxNativeZoom={19}
             maxZoom={20}
             opacity={0.7}
             zIndex={400}
@@ -3073,7 +3184,7 @@ export default function MapPage() {
 
         {/* Curseur fantôme qui suit la souris */}
         {anyModeActive && !fenceFormVisible && (
-          <CursorMarker active={true} type={fenceMode ? 'fence' : form.type} />
+          <CursorMarker active={true} type={fenceMode ? 'fence' : form.type} customEmoji={form.customEmoji} customColor={form.customColor} />
         )}
 
         {/* ── Espaces définis (land_plot) — autonomes uniquement ── */}
@@ -3081,19 +3192,19 @@ export default function MapPage() {
             ici : leur fence jumeau couvre déjà le visuel.
             Les holes (zones vides intérieures) sont rendus comme polygons imbriqués —
             Leaflet supporte le format [outer, ...holes] pour découper le fill. */}
-        {landPlotLayers}
+        {!isCatHidden('space') && landPlotLayers}
 
         {/* ── Clôtures ──
             S9 : une clôture est TOUJOURS une polyline, peu importe son état
             (ouverte, bouclée, ex-enclos). Le rôle d'espace appartient
             uniquement aux land_plot. Demande Nils 22/05/2026.
             (Couches mémoïsées — cf. landPlotLayers/fenceLayers/landPlotLabels.) */}
-        {fenceLayers}
+        {!isCatHidden('fence') && fenceLayers}
 
         {/* Labels animaux dans les espaces (land_plot) — position GARANTIE à l'intérieur du polygone.
             S9 : les labels appartiennent désormais aux land_plot, pas aux fences fermés.
             Bug Eugénie 20/05/2026 : ne pas afficher "Vide" en vue large — ça surcharge la carte. */}
-        {landPlotLabels}
+        {!isCatHidden('space') && landPlotLabels}
 
         {/* Clôture en cours de dessin */}
         {fenceMode && fencePoints.length > 0 && (
@@ -3180,7 +3291,7 @@ export default function MapPage() {
         {/* Cours d'eau enregistrés — un segment Polyline par paire de points consécutifs,
             pour pouvoir afficher des atténuations manuelles différentes selon le tronçon
             (Phase 2 demande Eugénie 21/05/2026). */}
-        {pins.filter(p => p.type === 'water_stream' && (p.points?.length ?? 0) >= 2).flatMap(pin => {
+        {!isCatHidden('water') && pins.filter(p => p.type === 'water_stream' && (p.points?.length ?? 0) >= 2).flatMap(pin => {
           const segments = getStreamSegments(pin, new Date().getMonth() + 1)
           // Bug Nils 22/05/2026 : hitbox élargie pour la sélection — un trait
           // invisible (opacity 0) plus épais doublé du trait visuel donne au doigt
@@ -3342,8 +3453,12 @@ export default function MapPage() {
 
         {/* Indicateur snap (point magnétique) en CRÉATION. En édition, l'anneau est
             piloté en impératif via showSnapRing (cf. snapMarkerRef) pour ne pas
-            re-rendre la carte pendant le drag. */}
-        {fenceMode && fenceSnapTarget && (
+            re-rendre la carte pendant le drag.
+            Bug Nils 03/06/2026 : l'anneau n'apparaissait qu'en mode clôture alors
+            que le snap opère aussi en mode "Définir un espace" (plotMode) — la cible
+            était calculée (onSnapHover) mais jamais affichée. On rend donc le marqueur
+            pour les deux modes. */}
+        {(fenceMode || plotMode) && fenceSnapTarget && (
           <Marker
             position={[fenceSnapTarget.lat, fenceSnapTarget.lng]}
             icon={makeSnapIcon(fenceSnapTarget.isClose)}
@@ -3405,6 +3520,10 @@ export default function MapPage() {
             visibles à tous les zooms pour rester repérables de loin. */}
         {nonFencePins
           .filter(pin => {
+            // Filtre d'affichage par catégorie (Nils 03/06/2026) — masque toute
+            // la famille même les pins "toujours visibles" ci-dessous.
+            const cat = TYPE_TO_CAT[pin.type]
+            if (cat && isCatHidden(cat)) return false
             if (mapZoom >= LABEL_ZOOM_LOW) return true
             // Pins toujours visibles : alertes + tâches à faire en cours +
             // batteries en panne (utile en vue dézoom pour repérer rapidement).
@@ -3420,7 +3539,7 @@ export default function MapPage() {
             <Marker
               key={pin.id}
               position={[pin.lat, pin.lng]}
-              icon={makeDivIcon(pin.type, overduePins.has(pin.id), (pin.photoCount ?? 0) > 0, pin.waterStatus, pin.todoStatus === 'done', pin.type === 'battery' && pin.powerOn === false)}
+              icon={makeDivIcon(pin.type, overduePins.has(pin.id), (pin.photoCount ?? 0) > 0, pin.waterStatus, pin.todoStatus === 'done', pin.type === 'battery' && pin.powerOn === false, isSeasonalDry(pin, new Date().getMonth()), pin.customEmoji, pin.customColor)}
               interactive={false}
             />
           ))}
@@ -3437,7 +3556,7 @@ export default function MapPage() {
 
         {/* Position en attente de confirmation */}
         {pendingPos && (
-          <Marker position={[pendingPos.lat, pendingPos.lng]} icon={makeDivIcon(form.type)} />
+          <Marker position={[pendingPos.lat, pendingPos.lng]} icon={makeDivIcon(form.type, false, false, undefined, false, false, false, form.customEmoji, form.customColor)} />
         )}
 
         {/* Positions GPS partagées des AUTRES membres (lues depuis Firestore,
@@ -3977,11 +4096,71 @@ export default function MapPage() {
           className={`shadow-lg rounded-xl p-3 active:scale-95 transition-all ${
             searchOpen ? 'bg-forest text-white' : 'bg-card'
           }`}
-          title="Rechercher une épingle par nom"
+          title="Rechercher un animal, un espace ou une épingle"
         >
           <Search size={20} className={searchOpen ? 'text-white' : 'text-forest'} />
         </button>
+        <button
+          onClick={() => setFilterOpen(v => !v)}
+          className={`shadow-lg rounded-xl p-3 active:scale-95 transition-all relative ${
+            filterOpen ? 'bg-forest text-white' : 'bg-card'
+          }`}
+          title="Filtrer l'affichage des pins"
+          aria-pressed={filterOpen}
+        >
+          <SlidersHorizontal size={20} className={filterOpen ? 'text-white' : 'text-forest'} />
+          {hiddenCats.size > 0 && (
+            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-sun text-earth text-[9px] font-bold flex items-center justify-center border border-white">
+              {hiddenCats.size}
+            </span>
+          )}
+        </button>
       </div>
+
+      {/* ── Menu déroulant : filtre d'affichage des pins (Nils 03/06/2026) ── */}
+      {filterOpen && (
+        <div className="absolute top-4 right-20 z-[1100] w-60 bg-card shadow-xl rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-border/50 flex items-center justify-between">
+            <p className="text-sm font-bold text-charcoal">Afficher sur la carte</p>
+            <button onClick={() => setFilterOpen(false)} className="p-1 rounded-lg active:bg-cream">
+              <X size={16} className="text-muted" />
+            </button>
+          </div>
+          <ul className="py-1 max-h-[60vh] overflow-y-auto">
+            {PIN_CATEGORIES.map(cat => {
+              const visible = !isCatHidden(cat.key)
+              return (
+                <li key={cat.key}>
+                  <button
+                    onClick={() => toggleCat(cat.key)}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-left active:bg-cream transition-colors"
+                  >
+                    <span className="text-base flex-shrink-0">{cat.emoji}</span>
+                    <span className={`flex-1 text-sm font-semibold ${visible ? 'text-charcoal' : 'text-muted line-through'}`}>
+                      {cat.label}
+                    </span>
+                    <span className={`w-9 h-5 rounded-full flex items-center transition-colors flex-shrink-0 ${
+                      visible ? 'bg-forest justify-end' : 'bg-border justify-start'
+                    } px-0.5`}>
+                      <span className="w-4 h-4 rounded-full bg-white shadow" />
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+          {hiddenCats.size > 0 && (
+            <div className="px-4 py-2.5 border-t border-border/50">
+              <button
+                onClick={() => setHiddenCats(new Set())}
+                className="text-xs font-semibold text-forest underline active:opacity-70"
+              >
+                Tout afficher
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Panneau recherche (déroulant au top-center) ── */}
       {searchOpen && (
@@ -3992,7 +4171,7 @@ export default function MapPage() {
               type="text"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Rechercher : bac, batterie, enclos…"
+              placeholder="Rechercher : un animal, un espace, une épingle…"
               className="flex-1 bg-transparent outline-none text-sm text-charcoal min-w-0"
               autoFocus
             />
@@ -4004,19 +4183,83 @@ export default function MapPage() {
           </div>
           {searchQuery.trim().length > 0 && (() => {
             const q = searchQuery.trim().toLowerCase()
-            const results = pins
+            // Animaux → téléportation vers le centre de leur espace (enclos). Demande
+            // Nils 03/06/2026 : taper "Darius" amène directement au parc où il est.
+            const animalResults = animals
+              .filter(a => a.name && a.name.toLowerCase().includes(q))
+              .slice(0, 6)
+              .map(a => ({ a, plot: a.enclosureId ? landPlotPins.find(p => p.id === a.enclosureId) ?? null : null }))
+            // Espaces définis (land_plot) → centre du polygone.
+            const spaceResults = landPlotPins
               .filter(p => p.name && p.name.toLowerCase().includes(q))
+              .slice(0, 6)
+            // Épingles ponctuelles (eau, batterie, note, clôture…) hors espaces.
+            const pinResults = pins
+              .filter(p => p.type !== 'land_plot' && p.name && p.name.toLowerCase().includes(q))
               .slice(0, 8)
+            const total = animalResults.length + spaceResults.length + pinResults.length
+
+            const plotCenter = (p: MapPin) =>
+              p.points && p.points.length >= 3 ? insidePolygonCentroid(p.points) : { lat: p.lat, lng: p.lng }
+
             return (
-              <div className="bg-card shadow-lg rounded-xl max-h-[50vh] overflow-y-auto">
-                {results.length === 0 ? (
-                  <p className="px-3 py-3 text-xs text-muted italic">Aucune épingle trouvée pour « {searchQuery.trim()} »</p>
+              <div className="bg-card shadow-lg rounded-xl max-h-[55vh] overflow-y-auto">
+                {total === 0 ? (
+                  <p className="px-3 py-3 text-xs text-muted italic">Aucun résultat pour « {searchQuery.trim()} »</p>
                 ) : (
                   <ul>
-                    {results.map(p => {
+                    {/* Animaux */}
+                    {animalResults.map(({ a, plot }) => (
+                      <li key={`a-${a.id}`}>
+                        <button
+                          onClick={() => {
+                            if (plot) {
+                              const c = plotCenter(plot)
+                              setFlyTarget({ lat: c.lat, lng: c.lng, zoom: 18, key: Date.now() })
+                              setSelected(plot)
+                            }
+                            setSearchOpen(false)
+                            setSearchQuery('')
+                          }}
+                          disabled={!plot}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 text-left active:bg-cream transition-colors border-b border-border/40 last:border-0 disabled:opacity-50"
+                        >
+                          <span className="text-base flex-shrink-0">{getSpeciesInfo(a.species, customSpecies).emoji}</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-charcoal truncate">{a.name}</p>
+                            <p className="text-xs text-muted truncate">
+                              {plot ? `🐾 dans ${plot.name}` : '🐾 animal non placé'}
+                            </p>
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                    {/* Espaces définis */}
+                    {spaceResults.map(p => (
+                      <li key={`s-${p.id}`}>
+                        <button
+                          onClick={() => {
+                            const c = plotCenter(p)
+                            setFlyTarget({ lat: c.lat, lng: c.lng, zoom: 17, key: Date.now() })
+                            setSelected(p)
+                            setSearchOpen(false)
+                            setSearchQuery('')
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 text-left active:bg-cream transition-colors border-b border-border/40 last:border-0"
+                        >
+                          <span className="text-base flex-shrink-0">{PIN_CFG.land_plot.emoji}</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-charcoal truncate">{p.name}</p>
+                            <p className="text-xs text-muted">Espace défini</p>
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                    {/* Épingles ponctuelles */}
+                    {pinResults.map(p => {
                       const cfg = PIN_CFG[p.type]
                       return (
-                        <li key={p.id}>
+                        <li key={`p-${p.id}`}>
                           <button
                             onClick={() => {
                               setFlyTarget({ lat: p.lat, lng: p.lng, zoom: p.type === 'fence' ? 17 : 19, key: Date.now() })
@@ -4864,12 +5107,50 @@ export default function MapPage() {
                 </FormSection>
               )}
 
-              {/* Note */}
+              {/* ── Champs pin perso (emoji + couleur) ── */}
+              {form.type === 'custom' && (
+                <>
+                  <FormSection label="Emoji">
+                    <div className="grid grid-cols-8 gap-1.5">
+                      {CUSTOM_EMOJIS.map(em => (
+                        <button key={em} type="button"
+                          onClick={() => setForm(f => ({ ...f, customEmoji: em }))}
+                          className={`py-2 rounded-xl border text-lg transition-all ${
+                            form.customEmoji === em ? 'border-forest bg-forest/10' : 'border-border bg-cream'
+                          }`} disabled={saving}>{em}</button>
+                      ))}
+                    </div>
+                  </FormSection>
+                  <FormSection label="Couleur">
+                    <div className="flex flex-wrap gap-2">
+                      {CUSTOM_COLORS.map(col => (
+                        <button key={col} type="button"
+                          onClick={() => setForm(f => ({ ...f, customColor: col }))}
+                          className={`w-9 h-9 rounded-full transition-all ${
+                            form.customColor === col ? 'ring-2 ring-offset-2 ring-charcoal' : ''
+                          }`} style={{ backgroundColor: col }} disabled={saving}
+                          aria-label={`Couleur ${col}`} />
+                      ))}
+                    </div>
+                  </FormSection>
+                  <FormSection label="Aperçu">
+                    <div className="flex items-center gap-2">
+                      <span className="w-9 h-9 rounded-full flex items-center justify-center text-lg border-2 border-white shadow"
+                            style={{ backgroundColor: form.customColor }}>{form.customEmoji}</span>
+                      <span className="text-sm text-muted">{form.name.trim() || 'Sans nom'}</span>
+                    </div>
+                  </FormSection>
+                </>
+              )}
+
+              {/* Note / description */}
               <div>
-                <label className="block text-xs font-semibold text-muted uppercase tracking-wider mb-2">Note (optionnel)</label>
+                <label className="block text-xs font-semibold text-muted uppercase tracking-wider mb-2">
+                  {form.type === 'custom' ? 'Description (optionnel)' : 'Note (optionnel)'}
+                </label>
                 <textarea value={form.note}
                   onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
-                  placeholder="Informations supplémentaires…"
+                  placeholder={form.type === 'custom' ? 'À quoi sert ce repère ?' : 'Informations supplémentaires…'}
                   rows={2}
                   className="w-full px-4 py-3 rounded-xl border border-border bg-cream text-charcoal text-sm
                              placeholder:text-muted/50 focus:outline-none focus:ring-2 focus:ring-forest focus:border-transparent resize-none"
@@ -5541,6 +5822,24 @@ export default function MapPage() {
                 {selected.availabilityMode === 'seasonal' && selected.activeMonths && selected.activeMonths.length > 0 && (
                   <DetailRow label="Mois actifs" value={selected.activeMonths.map(m => MONTHS_FR[m]).join(', ')} />
                 )}
+                {selected.availabilityMode === 'seasonal' && selected.activeMonths && selected.activeMonths.length > 0 && (
+                  isSeasonalDry(selected, new Date().getMonth()) ? (
+                    <div className="rounded-xl p-2.5 bg-slate-100 border border-slate-300 flex items-center gap-2">
+                      <span className="text-base">💤</span>
+                      <span className="text-xs font-semibold text-slate-600">
+                        À sec ce mois-ci{(() => {
+                          const next = nextActiveMonth(selected.activeMonths, new Date().getMonth())
+                          return next !== null ? ` — revient en ${MONTHS_FR[next]}` : ''
+                        })()}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl p-2.5 bg-sky/10 border border-sky/30 flex items-center gap-2">
+                      <Droplets size={16} className="text-sky" />
+                      <span className="text-xs font-semibold text-sky">Coule actuellement</span>
+                    </div>
+                  )
+                )}
                 {selected.waterAnimals && selected.waterAnimals.length > 0 && (
                   <DetailRow label="Animaux" value={selected.waterAnimals.join(', ')} />
                 )}
@@ -5576,6 +5875,19 @@ export default function MapPage() {
                       updatedBy: user.uid,
                     })
                     setSelected({ ...selected, streamAttenuations: next })
+                  } finally { setActionBusy(false) }
+                }}
+                onPatchSeasonality={async (mode, months) => {
+                  if (!user) return
+                  setActionBusy(true)
+                  try {
+                    await updateDoc(doc(db, 'map_pins', selected.id), {
+                      streamMode:         mode,
+                      streamActiveMonths: months,
+                      updatedAt: Date.now(),
+                      updatedBy: user.uid,
+                    })
+                    setSelected({ ...selected, streamMode: mode, streamActiveMonths: months })
                   } finally { setActionBusy(false) }
                 }}
                 onStartEditTrace={startEditFence}
@@ -5758,8 +6070,76 @@ export default function MapPage() {
               </div>
             )}
 
+            {/* ── Bloc pin perso : aperçu + description éditable ── */}
+            {selected.type === 'custom' && (
+              <div className="mb-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-9 h-9 rounded-full flex items-center justify-center text-lg border-2 border-white shadow flex-shrink-0"
+                        style={{ backgroundColor: selected.customColor ?? PIN_CFG.custom.color }}>
+                    {selected.customEmoji ?? PIN_CFG.custom.emoji}
+                  </span>
+                  <span className="text-sm font-semibold text-charcoal">Repère personnel</span>
+                </div>
+
+                {customDescEdit === null ? (
+                  <div className="bg-cream rounded-xl p-3 border border-border">
+                    {selected.note
+                      ? <p className="text-charcoal text-sm leading-relaxed whitespace-pre-wrap">{selected.note}</p>
+                      : <p className="text-muted text-sm italic">Aucune description.</p>}
+                    {!isTemp && (
+                      <button
+                        onClick={() => setCustomDescEdit(selected.note ?? '')}
+                        className="mt-2 text-xs font-semibold text-forest underline active:opacity-70"
+                      >
+                        {selected.note ? 'Modifier la description' : 'Ajouter une description'}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <textarea
+                      value={customDescEdit}
+                      onChange={e => setCustomDescEdit(e.target.value)}
+                      rows={3}
+                      autoFocus
+                      placeholder="À quoi sert ce repère ?"
+                      className="w-full px-3 py-2 rounded-xl border border-border bg-cream text-charcoal text-sm
+                                 focus:outline-none focus:ring-2 focus:ring-forest resize-none"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setCustomDescEdit(null)}
+                        disabled={actionBusy}
+                        className="flex-1 py-2 rounded-lg border border-border text-sm font-semibold text-muted bg-card active:bg-cream disabled:opacity-40"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (!user) return
+                          setActionBusy(true)
+                          try {
+                            const next = customDescEdit.trim()
+                            await updateDoc(doc(db, 'map_pins', selected.id), {
+                              note: next, updatedAt: Date.now(), updatedBy: user.uid,
+                            })
+                            setSelected({ ...selected, note: next })
+                            setCustomDescEdit(null)
+                          } finally { setActionBusy(false) }
+                        }}
+                        disabled={actionBusy}
+                        className="flex-1 py-2 rounded-lg bg-forest text-white text-sm font-bold active:opacity-90 disabled:opacity-40"
+                      >
+                        {actionBusy ? 'Enregistrement…' : 'Enregistrer'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Note générale */}
-            {selected.note && selected.type !== 'fence' && (
+            {selected.note && selected.type !== 'fence' && selected.type !== 'custom' && (
               <div className="bg-cream rounded-xl p-3 mb-4 border border-border">
                 <p className="text-charcoal text-sm leading-relaxed">{selected.note}</p>
               </div>

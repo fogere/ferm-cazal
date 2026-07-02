@@ -473,4 +473,40 @@ Dashboard). `tsc --noEmit` + `npm run build` verts.
 
 ---
 
+## CHANTIER FLUIDITÉ / HYGIÈNE — 2 juillet 2026 (lot 1 : découpe Map.tsx)
+
+Objectif défini avec Nils : **fluidité** (« c'est horrible ») + **règle « aucun fichier
+> 5K lignes »**. Diagnostic chiffré : le coupable des deux est **Map.tsx** (6349 lignes,
+94 `useState`, 0 `React.memo`). Le reste de l'app est sain (routing lazy + préchargé).
+Approche : découpe incrémentale, behavior-preserving stricte, tsc/build vert à chaque pas.
+
+### Extraction 1 — couche pins en `React.memo`
+- Le bloc de `<Marker>` des épingles était rendu **inline dans MapPage** → recréé à
+  chaque render (et avec 94 `useState`, ça arrive souvent). Isolé en composant
+  `React.memo` → ne se re-render que si ses props changent (pins/zoom/retards/filtre).
+  Markers non-interactifs (sélection par hit-test carte) → extraction sans risque.
+
+### Extraction 2 — sortie en fichiers (fait maigrir Map.tsx)
+- Nouveau `app/src/services/map/pinIcons.ts` (151 l) : `PIN_CFG`, `PIN_CATEGORIES`,
+  `TYPE_TO_CAT`, `WATER_STATUS_VISUAL`, `isSeasonalDry`, `makeDivIcon`, seuils
+  `LABEL_ZOOM*`. Helpers purs, réutilisables par les futures couches.
+- Nouveau `app/src/pages/map/layers/PinMarkersLayer.tsx` (53 l) : la couche mémoïsée.
+- **Map.tsx : 6349 → 6203 lignes.** Toujours > 5K — la campagne continue (isoler
+  d'autres couches en fichiers réduira encore).
+
+### Vérif
+- `tsc --noEmit` + `npm run build` verts. Chunk Map inchangé (~200 kB) — comportement
+  identique, c'est du déplacement + mémoïsation.
+- Déployé sur le-cazal.web.app. À tester : la carte marche pareil (pins affichés,
+  sélection, ajout de pin, filtre catégorie, clôtures/espaces).
+
+### Suite du chantier (prochains lots)
+- Isoler d'autres couches lourdes en `React.memo` + fichiers (markers autres membres,
+  ruisseaux, labels enclos) → gain fluidité cumulé + Map.tsx sous 5K.
+- Puis s'attaquer à la surface de re-render (94 `useState`) : regrouper les états de
+  mode UI pour qu'ils ne re-render plus toute la carte.
+- Rafraîchir `ARCHITECTURE.md` (dit encore Map = 4400).
+
+---
+
 *Dernière mise à jour : 2 juillet 2026*

@@ -320,3 +320,10 @@ button {
     animation: none;
   }
 }
+/* Perf Nils 02/07/2026 : pendant un déplacement (classe posée par ZoomTracker sur
+   movestart/zoomstart, retirée sur moveend/zoomend), on coupe l'animation SVG des
+   clôtures. L'animation de stroke-dashoffset re-rastérise le tracé à chaque frame
+   (CPU) → c'est le principal poids ressenti au pan/zoom. À l'arrêt, elle reprend. */
+.leaflet-container.map-moving .fence-electric-flow {
+  animation: none !important;
+}

@@ -802,9 +802,16 @@ function persistView(map: L.Map) {
 
 function ZoomTracker({ onZoom }: { onZoom: (z: number) => void }) {
   // zoomend → maj du zoom (seuils d'affichage labels) ; move/zoom → persistance de la vue.
+  // Perf Nils 02/07/2026 : pendant un pan/zoom, on ajoute la classe `map-moving` sur le
+  // conteneur pour COUPER l'animation SVG des clôtures électriques (stroke-dashoffset =
+  // repaint CPU 60 fps du tracé, cf. index.css .fence-electric-flow) — c'est ce qui
+  // alourdit le déplacement (et faisait chauffer le tél d'Eugénie). Elle reprend à
+  // l'arrêt du geste. Toggle DOM impératif → aucun re-render React.
   useMapEvents({
-    zoomend(e)  { const m = e.target as L.Map; onZoom(m.getZoom()); persistView(m) },
-    moveend(e)  { persistView(e.target as L.Map) },
+    movestart(e) { (e.target as L.Map).getContainer().classList.add('map-moving') },
+    zoomstart(e) { (e.target as L.Map).getContainer().classList.add('map-moving') },
+    zoomend(e)  { const m = e.target as L.Map; m.getContainer().classList.remove('map-moving'); onZoom(m.getZoom()); persistView(m) },
+    moveend(e)  { const m = e.target as L.Map; m.getContainer().classList.remove('map-moving'); persistView(m) },
   })
   return null
 }

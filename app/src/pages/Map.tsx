@@ -2918,8 +2918,22 @@ export default function MapPage() {
           eventHandlers={{
             tileloadstart: () => { if (tileError) setTileError(null) },
             tileerror: (e) => {
-              const url = (e as unknown as { tile?: HTMLImageElement }).tile?.src ?? ''
-              console.warn('[Map] tile error', url)
+              // Self-heal (Nils 02/07/2026) : une tuile en échec (throttle transitoire
+              // IGN sur une tuile pas encore en cache, ou hoquet réseau) est re-demandée
+              // jusqu'à 2× avant d'abandonner → évite les carrés noirs persistants sur un
+              // simple raté ponctuel. Le proxy Cloudflare ne cache pas les erreurs, donc
+              // le retry retombe sur une vraie requête.
+              const img = (e as unknown as { tile?: HTMLImageElement }).tile
+              if (img) {
+                const tries = Number(img.dataset.retry ?? '0')
+                if (tries < 2) {
+                  img.dataset.retry = String(tries + 1)
+                  const src = img.src
+                  setTimeout(() => { img.src = src }, 600 * (tries + 1))
+                  return
+                }
+                console.warn('[Map] tile error (abandon après 2 essais)', img.src)
+              }
               setTileError(layer)
             },
           }}

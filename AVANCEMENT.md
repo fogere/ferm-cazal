@@ -431,4 +431,46 @@ Traitement complet du lot de signalements `bug8.json`.
 
 ---
 
-*Dernière mise à jour : 11 juin 2026*
+## CE QUI EST FAIT — 2 juillet 2026 (lot V8.json : refonte vue Tâches + tri alpha)
+
+Traitement des 2 signalements de `V8.json` (tous deux sur la page **Tâches**, pas le
+Dashboard). `tsc --noEmit` + `npm run build` verts.
+
+### ① Timeline « historique des jours » façon Genshin (nouveau composant)
+- Nouveau composant **`app/src/components/tasks/TaskDayTimeline.tsx`** (zéro risque —
+  fichier ajouté, pas de modif de la logique existante des tâches). Une rangée de
+  **ronds datés reliés** par une ligne ; l'anneau SVG de chaque jour se remplit selon
+  le nombre de tâches cochées ce jour-là (relatif au jour le plus chargé de la fenêtre).
+  Chiffre au centre = nb de tâches faites. Jour sélectionné = anneau surligné meadow.
+- **Clic sur un jour** → panneau en dessous listant les tâches faites ce jour-là, en
+  **typographie classique** (check vert + titre normal + zone + heure · auteur) —
+  **plus de texte rayé en gris** (demande explicite Nils).
+- Placée **en haut** de `/tasks`, juste sous le header, avant les filtres.
+- **Rétention 6 jours** : remplace l'ancien `doneRecent.slice(0, 20)` (les 20 dernières
+  faites, que Nils prenait pour un « effacement à 20 »). La timeline montre les 6 derniers
+  jours ; les tâches faites au-delà ne sont plus listées. Fenêtre = constante
+  `historyDays` du composant (mise à 6 pour coller pile à la rétention).
+- Supprimé : l'ancienne section repliable « Faites récemment » (state `showDone`, memo
+  `doneRecent`, imports `ChevronDown`/`ChevronRight`) dans `Tasks.tsx`.
+
+### ② Tri alphabétique des tâches
+- Dans `grouped` (Tasks.tsx), chaque groupe (En retard / Aujourd'hui / Demain / À venir)
+  est trié par `title.localeCompare(fr, sensitivity:'base')`. Avant : ordre d'échéance
+  → « tout dans le désordre » selon Nils.
+
+### Non touché volontairement
+- Le Dashboard (« catégorie home » à ne pas toucher) : inchangé.
+- Le rendu `line-through` des tâches broadcast cochées visibles 24 h dans la liste des
+  tâches en cours (comportement d'équipe existant, distinct de l'historique).
+
+### Fichiers touchés
+- `app/src/components/tasks/TaskDayTimeline.tsx` (nouveau)
+- `app/src/pages/Tasks.tsx`
+
+### Reste à faire (validation Nils)
+- Tester en dev / prod, ajuster : nb de ronds (6 → 5 si tu préfères ta description
+  initiale), taille, position. Puis déploiement (`npm run build && firebase deploy --only hosting`).
+
+---
+
+*Dernière mise à jour : 2 juillet 2026*

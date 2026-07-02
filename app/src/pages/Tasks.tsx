@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import {
-  Plus, X, CheckCircle2, Circle, AlertTriangle, RotateCcw, ChevronDown, ChevronRight,
+  Plus, X, CheckCircle2, Circle, AlertTriangle, RotateCcw,
   Trash2, Hand, Bell, BellRing, Pencil, ArrowRight, Droplets, Square, Heart,
 } from 'lucide-react'
 import {
@@ -13,6 +13,7 @@ import { timeAgo } from '../services/map/time'
 import type { Task, UserProfile, MapPin } from '../types'
 import MapPicker from '../components/MapPicker'
 import TaskDoneFlash from '../components/TaskDoneFlash'
+import TaskDayTimeline from '../components/tasks/TaskDayTimeline'
 
 /* ─── helpers ─── */
 
@@ -172,7 +173,6 @@ export default function Tasks() {
   const [editingId, setEditingId] = useState<string | null>(null)  // null = création
   const [form, setForm]           = useState<FormState>(blankForm)
   const [saving, setSaving]       = useState(false)
-  const [showDone, setShowDone]   = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [urgentForId, setUrgentForId] = useState<string | null>(null)
   // Picker carte (open quand on clique "Choisir sur la carte" depuis le form)
@@ -245,16 +245,13 @@ export default function Tasks() {
   const grouped = useMemo(() => {
     const map: Record<Bucket, Task[]> = { overdue: [], today: [], tomorrow: [], upcoming: [] }
     filtered.forEach(t => map[getBucket(t.dueDate)].push(t))
+    // Demande Nils V8 (02/07/2026) : tâches triées par ordre alphabétique dans
+    // chaque groupe (avant : ordre d'échéance → « tout dans le désordre »).
+    for (const b of BUCKET_ORDER) {
+      map[b].sort((a, b2) => a.title.localeCompare(b2.title, 'fr', { sensitivity: 'base' }))
+    }
     return map
   }, [filtered])
-
-  const doneRecent = useMemo(
-    () => allTasks
-      .filter(t => t.completed)
-      .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))
-      .slice(0, 20),
-    [allTasks],
-  )
 
   const counts = useMemo(() => ({
     all:       pendingAll.length,
@@ -931,8 +928,15 @@ export default function Tasks() {
         </p>
       </div>
 
+      {/* Timeline historique des jours — « ce qu'on a fait » (demande Nils V8, 02/07/2026).
+          Ronds datés reliés + pastille de complétion ; clic sur un jour = détail des
+          tâches faites ce jour-là. Fenêtre = 6 derniers jours (rétention). */}
+      <div className="px-4 mt-4">
+        <TaskDayTimeline tasks={allTasks} users={users} />
+      </div>
+
       {/* Filtres */}
-      <div className="px-4 mt-3 flex gap-2">
+      <div className="px-4 mt-4 flex gap-2">
         <button
           onClick={() => setFilter('all')}
           className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all
@@ -991,25 +995,6 @@ export default function Tasks() {
           </div>
         )}
 
-        {/* Faites récemment */}
-        {doneRecent.length > 0 && (
-          <div>
-            <button
-              onClick={() => setShowDone(v => !v)}
-              className="flex items-center gap-1.5 text-xs font-semibold text-muted uppercase tracking-wider px-1 mb-2"
-            >
-              {showDone ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              Faites récemment ({doneRecent.length})
-            </button>
-            {showDone && (
-              <div className="bg-card rounded-2xl px-3 shadow-sm">
-                <ul className="divide-y divide-border/50">
-                  {doneRecent.map(t => <TaskRow key={t.id} task={t} />)}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Modal urgent release */}

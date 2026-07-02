@@ -2894,6 +2894,12 @@ export default function MapPage() {
         maxZoom={20}
         style={{ height: '100%', width: '100%' }}
         zoomControl={false}
+        // Perf Nils 02/07/2026 : le cache des tuiles est prouvé instantané (test autonome
+        // tile-cache-test : revisite = 1 ms, 0 réseau). Le ralenti perçu = le FONDU par
+        // défaut de Leaflet (~250 ms) : une tuile déjà en cache reste visuellement sombre
+        // le temps du fade → les "carrés sombres" qui mettent du temps à apparaître sur
+        // fond sombre. On coupe le fondu → les tuiles cachées s'affichent d'un coup.
+        fadeAnimation={false}
         // Molette desktop plus douce (réglage inoffensif, répond au "zoom trop rapide").
         // Perf Nils 03/06 : preferCanvas / zoomSnap fractionnel / keepBuffer ont été
         // RETIRÉS — avec le serveur de tuiles IGN (lent), ils chargeaient plus de tuiles

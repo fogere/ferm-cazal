@@ -26,7 +26,6 @@ import {
   timeAgo,
 } from '../services/map/time'
 import { getFenceVisualState } from '../services/map/fence-visual'
-import { getStreamSegments } from '../services/map/stream-visual'
 import { isWaterOverdue } from '../services/map/water'
 import { isBatteryDue } from '../services/map/battery'
 import { enclosureQueryIds, effectiveEnclosureId } from '../services/map/enclosure'
@@ -43,9 +42,11 @@ import { ScindageModal, type ScindageChoice } from './map/panels/ScindageModal'
 import { GeofenceCheckSheet } from '../components/GeofenceCheckSheet'
 import { BATTERY_STATUS_CFG } from './map/panels/shared'
 import PinMarkersLayer from './map/layers/PinMarkersLayer'
+import StreamLayer from './map/layers/StreamLayer'
+import OtherMembersLayer from './map/layers/OtherMembersLayer'
 import {
   PIN_CFG, PIN_CATEGORIES, LABEL_ZOOM, LABEL_ZOOM_MED, LABEL_ZOOM_LOW,
-  isSeasonalDry, makeDivIcon,
+  isSeasonalDry, makeDivIcon, makeUserLocationIcon, makePointerIcon,
 } from '../services/map/pinIcons'
 import type { MapPin, PinType, FencePreset, Animal } from '../types'
 
@@ -165,38 +166,7 @@ const SELECTION_RING_ICON = L.divIcon({
   iconAnchor: [27, 27],
 })
 
-// Marqueur position GPS d'un membre (cercle coloré avec l'initiale)
-function makeUserLocationIcon(color: string, initial: string): L.DivIcon {
-  return L.divIcon({
-    html: `<div class="user-loc-pulse" style="position:relative;width:36px;height:36px;">
-      <div style="position:absolute;inset:0;border-radius:50%;background:${color}30;animation:user-loc-ping 2s ease-out infinite;"></div>
-      <div style="position:absolute;inset:6px;border-radius:50%;background:${color};border:3px solid white;
-        box-shadow:0 2px 8px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;
-        color:white;font-weight:bold;font-size:11px;">${initial}</div>
-    </div>`,
-    className: '',
-    iconSize: [36, 36],
-    iconAnchor: [18, 18],
-  })
-}
-
-// Pointeur temps réel partagé d'un membre (anneau qui converge)
-function makePointerIcon(color: string, name: string): L.DivIcon {
-  return L.divIcon({
-    html: `<div style="position:relative;width:60px;height:60px;pointer-events:none;">
-      <div style="position:absolute;inset:0;border-radius:50%;border:3px solid ${color};
-        background:${color}15;animation:pointer-pulse 1s ease-out infinite;"></div>
-      <div style="position:absolute;left:50%;top:-22px;transform:translateX(-50%);
-        background:${color};color:white;font-size:10px;font-weight:bold;padding:2px 8px;
-        border-radius:10px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.35);">
-        👆 ${name}
-      </div>
-    </div>`,
-    className: '',
-    iconSize: [60, 60],
-    iconAnchor: [30, 30],
-  })
-}
+// makeUserLocationIcon / makePointerIcon déplacés dans services/map/pinIcons.ts.
 
 // P1/P2 (22/05/2026, bugs Nils) : taille de hitbox tactile.
 // Visuel inchangé (point 10/14 px) ; hitbox invisible autour = cible
@@ -3170,36 +3140,9 @@ export default function MapPage() {
         {/* Cours d'eau enregistrés — un segment Polyline par paire de points consécutifs,
             pour pouvoir afficher des atténuations manuelles différentes selon le tronçon
             (Phase 2 demande Eugénie 21/05/2026). */}
-        {!isCatHidden('water') && pins.filter(p => p.type === 'water_stream' && (p.points?.length ?? 0) >= 2).flatMap(pin => {
-          const segments = getStreamSegments(pin, new Date().getMonth() + 1)
-          // Bug Nils 22/05/2026 : hitbox élargie pour la sélection — un trait
-          // invisible (opacity 0) plus épais doublé du trait visuel donne au doigt
-          // une cible facile à toucher sur mobile. Le visuel garde son weight d'origine.
-          const allPositions = (pin.points ?? []).map(p => [p.lat, p.lng] as [number, number])
-          return [
-            <Polyline
-              key={`${pin.id}-hit`}
-              positions={allPositions}
-              pathOptions={{ color: '#000', weight: 22, opacity: 0 }}
-              eventHandlers={{
-                click: () => { if (!anyModeActive) setSelected(pin) },
-              }}
-            />,
-            ...segments.map(seg => (
-              <Polyline
-                key={`${pin.id}-seg-${seg.fromIndex}`}
-                positions={[[seg.a.lat, seg.a.lng], [seg.b.lat, seg.b.lng]] as Array<[number, number]>}
-                pathOptions={{
-                  color:     seg.color,
-                  weight:    seg.weight,
-                  opacity:   seg.opacity,
-                  dashArray: seg.dashArray,
-                }}
-                interactive={false}
-              />
-            )),
-          ]
-        })}
+        {!isCatHidden('water') && (
+          <StreamLayer pins={pins} anyModeActive={anyModeActive} onSelect={setSelected} />
+        )}
 
         {/* ── Édition d'une clôture existante : aperçu live + markers draggables ── */}
         {fenceEditPin && fenceEditPoints.length > 0 && (() => {
@@ -3421,21 +3364,9 @@ export default function MapPage() {
           <Marker position={[pendingPos.lat, pendingPos.lng]} icon={makeDivIcon(form.type, false, false, undefined, false, false, false, form.customEmoji, form.customColor)} />
         )}
 
-        {/* Positions GPS partagées des AUTRES membres (lues depuis Firestore,
-            throttled à 90 s).
-            Soi-même est rendu séparément depuis selfPos (locationCore direct,
-            ~1 update/s) pour avoir une pastille temps réel comme Google Maps. */}
-        {users
-          .filter(u => u.uid !== user?.uid && u.liveLocation && (now - (u.liveLocation.updatedAt ?? 0)) < 10 * 60_000)
-          .map(u => (
-            <Marker
-              key={`live-${u.uid}`}
-              position={[u.liveLocation!.lat, u.liveLocation!.lng]}
-              icon={makeUserLocationIcon(u.color || '#2D6A4F', (u.displayName || '?').charAt(0).toUpperCase())}
-              interactive={false}
-              zIndexOffset={300}
-            />
-          ))}
+        {/* Positions + pointeurs partagés des AUTRES membres — couche mémoïsée.
+            Soi-même (SelfLocationMarker) et le pointeur local restent séparés. */}
+        <OtherMembersLayer users={users} selfUid={user?.uid} now={now} />
 
         {/* Soi-même : marker temps réel + cercle de précision.
             Cercle d'incertitude = visualisation directe de la qualité du signal
@@ -3447,23 +3378,6 @@ export default function MapPage() {
           color={profile?.color || '#2D6A4F'}
           label={(profile?.displayName || '?').charAt(0).toUpperCase()}
         />
-
-        {/* Pointeurs partagés des AUTRES utilisateurs (depuis Firestore).
-            Le sien à soi est rendu séparément via localPointer (cf. en dessous)
-            pour avoir un retour visuel IMMÉDIAT sans attendre le round-trip Firestore. */}
-        {users
-          .filter(u => u.uid !== user?.uid
-            && u.livePointer
-            && (now - (u.livePointer.updatedAt ?? 0)) < 60_000)
-          .map(u => (
-            <Marker
-              key={`ptr-${u.uid}-${u.livePointer!.updatedAt}`}
-              position={[u.livePointer!.lat, u.livePointer!.lng]}
-              icon={makePointerIcon(u.color || '#2D6A4F', u.displayName || '?')}
-              interactive={false}
-              zIndexOffset={600}
-            />
-          ))}
 
         {/* Pointeur LOCAL de l'expéditeur (affichage immédiat, indépendant de Firestore) */}
         {localPointer && (now - localPointer.at) < 60_000 && (

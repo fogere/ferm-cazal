@@ -149,3 +149,36 @@ export function makeDivIcon(
     iconAnchor: [19, 19],
   })
 }
+
+// Marqueur position GPS d'un membre (cercle coloré avec l'initiale)
+export function makeUserLocationIcon(color: string, initial: string): L.DivIcon {
+  return L.divIcon({
+    html: `<div class="user-loc-pulse" style="position:relative;width:36px;height:36px;">
+      <div style="position:absolute;inset:0;border-radius:50%;background:${color}30;animation:user-loc-ping 2s ease-out infinite;"></div>
+      <div style="position:absolute;inset:6px;border-radius:50%;background:${color};border:3px solid white;
+        box-shadow:0 2px 8px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;
+        color:white;font-weight:bold;font-size:11px;">${initial}</div>
+    </div>`,
+    className: '',
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+  })
+}
+
+// Pointeur temps réel partagé d'un membre (anneau qui converge)
+export function makePointerIcon(color: string, name: string): L.DivIcon {
+  return L.divIcon({
+    html: `<div style="position:relative;width:60px;height:60px;pointer-events:none;">
+      <div style="position:absolute;inset:0;border-radius:50%;border:3px solid ${color};
+        background:${color}15;animation:pointer-pulse 1s ease-out infinite;"></div>
+      <div style="position:absolute;left:50%;top:-22px;transform:translateX(-50%);
+        background:${color};color:white;font-size:10px;font-weight:bold;padding:2px 8px;
+        border-radius:10px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.35);">
+        👆 ${name}
+      </div>
+    </div>`,
+    className: '',
+    iconSize: [60, 60],
+    iconAnchor: [30, 30],
+  })
+}

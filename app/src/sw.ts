@@ -30,6 +30,20 @@ self.addEventListener('activate', (ev) => ev.waitUntil((async () => {
   await self.clients.claim()
   const names = await caches.keys()
   await Promise.all(names.filter(n => STALE_TILE_CACHES.includes(n)).map(n => caches.delete(n)))
+
+  // ── Mise à jour FORCÉE (Nils 02/07/2026) ──
+  // Bug : une nouvelle version s'installait (skipWaiting) mais la page ne se
+  // rechargeait JAMAIS toute seule → tout le monde restait bloqué sur l'ancienne
+  // build (dont l'ancien CSP qui bloquait le proxy de tuiles → carrés noirs). Un
+  // simple Ctrl+R ne suffisait pas. Ici, dès que ce SW prend la main, on recharge
+  // chaque fenêtre contrôlée → la maj s'applique automatiquement, sans action de
+  // l'utilisatrice. Une seule navigation par activation → pas de boucle. Les clients
+  // encore sur l'ancienne version basculeront à leur prochain check (30 min / retour
+  // au premier plan, cf. UpdatePrompt) ou au prochain lancement de l'app.
+  const clients = await self.clients.matchAll({ type: 'window' })
+  for (const client of clients) {
+    try { await (client as WindowClient).navigate(client.url) } catch { /* client parti */ }
+  }
 })()))
 
 // ── Firebase Messaging (notifications en arrière-plan) ──

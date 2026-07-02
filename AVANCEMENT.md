@@ -547,6 +547,16 @@ en boucle.
   inchangé. Si l'URL du worker tuiles change un jour, mettre à jour les 5 fichiers
   ci-dessus + le CSP.
 
+### Mise à jour forcée du service worker (2 juillet 2026)
+- Bug découvert en branchant le proxy : les utilisatrices restaient **bloquées sur
+  l'ancienne build** (donc l'ancien CSP qui bloquait le proxy → carrés noirs), même
+  après Ctrl+R. Cause : `skipWaiting` installait la nouvelle version mais **la page ne
+  se rechargeait jamais**.
+- Fix `sw.ts` : le handler `activate` fait maintenant `client.navigate(client.url)` sur
+  chaque fenêtre → **rechargement automatique** dès qu'un nouveau SW prend la main. Plus
+  besoin d'action manuelle. Les clients basculent au prochain check (30 min / retour au
+  premier plan via UpdatePrompt) ou au prochain lancement.
+
 ### Reste (carte)
 - **Zoom progressif** (problème 1 Nils) : maintenant que les tuiles sont rapides/cachées,
   on peut rendre le zoom lisse (redevenu viable). Prochaine étape.

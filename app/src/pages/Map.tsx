@@ -2919,13 +2919,10 @@ export default function MapPage() {
           // qu'au déplacement elles soient déjà là (moins de "zones blanches"). Une
           // fois en cache (CacheFirst, cf. sw.ts), elles sont instantanées au retour.
           keepBuffer={4}
-          // Perf pan Nils 02/07/2026 : sur desktop, Leaflet met updateWhenIdle=false
-          // par défaut → il RECALCULE la grille de tuiles (ops DOM) à chaque micro-geste
-          // du drag → saccades sur grand écran. Sur Android c'est true (il attend l'arrêt)
-          // = fluide. On force true partout : les tuiles se rafraîchissent à la FIN du
-          // pan, le geste lui-même ne fait plus que translater les tuiles déjà là
-          // (keepBuffer + fallback LOD couvrent les bords révélés en attendant).
-          updateWhenIdle={true}
+          // NB Nils 02/07/2026 : NE PAS mettre updateWhenIdle={true} — testé, ça DIFFÈRE
+          // le chargement des tuiles jusqu'à l'arrêt du geste → l'écran reste noir 2-3×
+          // plus longtemps au déplacement. On garde le défaut desktop (false = charge
+          // pendant le geste). Le ralenti d'affichage est ailleurs (à profiler).
           eventHandlers={{
             tileloadstart: () => { if (tileError) setTileError(null) },
             tileerror: (e) => {

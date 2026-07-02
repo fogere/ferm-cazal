@@ -6,6 +6,102 @@
 
 ---
 
+## ⭐⭐ SESSION DU 2 JUILLET (SOIR) — ENQUÊTE PERF CARTE — À LIRE EN PREMIER
+
+> Cette section est plus récente que tout le reste du fichier. Le reste (§0→§5)
+> vient de la session du matin (proxy tuiles, refacto, V8) et reste valable.
+
+### Le sujet (non résolu, c'est LA priorité)
+Nils : **la carte est "horrible à déplacer"** sur son PC (grand écran ~2558px, Brave).
+Formulation la plus précise qu'il a donnée : **« les tuiles apparaissent et
+disparaissent dès qu'elles quittent la fenêtre »**. Objectif = déplacement fluide
+comme Google Maps.
+
+### ✅ CE QUI EST PROUVÉ — NE PAS RE-ENQUÊTER
+1. **Le cache des tuiles est PARFAIT de bout en bout.** Worker Cloudflare (edge HIT),
+   cache HTTP navigateur, ET le **vrai `sw.js` workbox de prod** : revisite = **1 ms**.
+   Prouvé par des tests navigateur autonomes (Brave headless) → voir §RESSOURCES.
+   **Ne JAMAIS re-chasser le cache/réseau pour la lenteur de la carte.**
+2. **La cause du "ça recharge à chaque passage" = BRAVE SHIELDS.** Shields ON empêchait
+   la persistance du cache du SW → chaque passage re-téléchargeait. **Shields OFF pour
+   le-cazal.web.app** → Network tab de Nils : toutes tuiles `200`, `(ServiceWorker)`,
+   **2-4 ms**. C'est un réglage NAVIGATEUR, pas un bug app. ⚠️ **La famille est aussi sur
+   Brave (Android)** → même réglage Shields OFF à faire pour elles (Nils les prévient).
+3. **MAIS même Shields OFF + tuiles à 2-4 ms, le déplacement reste "horrible".**
+   → Le problème n'est PAS les données, c'est le **RENDU / PEINTURE**.
+4. **React ne re-render PAS pendant un pan** (`moveend`/`zoomend` seulement, pas pendant ;
+   le marqueur GPS est isolé dans `SelfLocationMarker`, Map.tsx:819). React n'est pas le goulot.
+5. **Google Maps et le site de l'IGN tournent nickel sur SA machine** → ce n'est ni son
+   GPU ni Brave. C'est **NOTRE implémentation Leaflet**, commune à tout le monde.
+
+### 🎯 SYMPTÔME = le comportement DOM de Leaflet
+Leaflet rend les tuiles comme des `<img>` DOM et les **retire** hors d'un anneau autour
+de l'écran (`keepBuffer`) → le "disparaît", puis les **recrée** au retour → le "réapparaît".
+Google Maps/IGN ne font pas ça car ils rendent en **GPU/WebGL**. C'est probablement
+**architectural** (Leaflet DOM + très grand écran = churn de tuiles + décodage/peinture lourds).
+
+### ❌ TENTÉ ET ÉCHOUÉ — NE PAS RE-TENTER (tout reverté)
+| Essai | Résultat |
+|---|---|
+| `fadeAnimation={false}` | supprime le **fallback LOD** (tuiles floues de secours) → **carrés NOIRS**. Reverté. |
+| `updateWhenIdle={true}` | diffère le chargement à l'arrêt du geste → **écran noir 2-3× plus longtemps**. Reverté. |
+| `keepBuffer={8}` | ~600 tuiles/écran → **thread principal noyé** (tuiles à 36-267 ms, 493 req/60s). Reverté à 4. |
+
+### ✅ GARDÉ (vrai gain, mais ne règle PAS le pan de Nils)
+**Pause de l'animation des clôtures pendant les déplacements.** `ZoomTracker` (Map.tsx:803)
+pose la classe `map-moving` sur le conteneur pendant pan/zoom ; le CSS (`index.css`, cherche
+`.map-moving .fence-electric-flow`) coupe alors l'animation. Pourquoi : l'effet "courant
+circule" des clôtures électriques (`@keyframes fenceCurrentFlow`, anime `stroke-dashoffset`)
+**repeint le SVG à 60 fps en continu** = c'est ce qui faisait **CHAUFFER le tél d'Eugénie**
+(bug 23/05 ; ralentir 1.6s→4s n'avait rien changé, le repaint a lieu à chaque frame). Gain
+réel batterie/chaleur. **Piste ouverte** : couper aussi le coût AU REPOS (n'animer que la
+clôture sélectionnée, ou style statique "sous tension").
+
+### 👉 LE PROCHAIN PAS EXACT (là où on s'est arrêté)
+**Obtenir un profil Performance depuis la machine de Nils.** Je le lui ai demandé, il a
+préféré clore la session ici. Au prochain démarrage, lui faire faire :
+- F12 → **Performance** → ● Record → **panne la carte ~4 s** → Stop → screenshot.
+- Lire le **résumé** (Scripting jaune / Rendering violet / **Painting vert** / System gris).
+  La couleur dominante = la nature du goulot.
+- **Mon pari : Painting dominant** (compositing + décodage de centaines de tuiles DOM +
+  couches sur grand écran) → confirmerait la limite Leaflet-DOM.
+
+### 🔧 LES 2 VRAIES PISTES DE FIX (après le profil)
+1. **Réduire le coût de rendu Leaflet** sans changer de moteur : couper les couches
+   vectorielles/fade pendant le mouvement, réduire le nombre de tuiles, ré-évaluer
+   `preferCanvas` (rejeté le 03/06 quand les tuiles IGN étaient lentes — plus le cas).
+2. **Changer de moteur de rendu (le vrai "comme Google Maps")** : passer la carte en
+   rendu **GPU** — **MapLibre GL JS** (peut afficher les tuiles raster WMTS IGN via une
+   source raster, rendu WebGL fluide même sur grand écran) ou un plugin Leaflet.GL.
+   GROS chantier (réécrire la couche carte + toutes les couches vectorielles/marqueurs),
+   mais **seul moyen d'égaler Google Maps**. À présenter à Nils comme une décision.
+
+### 📁 RESSOURCES — où sont les trucs importants
+- **Tests navigateur autonomes** (LE truc à réutiliser) : `tile-proxy/browser-tests/`
+  (copiés depuis le scratchpad éphémère). `cd tile-proxy/browser-tests && npm install`
+  (installe `puppeteer-core`, pas de download de navigateur ; utilise le Brave installé).
+  Voir son `README.md`. Scripts : `run.mjs` (cache 1 ms), `real-sw.mjs` (vrai SW prod,
+  ~90 s), `leaflet.mjs`, `pan-perf.mjs`. **⚠️ Le headless ne mesure PAS la peinture** (frames
+  bidon à 4 ms) → d'où le besoin du profil sur la vraie machine.
+- `tile-proxy/scan-tiles.mjs` (pas de puppeteer) — prouve qu'aucune tuile worker n'échoue
+  (6615 testées, 100% `200`). `tile-proxy/test-tiles.mjs` — test worker existant.
+- **Mémoire persistante** (hors repo) : `…\memory\feature_tile_perf.md` (⭐ résumé enquête),
+  `feature_tile_proxy.md`.
+- **Code clé** : `app/src/pages/Map.tsx` (MapContainer + `<TileLayer>` ~L2890-2965 : c'est là
+  que se règlent fade/keepBuffer/updateWhenIdle/crossOrigin), `app/src/sw.ts` (routes cache
+  workbox), `app/src/index.css` (`.fence-electric-flow` ~L311), `app/src/services/map/
+  precacheTiles.ts` + `app/src/components/OfflineMapButton.tsx` (précache MANUEL : aérien,
+  rayon 1.2 km, z15-19 — le seul pré-cache existant).
+
+### ⚠️ LEÇON MÉTHODO de cette session (importante)
+J'ai fait **3 paris code qui ont empiré** avant de comprendre. Le pattern gagnant a été :
+**mesurer/prouver avant de déployer** (tests autonomes) et **demander UNE donnée précise à
+Nils** (Network tab → a révélé Shields) plutôt que déployer des hypothèses. Pour le rendu,
+le headless ne suffit pas : **il faut le profil de sa machine**. Ne redéploie pas de pari
+sans preuve — Nils déteste ça (à juste titre) et son app a une valeur émotionnelle.
+
+---
+
 ## 0. Par où commencer (ordre de lecture)
 
 1. **Ce fichier (HANDOFF.md)** — l'état le plus à jour.

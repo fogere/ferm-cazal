@@ -1,0 +1,15 @@
+{
+  "name": "ferme-tile-browser-tests",
+  "private": true,
+  "type": "module",
+  "description": "Tests navigateur autonomes (Brave headless) pour la chaîne de tuiles — voir README.md",
+  "scripts": {
+    "cache": "node run.mjs",
+    "leaflet": "node leaflet.mjs",
+    "real-sw": "node real-sw.mjs",
+    "pan": "node pan-perf.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
+}

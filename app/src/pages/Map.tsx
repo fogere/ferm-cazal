@@ -2894,12 +2894,10 @@ export default function MapPage() {
         maxZoom={20}
         style={{ height: '100%', width: '100%' }}
         zoomControl={false}
-        // Perf Nils 02/07/2026 : le cache des tuiles est prouvé instantané (test autonome
-        // tile-cache-test : revisite = 1 ms, 0 réseau). Le ralenti perçu = le FONDU par
-        // défaut de Leaflet (~250 ms) : une tuile déjà en cache reste visuellement sombre
-        // le temps du fade → les "carrés sombres" qui mettent du temps à apparaître sur
-        // fond sombre. On coupe le fondu → les tuiles cachées s'affichent d'un coup.
-        fadeAnimation={false}
+        // NB Nils 02/07/2026 : NE PAS mettre fadeAnimation={false} — ça purge les tuiles
+        // de secours (zoom inférieur, floues) qui servaient de fallback LOD "basse qualité
+        // puis haute qualité" → on se retrouve avec du NOIR pendant le chargement. Le fondu
+        // reste ON. Le vrai levier de fluidité est ailleurs (re-render de MapPage).
         // Molette desktop plus douce (réglage inoffensif, répond au "zoom trop rapide").
         // Perf Nils 03/06 : preferCanvas / zoomSnap fractionnel / keepBuffer ont été
         // RETIRÉS — avec le serveur de tuiles IGN (lent), ils chargeaient plus de tuiles
@@ -2921,6 +2919,13 @@ export default function MapPage() {
           // qu'au déplacement elles soient déjà là (moins de "zones blanches"). Une
           // fois en cache (CacheFirst, cf. sw.ts), elles sont instantanées au retour.
           keepBuffer={4}
+          // Perf pan Nils 02/07/2026 : sur desktop, Leaflet met updateWhenIdle=false
+          // par défaut → il RECALCULE la grille de tuiles (ops DOM) à chaque micro-geste
+          // du drag → saccades sur grand écran. Sur Android c'est true (il attend l'arrêt)
+          // = fluide. On force true partout : les tuiles se rafraîchissent à la FIN du
+          // pan, le geste lui-même ne fait plus que translater les tuiles déjà là
+          // (keepBuffer + fallback LOD couvrent les bords révélés en attendant).
+          updateWhenIdle={true}
           eventHandlers={{
             tileloadstart: () => { if (tileError) setTileError(null) },
             tileerror: (e) => {

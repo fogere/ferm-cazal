@@ -1,0 +1,6 @@
+name = "ferme-tiles"
+main = "index.js"
+compatibility_date = "2024-11-01"
+
+# On veut l'URL publique gratuite *.workers.dev (pas de domaine custom nécessaire).
+workers_dev = true

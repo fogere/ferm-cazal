@@ -14,7 +14,7 @@
 
 // Même couche/URL que la carte (ORTHOPHOTOS JPEG). TILEMATRIXSET=PM = tuilage XYZ standard.
 const IGN_AERIAL_TPL =
-  'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
+  'https://ferme-tiles.ferme-nilslamber.workers.dev/?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
   '&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM' +
   '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image%2Fjpeg'
 

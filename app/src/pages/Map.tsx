@@ -58,19 +58,19 @@ const ZOOM_DEFAULT = 15
 /* ─── tuiles IGN (Géoportail public, sans clé) ─── */
 
 const IGN_AERIAL =
-  'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
+  'https://ferme-tiles.ferme-nilslamber.workers.dev/?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
   '&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM' +
   '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image%2Fjpeg'
 
 const IGN_PLAN =
-  'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
+  'https://ferme-tiles.ferme-nilslamber.workers.dev/?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
   '&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&TILEMATRIXSET=PM' +
   '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image%2Fpng'
 
 // Overlay : parcelles cadastrales IGN (PNG transparent, ne montre que les contours)
 // Posé en transparence par-dessus l'aérien pour voir les limites de terrain
 const IGN_PARCELS =
-  'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
+  'https://ferme-tiles.ferme-nilslamber.workers.dev/?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
   '&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=normal&TILEMATRIXSET=PM' +
   '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image%2Fpng'
 

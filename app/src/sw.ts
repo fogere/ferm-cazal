@@ -122,7 +122,7 @@ const tileQuotaPlugin = {
 // (ign-tiles-v1) n'est pas touché — pas de re-téléchargement de la carte de la ferme.
 // IMPORTANT : cette route doit précéder la route geopf générale (Workbox = 1er match).
 registerRoute(
-  ({ url }) => url.hostname === 'data.geopf.fr' && url.search.includes('CADASTRALPARCELS'),
+  ({ url }) => url.hostname === 'ferme-tiles.ferme-nilslamber.workers.dev' && url.search.includes('CADASTRALPARCELS'),
   new NetworkFirst({
     cacheName: 'ign-parcels-v2',
     networkTimeoutSeconds: 5,
@@ -143,7 +143,7 @@ registerRoute(
 
 // ── Tuiles IGN (CacheFirst — carte dispo hors ligne, cap 5 Go, 90 jours) ──
 registerRoute(
-  ({ url }) => url.hostname === 'data.geopf.fr',
+  ({ url }) => url.hostname === 'ferme-tiles.ferme-nilslamber.workers.dev',
   new CacheFirst({
     cacheName: 'ign-tiles-v2',
     plugins: [

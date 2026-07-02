@@ -20,7 +20,7 @@ const FARM: [number, number] = [42.9375, 1.7452]
 const ZOOM_DEFAULT = 16
 
 const IGN_AERIAL =
-  'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
+  'https://ferme-tiles.ferme-nilslamber.workers.dev/?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
   '&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM' +
   '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image%2Fjpeg'
 

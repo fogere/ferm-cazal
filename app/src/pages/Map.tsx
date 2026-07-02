@@ -2925,7 +2925,12 @@ export default function MapPage() {
           // Perf Nils 03/06 : pré-charge un anneau de tuiles AUTOUR de l'écran pour
           // qu'au déplacement elles soient déjà là (moins de "zones blanches"). Une
           // fois en cache (CacheFirst, cf. sw.ts), elles sont instantanées au retour.
-          keepBuffer={4}
+          // keepBuffer 4→8 (Nils 02/07/2026) : nb d'anneaux de tuiles gardés hors-écran.
+          // Symptôme "les tuiles disparaissent dès qu'elles quittent la fenêtre" = Leaflet
+          // purge le DOM trop tôt. En gardant 8 anneaux, un déplacement normal ne jette
+          // plus les tuiles → plus de disparition/rechargement. Compromis : plus de tuiles
+          // en mémoire/DOM sur grand écran — si ça alourdit le pan, redescendre vers 5-6.
+          keepBuffer={8}
           // NB Nils 02/07/2026 : NE PAS mettre updateWhenIdle={true} — testé, ça DIFFÈRE
           // le chargement des tuiles jusqu'à l'arrêt du geste → l'écran reste noir 2-3×
           // plus longtemps au déplacement. On garde le défaut desktop (false = charge

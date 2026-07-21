@@ -134,8 +134,11 @@ function ChunkPrefetcher() {
   return null
 }
 
-/* Bouton 🐞 flottant — visible uniquement si connecté */
-function FloatingBugButton() {
+/* Modale « Signaler un bug » + toast d'auto-capture — uniquement si connecté.
+   Ne rend AUCUN bouton visible : la bulle 🐞 flottante a été supprimée le
+   21/07/2026 (elle recouvrait le bouton « + » de la carte). L'ouverture se fait
+   depuis Réglages, via openBugReport(). */
+function BugReportLayer() {
   const { user } = useAuth()
   if (!user) return null
   return <BugReportButton />
@@ -172,7 +175,7 @@ function AppRoutes() {
       <OnDemandLocationLayer />
       <GeofenceLayer />
       <ChunkPrefetcher />
-      <FloatingBugButton />
+      <BugReportLayer />
       <OnboardingLayer />
       <InstallPromptLayer />
       <EveningRecapLayer />

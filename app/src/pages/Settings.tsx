@@ -17,6 +17,7 @@ import { registerFcmTokenManually } from '../hooks/useMessaging'
 import { updateDocBounded, FirestoreWriteTimeoutError } from '../services/firestoreWrite'
 import { locationCore, type GpsMode } from '../services/location/locationCore'
 import OfflineMapButton from '../components/OfflineMapButton'
+import { openBugReport } from '../components/BugReportButton'
 
 export default function Settings() {
   const { user, profile, logout, isTemp } = useAuth()
@@ -709,6 +710,17 @@ export default function Settings() {
             </div>
           </div>
         </div>
+
+        {/* Signaler un bug — remplace la bulle 🐞 flottante, supprimée le
+            21/07/2026 (elle recouvrait le bouton « + » de la carte). */}
+        <button
+          onClick={() => openBugReport()}
+          className="flex items-center gap-3 w-full px-4 py-4 rounded-2xl bg-card shadow-sm active:bg-cream transition-colors"
+        >
+          <Bug size={20} className="text-danger" />
+          <span className="flex-1 text-left text-charcoal font-semibold text-sm">Signaler un bug</span>
+          <ChevronRight size={18} className="text-muted" />
+        </button>
 
         {/* Rapports de bugs */}
         <button

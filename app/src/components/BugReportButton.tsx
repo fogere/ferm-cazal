@@ -1,41 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Bug, Mic, MicOff, X, Send, AlertCircle, Loader2 } from 'lucide-react'
 import { reportBug, onAutoReport, getQueueLength } from '../services/bugReporter'
 
-/* ─── Drag-and-drop du bouton flottant ─── */
-const BUTTON_SIZE = 48 // matches w-12 h-12
-const DRAG_THRESHOLD_PX = 5
-const POS_KEY = 'fm_bug_btn_pos'
+/* ─── Ouverture de la modale depuis l'extérieur ───
+ * La bulle 🐞 flottante et draggable a été SUPPRIMÉE le 21/07/2026 (demande de
+ * Nils). Elle n'était pas seulement encombrante : posée en bas à droite en
+ * z-[9000], elle recouvrait le bouton « + » de la carte (z-[1000]) sur ~36 px,
+ * donc un tap pour ajouter une épingle ouvrait la modale de bug à la place.
+ *
+ * Ce composant reste monté globalement dans App.tsx car il héberge la modale de
+ * signalement ET le toast d'auto-capture. Il n'a simplement plus de déclencheur
+ * visuel à lui : on l'ouvre depuis Réglages via openBugReport().
+ *
+ * ⚠️ Ne PAS remettre de bouton fixe en bas à droite sans vérifier la colonne de
+ * FAB de la carte (Map.tsx, `absolute bottom-6 right-4`).
+ */
+type Opener = () => void
+const openers = new Set<Opener>()
 
-interface Pos { x: number; y: number }
-
-function loadSavedPos(): Pos | null {
-  try {
-    const raw = localStorage.getItem(POS_KEY)
-    if (!raw) return null
-    const p = JSON.parse(raw)
-    if (typeof p?.x === 'number' && typeof p?.y === 'number') return p
-  } catch { /* ignoré */ }
-  return null
-}
-
-function clampToViewport(p: Pos): Pos {
-  if (typeof window === 'undefined') return p
-  const margin = 4
-  return {
-    x: Math.max(margin, Math.min(p.x, window.innerWidth  - BUTTON_SIZE - margin)),
-    y: Math.max(margin, Math.min(p.y, window.innerHeight - BUTTON_SIZE - margin)),
-  }
-}
-
-function defaultPos(): Pos {
-  if (typeof window === 'undefined') return { x: 16, y: 100 }
-  // Coin bas-droit, au-dessus de la bottom nav (~64 px) + safe area
-  const safeBottom = 64 + 12
-  return {
-    x: window.innerWidth  - BUTTON_SIZE - 16,
-    y: window.innerHeight - BUTTON_SIZE - safeBottom,
-  }
+/** Ouvre la modale « Signaler un bug » depuis n'importe où dans l'app. */
+export function openBugReport() {
+  openers.forEach(fn => fn())
 }
 
 /* Types pour Web Speech API (non inclus dans lib.dom standard) */
@@ -84,76 +69,12 @@ export default function BugReportButton() {
   // Garde le texte "finalisé" séparément du texte interim pour ne pas dupliquer
   const finalTextRef   = useRef<string>('')
 
-  /* ─── Drag-and-drop state ─── */
-  const [pos, setPos] = useState<Pos>(() => clampToViewport(loadSavedPos() ?? defaultPos()))
-  const [dragging, setDragging] = useState(false)
-  const dragStateRef = useRef<{
-    startX: number; startY: number
-    posX: number; posY: number
-    movedFar: boolean
-  } | null>(null)
-  // Bug Eugénie 22/05/2026 : un drag doit empêcher le `onClick` qui suit
-  // d'ouvrir la modal. Avant on faisait preventDefault dans pointerUp mais
-  // ça ne suffisait pas dans tous les navigateurs. On utilise un ref qui
-  // bloque le prochain click et se reset auto.
-  const suppressNextClickRef = useRef(false)
-
-  // Si on redimensionne, on garde le bouton dans l'écran
+  // S'enregistre comme ouvreur de la modale (appelé par openBugReport()).
+  // Add/delete symétriques : sûr avec le double-montage de React StrictMode.
   useEffect(() => {
-    function onResize() { setPos(p => clampToViewport(p)) }
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
-
-  const onPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
-    // On laisse les clics sur le badge / le bouton fonctionner normalement
-    // tant que le doigt n'a pas franchi le seuil DRAG_THRESHOLD_PX.
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    dragStateRef.current = {
-      startX: e.clientX, startY: e.clientY,
-      posX:   pos.x,     posY:   pos.y,
-      movedFar: false,
-    }
-  }, [pos.x, pos.y])
-
-  const onPointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
-    const s = dragStateRef.current
-    if (!s) return
-    const dx = e.clientX - s.startX
-    const dy = e.clientY - s.startY
-    if (!s.movedFar && Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
-      s.movedFar = true
-      setDragging(true)
-    }
-    if (s.movedFar) {
-      setPos(clampToViewport({ x: s.posX + dx, y: s.posY + dy }))
-    }
-  }, [])
-
-  const onPointerUp = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
-    const s = dragStateRef.current
-    dragStateRef.current = null
-    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId) } catch { /* ignoré */ }
-    if (s?.movedFar) {
-      // Drag terminé : on sauvegarde la position et on bloque le click qui suit
-      try { localStorage.setItem(POS_KEY, JSON.stringify(pos)) } catch { /* ignoré */ }
-      setDragging(false)
-      suppressNextClickRef.current = true
-    }
-    // Note : on n'ouvre PAS la modal ici (bug Eugénie 22/05). Si on ouvrait
-    // dans pointerUp, React démontait le bouton avant que l'event `click`
-    // synthétique ne se dispatche, et celui-ci atterrissait alors sur le
-    // backdrop de la modal qui venait d'apparaître → re-fermeture immédiate.
-    // L'ouverture est faite dans onClick ci-dessous, qui fire APRÈS pointerUp
-    // sur le bouton encore monté.
-  }, [pos])
-
-  const onClick = useCallback(() => {
-    if (suppressNextClickRef.current) {
-      suppressNextClickRef.current = false
-      return
-    }
-    setOpen(true)
+    const fn = () => setOpen(true)
+    openers.add(fn)
+    return () => { openers.delete(fn) }
   }, [])
 
   const SR = getSpeechRecognition()
@@ -256,33 +177,8 @@ export default function BugReportButton() {
         </div>
       )}
 
-      {/* Bouton flottant draggable */}
-      {!open && (
-        <button
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onClick={onClick}
-          aria-label="Signaler un bug (glisser pour déplacer)"
-          className={`fixed z-[9000] w-12 h-12 rounded-full bg-danger text-white
-                      shadow-2xl flex items-center justify-center select-none
-                      ${dragging ? 'scale-110 cursor-grabbing' : 'cursor-grab active:scale-90 transition-all'}`}
-          style={{
-            left: `${pos.x}px`,
-            top:  `${pos.y}px`,
-            touchAction: 'none', // bloque le scroll iOS/Android pendant le drag
-          }}
-        >
-          <Bug size={20} />
-          {queueLen > 0 && (
-            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full
-                             bg-sun text-earth text-[10px] font-bold flex items-center justify-center
-                             ring-2 ring-card">
-              {queueLen > 9 ? '9+' : queueLen}
-            </span>
-          )}
-        </button>
-      )}
+      {/* Plus de bouton flottant ici — voir le commentaire en tête de fichier.
+          Le compteur de rapports en file est repris dans la modale (plus bas). */}
 
       {/* Modal */}
       {open && (

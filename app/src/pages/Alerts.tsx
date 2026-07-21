@@ -14,6 +14,20 @@ const SEV: Record<AlertSeverity, { border: string; icon: string; bg: string; lab
   info:    { border: 'border-l-sky',    icon: 'text-sky',    bg: 'bg-sky/5',     label: 'Info',      order: 2 },
 }
 
+// Le header prend la couleur de l'alerte la PLUS GRAVE en cours.
+// Avant (bug Nils 21/07/2026, « la bannière rouge est trop agressive ») le rouge
+// était constant : la page s'affichait en rouge sang même pour dire « aucune
+// alerte active ». Du coup le rouge ne signalait plus rien.
+// Les teintes reprennent les jetons de --theme (index.css) : forest / sky / sun /
+// danger, exactement comme les pastilles SEV ci-dessus. Le texte reste blanc sur
+// les quatre (tous des dégradés sombres), donc rien d'autre à changer.
+const HEADER_BG: Record<AlertSeverity | 'none', string> = {
+  none:    'linear-gradient(160deg, #1A4731 0%, #2D6A4F 100%)', // forest — comme le reste de l'app
+  info:    'linear-gradient(160deg, #075985 0%, #0EA5E9 100%)', // sky
+  warning: 'linear-gradient(160deg, #92400E 0%, #F59E0B 100%)', // sun
+  urgent:  'linear-gradient(160deg, #7F1D1D 0%, #DC2626 100%)', // danger — le rouge d'origine, réservé au vrai urgent
+}
+
 export default function Alerts() {
   const { user } = useAuth()
 
@@ -67,12 +81,18 @@ export default function Alerts() {
     }
   }
 
+  // `active` est déjà trié par gravité (SEV.order) : le premier est le pire.
+  // Si une alerte porte une sévérité inconnue (les règles Firestore ne valident
+  // pas le champ), HEADER_BG renvoie undefined → le `?? HEADER_BG.none` du JSX
+  // évite un header transparent avec du texte blanc dessus.
+  const worstSeverity: AlertSeverity | 'none' = active[0]?.severity ?? 'none'
+
   return (
     <div className="pb-4">
 
-      {/* Header rouge */}
+      {/* Header — couleur selon l'alerte la plus grave (vert si tout va bien) */}
       <div className="px-5 pt-12 pb-5"
-           style={{ background: 'linear-gradient(160deg, #7F1D1D 0%, #DC2626 100%)' }}>
+           style={{ background: HEADER_BG[worstSeverity] ?? HEADER_BG.none }}>
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-white text-2xl font-bold m-0">Alertes</h1>

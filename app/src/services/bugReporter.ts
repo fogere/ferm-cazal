@@ -233,10 +233,21 @@ function installFetchPatch() {
       return res
     } catch (err) {
       const msg = err instanceof Error ? err.message : safeStringify(err)
+      // Une requête ANNULÉE n'est pas une panne réseau : c'est le comportement
+      // normal quand on quitte une page (ex. le pré-téléchargement hors-ligne de
+      // /settings appelle abort() au démontage). Les logguer en 'error' noyait le
+      // buffer — les 5 rapports du 21/07/2026 ne contenaient QUE ça (16/16 lignes),
+      // masquant toute vraie erreur. On garde une trace, mais en 'debug'.
+      const aborted =
+        (err instanceof Error && err.name === 'AbortError') ||
+        init?.signal?.aborted === true ||
+        (input instanceof Request && input.signal?.aborted === true)
       pushConsole({
-        level: 'error',
+        level: aborted ? 'debug' : 'error',
         ts: Date.now(),
-        text: `[fetch] network error ${url} : ${msg} (${Date.now() - start}ms)`,
+        text: aborted
+          ? `[fetch] annulé ${url} (${Date.now() - start}ms)`
+          : `[fetch] network error ${url} : ${msg} (${Date.now() - start}ms)`,
       })
       throw err
     }

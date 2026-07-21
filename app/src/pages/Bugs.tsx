@@ -555,7 +555,7 @@ export default function Bugs() {
       {/* Note bas de page */}
       <div className="px-4 mt-6 text-center">
         <p className="text-[11px] text-muted/60 leading-relaxed">
-          Bouton 🐞 flottant en bas à droite pour signaler un bug.<br />
+          Pour signaler un bug : Réglages → « Signaler un bug ».<br />
           Les erreurs JavaScript non rattrapées sont capturées automatiquement.<br />
           La liste se rafraîchit toute seule (temps réel).
         </p>

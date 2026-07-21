@@ -9,7 +9,10 @@ statut vérifié dans le code (commit ou `fichier:ligne`), pas déduit.
 > ce qu'il y a à faire, **ne pas être découragé**, avoir une **vision ensemble** sur la ferme. »
 > Mobile-first assumé. C'est le critère de tri de toute décision UX.
 
-**Prod au 21/07/2026** (mesuré, service account) : `tasks` **291** (287 faites, **290 échéance passée**) ·
+**Prod au 21/07/2026** (mesuré, service account) : `tasks` **294** — dont **4 seulement non
+terminées**, échéances 22-23/07, et **0 en retard**. (Les « 290 à échéance passée » d'une
+première mesure sont des tâches **déjà faites** : le système de tâches est sain, il n'y a
+aucun compteur écrasant à corriger.) ·
 `animals` 41 · `map_pins` 126 · `enclosure_movements` 131 · `pin_photos` 64 · `alerts` 2 ·
 `users` 7 (3 avec token FCM) · `bugReports` **0**.
 

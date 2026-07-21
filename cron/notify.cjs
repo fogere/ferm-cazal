@@ -113,16 +113,28 @@ async function sendNotification(user, { title, body, severity = 'info', data = {
   }
 
   try {
+    // ⚠️ AUCUNE clé `notification` ici — c'est VOLONTAIRE (corrigé le 21/07/2026).
+    // Si le payload contient `notification`, le SDK Firebase Messaging affiche la
+    // notification LUI-MÊME côté navigateur, PUIS appelle quand même
+    // onBackgroundMessage() dans sw.ts qui en affichait une seconde : les
+    // utilisatrices recevaient tout EN DOUBLE (aucun `tag` des deux côtés pour
+    // les fusionner).
+    // En "data-only", le Service Worker est seul maître de l'affichage — ce qui
+    // permet en prime d'ajouter des boutons d'action (« Fait »), impossibles
+    // autrement. Le titre et le corps voyagent donc dans `data`.
+    // Contrainte FCM : toutes les valeurs de `data` doivent être des STRINGS.
+    const payload = { title, body, severity, ...data }
+    const stringData = {}
+    for (const [k, v] of Object.entries(payload)) {
+      if (v === null || v === undefined) continue
+      stringData[k] = String(v)
+    }
+
     await messaging.send({
       token: user.fcmToken,
-      notification: { title, body },
-      data: { severity, ...data },
+      data: stringData,
       webpush: {
-        notification: {
-          icon: '/icons/farm-icon.svg',
-          badge: '/icons/farm-icon.svg',
-          requireInteraction: urgent,
-        },
+        headers: { Urgency: urgent ? 'high' : 'normal' },
       },
     })
     sentCount++
@@ -477,25 +489,47 @@ async function processMorningSummary() {
     if (!isWithinMinutes(time)) continue
     if (u.lastMorningPushDate === today) continue  // déjà envoyé aujourd'hui
 
-    const mine = todayPending.filter(t => t.assignedTo === u.uid).length
-    const free = todayPending.filter(t => !t.assignedTo || t.assignedTo === 'auto').length
+    const mineTasks = todayPending.filter(t => t.assignedTo === u.uid)
+    const freeTasks = todayPending.filter(t => !t.assignedTo || t.assignedTo === 'auto')
+    const mine  = mineTasks.length
+    const free  = freeTasks.length
     const total = todayPending.length
+
+    // Une tâche MISE EN AVANT, nommée. Un compteur ne dit pas quoi faire ; un
+    // titre si. Priorité : une urgente à moi > une à moi > une urgente libre >
+    // une libre. (Demande de Nils 21/07/2026 : « voir de façon réelle et
+    // concrète ce qu'il y a à faire, ne pas être découragé ».)
+    const focus =
+      mineTasks.find(t => t.priority === 'urgent') ??
+      mineTasks[0] ??
+      freeTasks.find(t => t.priority === 'urgent') ??
+      freeTasks[0] ??
+      null
+
     let body
     if (total === 0) {
-      body = "Aucune tâche prévue aujourd'hui — bonne journée"
-    } else if (mine > 0) {
-      body = `${mine} pour toi · ${free} à prendre · ${total} au total`
-    } else if (free > 0) {
-      body = `${free} tâche${free > 1 ? 's' : ''} à prendre aujourd'hui`
+      body = 'Rien de prévu aujourd’hui — bonne journée 🌿'
     } else {
-      body = `${total} tâche${total > 1 ? 's' : ''} prévue${total > 1 ? 's' : ''}`
+      const reste = total - 1
+      const compte = reste > 0
+        ? `\n+ ${reste} autre${reste > 1 ? 's' : ''} aujourd’hui${mine > 0 ? ` · ${mine} pour toi` : ''}`
+        : ''
+      const ou = focus?.zone ? ` — ${focus.zone}` : ''
+      body = `${focus.title}${ou}${compte}`
     }
 
     await sendNotification(u, {
-      title: '🌅 Bonjour ! Programme du jour',
+      title: total === 0 ? '🌿 Bonjour' : '🌅 À faire aujourd’hui',
       body,
       severity: 'info',
-      data: { kind: 'morning_summary' },
+      data: {
+        kind:  'morning_summary',
+        url:   '/tasks',
+        // Alimente le bouton « ✓ Fait » de la notification (cf. app/src/sw.ts).
+        // Vide s'il n'y a rien à faire → pas de bouton.
+        taskId:    focus?.id ?? '',
+        taskTitle: focus?.title ?? '',
+      },
     })
 
     // Marque comme envoyé (champ user direct, pas une collection séparée)

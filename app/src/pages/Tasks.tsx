@@ -1,4 +1,5 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Plus, X, CheckCircle2, Circle, AlertTriangle, RotateCcw,
   Trash2, Hand, Bell, BellRing, Pencil, ArrowRight, Droplets, Square, Heart,
@@ -166,6 +167,7 @@ export default function Tasks() {
   const { user, profile, isTemp } = useAuth()
   const superAdmin = isSuperAdmin(profile)
 
+  const [searchParams, setSearchParams] = useSearchParams()
   const [allTasks, setAllTasks]   = useState<Task[]>([])
   const users = useUsers()
   const [mapPins, setMapPins]     = useState<MapPin[]>([])
@@ -195,6 +197,27 @@ export default function Tasks() {
     )
     return unsub
   }, [])
+
+  /* Bouton « ✓ Fait » d'une notification (21/07/2026).
+   * Le Service Worker ne peut pas écrire dans Firestore (ni SDK Firestore ni
+   * session Auth là-bas) : il ouvre donc /tasks?done=<id> et c'est ici qu'on
+   * coche. On attend que les tâches soient chargées, on ne traite l'id qu'UNE
+   * fois, et on nettoie l'URL en `replace` pour qu'un rafraîchissement ou un
+   * retour arrière ne re-coche pas la tâche. */
+  const doneParam = searchParams.get('done')
+  const handledDoneRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!doneParam || !user || isTemp) return
+    if (handledDoneRef.current === doneParam) return
+    if (allTasks.length === 0) return // snapshot pas encore arrivé
+    handledDoneRef.current = doneParam
+    const task = allTasks.find(t => t.id === doneParam)
+    if (task && !task.completed) void toggleDone(task)
+    setSearchParams(
+      prev => { const next = new URLSearchParams(prev); next.delete('done'); return next },
+      { replace: true },
+    )
+  }, [doneParam, allTasks, user, isTemp])
 
   // Pins carte (pour résoudre le nom du linkedId si différent du snapshot)
   useEffect(() => {

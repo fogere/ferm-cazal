@@ -59,15 +59,36 @@ const _app = initializeApp({
 })
 const messaging = getMessaging(_app)
 
+// Le cron envoie des messages DATA-ONLY (aucune clé `notification`) — voir le
+// commentaire dans cron/notify.cjs. Raison : quand le payload contient
+// `notification`, le SDK Firebase affiche la notif lui-même PUIS appelle ce
+// handler, qui en affichait une deuxième → tout arrivait en double.
+// Ici on est donc le seul point d'affichage, ce qui permet les boutons d'action.
+// On garde une lecture de payload.notification en repli, au cas où un vieux
+// message (ou un envoi manuel depuis la console Firebase) arriverait.
 onBackgroundMessage(messaging, (payload) => {
-  const { title, body, icon } = payload.notification ?? {}
-  self.registration.showNotification(title ?? 'Ferme Stinglhamber', {
-    body:  body ?? '',
-    icon:  icon ?? '/icons/farm-icon-192.png',
+  const d = (payload.data ?? {}) as Record<string, string>
+  const title = d.title ?? payload.notification?.title ?? 'Ferme Stinglhamber'
+  const body  = d.body  ?? payload.notification?.body  ?? ''
+
+  // Bouton « Fait » seulement si le message désigne une tâche précise.
+  const actions = d.taskId
+    ? [{ action: 'done', title: '✓ Fait' }, { action: 'open', title: 'Voir' }]
+    : []
+
+  self.registration.showNotification(title, {
+    body,
+    icon:  payload.notification?.icon ?? '/icons/farm-icon-192.png',
     badge: '/icons/farm-icon-192.png',
     vibrate: [200, 100, 200],
-    requireInteraction: payload.data?.['severity'] === 'urgent',
-    data: payload.data ?? {},
+    requireInteraction: d.severity === 'urgent',
+    // `tag` : deux notifs de même nature se REMPLACENT au lieu de s'empiler.
+    // Filet de sécurité contre les doublons, et évite 5 résumés du matin
+    // empilés si le cron bégaie. `renotify` fait quand même vibrer.
+    tag: d.kind ? `ferme-${d.kind}` : 'ferme',
+    renotify: true,
+    actions,
+    data: d,
   } as NotificationOptions)
 })
 
@@ -76,7 +97,18 @@ onBackgroundMessage(messaging, (payload) => {
 // si possible plutôt qu'en en ouvrant un nouveau.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const target = (event.notification.data as { url?: string } | undefined)?.url ?? '/dashboard'
+  const d = (event.notification.data ?? {}) as { url?: string; taskId?: string }
+
+  // Bouton « ✓ Fait » : on ne peut pas écrire dans Firestore depuis le Service
+  // Worker (pas de SDK Firestore ni de session Auth ici), donc on ouvre l'app
+  // sur /tasks avec ?done=<id> — Tasks.tsx coche la tâche au chargement puis
+  // nettoie l'URL. C'est un tap de plus qu'un vrai widget natif, mais c'est
+  // robuste et ça ne demande ni APK ni Blaze.
+  const target =
+    event.action === 'done' && d.taskId
+      ? `/tasks?done=${encodeURIComponent(d.taskId)}`
+      : (d.url ?? '/dashboard')
+
   event.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
     for (const client of all) {

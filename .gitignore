@@ -36,10 +36,13 @@ le-cazal-service-account.json
 scripts/le-cazal-service-account.json
 
 # ── Exports bug reports (artefacts de debug, pas du code) ──
+# Consolidés dans BACKLOG.md le 21/07/2026 ; les 9 exports d'origine sont
+# regroupés dans bug-reports-archive-2026.zip (seule copie : bugReports = 0 en prod).
 bug.json
 ferme-bugs-*.json
 V[0-9]*.json
 BUGV*.json
+bug-reports-archive-*.zip
 
 # ── Fiches papier sources (44 Mo de .docx/.odt/.odp — extraits dans import/extracted/) ──
 fichier/

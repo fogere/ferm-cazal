@@ -722,15 +722,8 @@ export default function Settings() {
           <ChevronRight size={18} className="text-muted" />
         </button>
 
-        {/* Rapports de bugs */}
-        <button
-          onClick={() => navigate('/bugs')}
-          className="flex items-center gap-3 w-full px-4 py-4 rounded-2xl bg-card shadow-sm active:bg-cream transition-colors"
-        >
-          <Bug size={20} className="text-danger" />
-          <span className="flex-1 text-left text-charcoal font-semibold text-sm">Rapports de bugs</span>
-          <ChevronRight size={18} className="text-muted" />
-        </button>
+        {/* « Rapports de bugs » a été déplacé dans Administration le 21/07/2026 :
+            deux entrées « bug » identiques ici se lisaient comme un doublon. */}
 
         {/* Administration */}
         <button

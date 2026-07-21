@@ -17,18 +17,31 @@ statut vérifié dans le code (commit ou `fichier:ligne`), pas déduit.
 
 ## À FAIRE
 
-### En attente d'une décision de Nils
-- **Vraie app mobile / widgets.** Widget d'écran d'accueil **impossible en PWA** (manifest
-  `widgets` = Windows 11 uniquement ; `setAppBadge` non supporté sur Android). Voies :
-  notification riche actionnable (~heures, le cron calcule **déjà** la donnée,
-  `notify.cjs:459-504`) **vs** APK TWA + `AppWidgetProvider` Kotlin (3-6 j, 2ᵉ login, 0 €).
-  Capacitor **tue le Service Worker** → plus de cache tuiles ni de maj auto. À écarter.
-- **Touch targets globaux** (« click box »). Généraliser le principe *hitbox large + le plus
-  proche gagne*, aujourd'hui présent **uniquement** dans l'édition carte (`SNAP_RADIUS_PX=44`).
-  Piège : deux marges qui se chevauchent → c'est l'ordre du DOM qui gagne, pas le plus proche.
-- **Fluidité carte, lot 1** : `updateWhenIdle={false}` + `keepBuffer={2}` **ensemble** et
-  **bornés au mobile**. Jamais testé sur téléphone (voir Règles).
-- **GPS toujours actif** : à réconcilier avec l'incident « téléphone qui chauffe » d'Eugénie (23/05).
+### Décidé le 21/07/2026 — les 3 prochains chantiers
+1. **Notifications** (validé par Nils). Widget d'écran d'accueil **impossible en PWA** —
+   vérifié : manifest `widgets` = Windows 11 uniquement, `setAppBadge` non supporté sur
+   Android. Le substitut est une **notification riche actionnable** : le cron calcule
+   **déjà** la bonne donnée (`notify.cjs:459-504` → tâches du jour, les miennes, les
+   libres), il manque les titres et un bouton « Fait ». Sur Android une notif web reste
+   dans le tiroir jusqu'au tap et accepte 2 actions → c'est un widget à 90 %.
+   ⚠️ Bug à confirmer d'abord : **notifications probablement en double** (le SDK FCM
+   affiche, puis `sw.ts:62` réaffiche ; aucun `tag` des deux côtés).
+2. **GPS h24** (validé par Nils). À réconcilier avec l'incident « téléphone qui chauffe »
+   d'Eugénie (23/05) qui a justifié la coupure sur `document.hidden`. Pistes : Wake Lock
+   pendant une session terrain explicite, précision réduite plutôt que fréquence.
+   Vérifier d'abord **ce qui chauffait vraiment** : le GPS, ou le repaint des 23 clôtures ?
+3. **Touch targets globaux** (« click box »). Généraliser le principe *hitbox large + le
+   plus proche gagne*, aujourd'hui présent **uniquement** dans l'édition carte
+   (`SNAP_RADIUS_PX=44`). Piège : deux marges qui se chevauchent → c'est l'ordre du DOM
+   qui gagne, pas le plus proche. Solution : n'étendre que jusqu'à mi-chemin du voisin.
+
+### ❌ Abandonné — ne pas y revenir
+- **Fluidité de la carte.** Nils, 21/07/2026 : « ça sert à rien, c'est impossible,
+  crois-moi, ne teste même pas. » Après 3 essais revertés (voir Règles), le sujet est
+  **clos**. Ne plus proposer `updateWhenIdle` / `keepBuffer` / `preferCanvas` / MapLibre.
+- **Capacitor / APK natif.** Tue le Service Worker → plus de cache de tuiles ni de mise à
+  jour automatique. Il faudrait réinstaller un APK à la main sur 4 téléphones à chaque
+  correctif. Gelé tant qu'on livre par hosting.
 
 ### Fond de tiroir (anciens, partiels)
 - **Tâches récurrentes** : perdent l'espace et le point d'eau à l'occurrence suivante →

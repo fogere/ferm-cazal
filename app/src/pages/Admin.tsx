@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Plus, X, Pencil, Check, Download,
   PawPrint, FileSpreadsheet, KeyRound, Copy, ClipboardCheck,
-  ChevronDown, ChevronRight, Camera, Trash2,
+  ChevronDown, ChevronRight, Camera, Trash2, Bug,
 } from 'lucide-react'
 import { compressImage } from '../services/image'
 import FirestoreMonitorPanel from '../components/admin/FirestoreMonitorPanel'
@@ -1822,6 +1822,21 @@ export default function Admin() {
             </p>
           </div>
         </div>
+
+        {/* ─── Rapports de bugs ───
+            Deplace depuis Reglages le 21/07/2026 : la, il y avait deux entrees
+            « bug » cote a cote (« Signaler un bug » + « Rapports de bugs ») avec
+            la meme icone rouge, ce qui se lisait comme un doublon. Reglages ne
+            garde que l'action utile a tout le monde (signaler) ; la consultation
+            des rapports est de l'administration. */}
+        <button
+          onClick={() => navigate('/bugs')}
+          className="flex items-center gap-3 w-full px-4 py-4 rounded-2xl bg-card shadow-sm active:bg-cream transition-colors"
+        >
+          <Bug size={20} className="text-danger" />
+          <span className="flex-1 text-left text-charcoal font-semibold text-sm">Rapports de bugs</span>
+          <ChevronRight size={18} className="text-muted" />
+        </button>
 
         {/* ─── Monitoring Firebase (BUGV3 #4) ─── */}
         <FirestoreMonitorPanel />

@@ -10,7 +10,7 @@ import FirestoreMonitorPanel from '../components/admin/FirestoreMonitorPanel'
 import CareJournal from '../components/animal/CareJournal'
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, getDoc, setDoc, getDocs, query, where, deleteField, writeBatch,
+  doc, setDoc, getDocs, query, where, deleteField, writeBatch,
 } from '../services/firestoreMonitor'
 import { db } from '../firebase'
 import { useAuth, formatCode } from '../hooks/useAuth'
@@ -31,21 +31,10 @@ function dateLabelFR(ts: number): string {
   return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-interface AnimalGroup {
-  name: string
-  count: number
-}
-
-const DEFAULT_GROUPS: AnimalGroup[] = [
-  { name: 'Juments',          count: 7  },
-  { name: 'Étalon',           count: 1  },
-  { name: 'Hongres chevaux',  count: 2  },
-  { name: 'Pouliches',        count: 3  },
-  { name: 'Ânes mâles',       count: 6  },
-  { name: 'Ânes femelles',    count: 17 },
-  { name: 'Hongre âne',       count: 1  },
-  { name: 'Tout le troupeau', count: 37 },
-]
+// Les « groupes d'animaux » (compteurs libres type « Juments : 7 ») ont été
+// supprimés le 21/07/2026 : ils faisaient doublon avec les animaux individuels
+// (section ci-dessous), qui sont la source de vérité. Le champ Firestore
+// config/farm.animalGroups n'est plus ni lu ni écrit.
 
 function downloadCSV(filename: string, rows: string[][]) {
   const bom = '﻿'
@@ -59,43 +48,6 @@ function downloadCSV(filename: string, rows: string[][]) {
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
-}
-
-/* ─── Sous-composant éditeur groupe ─── */
-
-function GroupEditor({ group, onSave, onCancel }: {
-  group: AnimalGroup
-  onSave: (g: AnimalGroup) => void
-  onCancel: () => void
-}) {
-  const [name,  setName]  = useState(group.name)
-  const [count, setCount] = useState(String(group.count))
-  return (
-    <>
-      <input
-        value={name}
-        onChange={e => setName(e.target.value)}
-        className="flex-1 border border-forest rounded-lg px-2 py-1 text-sm bg-cream focus:outline-none min-w-0"
-        autoFocus
-      />
-      <input
-        type="number"
-        value={count}
-        onChange={e => setCount(e.target.value)}
-        className="w-14 border border-forest rounded-lg px-2 py-1 text-sm bg-cream focus:outline-none text-center"
-        min={0}
-      />
-      <button
-        onClick={() => onSave({ name: name.trim() || group.name, count: parseInt(count) || 0 })}
-        className="text-meadow p-1"
-      >
-        <Check size={16} />
-      </button>
-      <button onClick={onCancel} className="text-muted p-1">
-        <X size={14} />
-      </button>
-    </>
-  )
 }
 
 /* ─── Page Admin ─── */
@@ -113,11 +65,6 @@ function timeUntil(ts: number): string {
 export default function Admin() {
   const navigate = useNavigate()
   const { user } = useAuth()
-
-  /* Groupes animaux */
-  const [groups,       setGroups]       = useState<AnimalGroup[]>(DEFAULT_GROUPS)
-  const [editingGroup, setEditingGroup] = useState<number | null>(null)
-  const [groupsLoaded, setGroupsLoaded] = useState(false)
 
   /* Animaux individuels */
   const [animals,         setAnimals]         = useState<Animal[]>([])
@@ -199,16 +146,6 @@ export default function Admin() {
       setTempCodes(items)
     })
     return unsub
-  }, [])
-
-  /* Chargement groupes animaux */
-  useEffect(() => {
-    getDoc(doc(db, 'config', 'farm')).then(snap => {
-      if (snap.exists() && Array.isArray(snap.data().animalGroups)) {
-        setGroups(snap.data().animalGroups as AnimalGroup[])
-      }
-      setGroupsLoaded(true)
-    })
   }, [])
 
   /* Chargement animaux individuels */
@@ -410,20 +347,6 @@ export default function Admin() {
     return { overdue, dueSoon }
   }
 
-  /* Actions groupes */
-
-  async function saveGroups(next: AnimalGroup[]) {
-    setGroups(next)
-    setEditingGroup(null)
-    await setDoc(doc(db, 'config', 'farm'), { animalGroups: next }, { merge: true })
-  }
-
-  function updateGroup(i: number, updated: AnimalGroup) {
-    const next = [...groups]
-    next[i] = updated
-    saveGroups(next)
-  }
-
   /* Actions races personnalisées */
 
   async function addCustomRace() {
@@ -599,16 +522,6 @@ export default function Admin() {
     }
   }
 
-  function deleteGroup(i: number) {
-    saveGroups(groups.filter((_, idx) => idx !== i))
-  }
-
-  function addGroup() {
-    const next = [...groups, { name: 'Nouveau groupe', count: 0 }]
-    saveGroups(next)
-    setEditingGroup(next.length - 1)
-  }
-
   /* Actions codes d'accès */
 
   async function createCode() {
@@ -771,8 +684,6 @@ export default function Admin() {
     }
   }
 
-  const totalAnimals = groups.filter(g => g.name !== 'Tout le troupeau').reduce((s, g) => s + g.count, 0)
-
   return (
     <div className="pb-10">
 
@@ -790,69 +701,6 @@ export default function Admin() {
       </div>
 
       <div className="px-4 space-y-4 mt-2">
-
-        {/* ─── Groupes d'animaux ─── */}
-        <div className="bg-card rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <PawPrint size={16} className="text-forest" />
-              <p className="text-xs font-semibold text-muted uppercase tracking-wider">
-                Groupes d'animaux
-              </p>
-            </div>
-            <span className="text-xs text-muted font-semibold">
-              {totalAnimals} animaux
-            </span>
-          </div>
-
-          {groupsLoaded && (
-            <ul className="space-y-0.5">
-              {groups.map((g, i) => (
-                <li key={i} className="flex items-center gap-2 py-2 border-b border-border/40 last:border-0">
-                  {editingGroup === i ? (
-                    <GroupEditor
-                      group={g}
-                      onSave={updated => updateGroup(i, updated)}
-                      onCancel={() => setEditingGroup(null)}
-                    />
-                  ) : (
-                    <>
-                      <span className="flex-1 text-sm text-charcoal">{g.name}</span>
-                      <span className="text-sm font-bold text-forest w-8 text-right">{g.count}</span>
-                      <button
-                        onClick={() => setEditingGroup(i)}
-                        className="text-muted active:text-charcoal p-1 ml-1"
-                      >
-                        <Pencil size={13} />
-                      </button>
-                      <button
-                        onClick={() => deleteGroup(i)}
-                        className="text-danger/40 active:text-danger p-1"
-                      >
-                        <X size={13} />
-                      </button>
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="flex items-center justify-between mt-3">
-            <button
-              onClick={addGroup}
-              className="flex items-center gap-1.5 text-forest text-sm font-semibold active:opacity-70"
-            >
-              <Plus size={14} /> Ajouter un groupe
-            </button>
-            <button
-              onClick={() => saveGroups(DEFAULT_GROUPS)}
-              className="text-xs text-muted underline active:text-charcoal"
-            >
-              Réinitialiser
-            </button>
-          </div>
-        </div>
 
         {/* ─── Animaux individuels ─── */}
         <div className="bg-card rounded-2xl p-4 shadow-sm">

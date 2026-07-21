@@ -926,7 +926,6 @@ export default function MapPage() {
 
   const [pins,         setPins]         = useState<MapPin[]>([])
   const users = useUsers()
-  const [animalGroups, setAnimalGroups] = useState<{ name: string; count: number }[]>([])
   const [layer,        setLayer]        = useState<'aerial' | 'plan' | 'osm'>('aerial')
   // Overlay parcelles cadastrales — persisté dans localStorage, utile pour voir
   // les limites de terrain par-dessus la photo aérienne (demandé par Eugénie pour la PAC)
@@ -968,8 +967,6 @@ export default function MapPage() {
   const [actionBusy,   setActionBusy]   = useState(false)
   const [savingHealth, setSavingHealth] = useState(false)
   const [flyTrigger,   setFlyTrigger]   = useState(0)
-  const [editOccupants, setEditOccupants] = useState(false)
-  const [pendingOccupants, setPendingOccupants] = useState<string[]>([])
 
   // États mode "cours d'eau" — bug Eugénie 21/05/2026 V2.
   // Mode dessin polyline simple : on clique, on accumule des points, on valide.
@@ -1201,11 +1198,8 @@ export default function MapPage() {
     )
     // Le listener `users` vit dans UsersProvider — partagé entre Tasks/Map/Dashboard/etc.
     // Avant : 1 listener par page consommatrice (9× en parallèle).
-    getDoc(doc(db, 'config', 'farm')).then(snap => {
-      if (snap.exists() && Array.isArray(snap.data().animalGroups)) {
-        setAnimalGroups(snap.data().animalGroups)
-      }
-    }).catch(err => console.warn('[Map] config/farm load:', err?.code ?? err))
+    // (Le chargement de config/farm.animalGroups a été retiré le 21/07/2026 avec
+    //  les groupes d'animaux. Ne PAS confondre avec config/fencePresets ci-dessous.)
     getDoc(doc(db, 'config', 'fencePresets')).then(snap => {
       const saved = snap.exists() && Array.isArray(snap.data().presets)
         ? (snap.data().presets as FencePreset[])
@@ -1467,7 +1461,6 @@ export default function MapPage() {
     setEditMode('move') // mode par défaut : déplacer
     // Ferme les autres panneaux pour libérer la carte
     setSelected(null)
-    setEditOccupants(false)
     setEditEnclosureAnimals(false)
     // Bug Nils V4 #2 (24/05/2026) : reset tous les drafts de création pour ne
     // pas voir de pin/poteau fantôme apparaitre en mode édition. Cas typique :
@@ -2433,31 +2426,6 @@ export default function MapPage() {
     } finally { setActionBusy(false) }
   }
 
-  /* ─── zone : changer occupants ─── */
-
-  async function saveOccupants(pin: MapPin) {
-    if (!assertRegularUser()) return
-    if (!user) return
-    setActionBusy(true)
-    try {
-      const now          = Date.now()
-      const oldHistory   = pin.rotationHistory ?? []
-      const historyEntry = {
-        occupants: pin.currentOccupants ?? [],
-        from:      pin.occupiedSince ?? pin.createdAt,
-        to:        now,
-      }
-      await updateDoc(doc(db, 'map_pins', pin.id), {
-        currentOccupants: pendingOccupants,
-        occupiedSince:    now,
-        rotationHistory:  [...oldHistory, historyEntry],
-        updatedAt:        now,
-        updatedBy:        user.uid,
-      })
-      setEditOccupants(false)
-    } finally { setActionBusy(false) }
-  }
-
   // Envoie un pointeur partagé. L'expéditeur voit IMMÉDIATEMENT son pointeur en
   // local (state séparé) sans attendre Firestore : ainsi même si le réseau est
   // lent ou si le snapshot de /users prend du temps à propager, on a un retour
@@ -2763,19 +2731,6 @@ export default function MapPage() {
     }))
   }
 
-  function toggleAnimal(name: string, field: 'waterAnimals' | 'currentOccupants') {
-    setForm(f => {
-      const arr = f[field] as string[]
-      return { ...f, [field]: arr.includes(name) ? arr.filter(x => x !== name) : [...arr, name] }
-    })
-  }
-
-  function togglePendingOccupant(name: string) {
-    setPendingOccupants(prev =>
-      prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name]
-    )
-  }
-
   function getFencePathOptions(pin: MapPin): L.PolylineOptions {
     const preset = fencePresets.find(p => p.id === pin.presetId)
     const base = getFenceVisualState(pin, preset, pins)
@@ -3036,7 +2991,6 @@ export default function MapPage() {
             setSelected(pin)
             setAddMode(false)
             setFenceMode(false)
-            setEditOccupants(false)
             setEditEnclosureAnimals(false)
             // Bug Nils V4 #2 (24/05/2026) : reset les drafts en abandonnant
             // fenceMode/streamMode/plotMode via sélection d'un pin, sinon les
@@ -4845,19 +4799,6 @@ export default function MapPage() {
                     </div>
                   </FormSection>
 
-                  {animalGroups.length > 0 && (
-                    <FormSection label="Animaux concernés">
-                      <div className="flex flex-wrap gap-1.5">
-                        {animalGroups.filter(g => g.name !== 'Tout le troupeau').map(g => (
-                          <button key={g.name} type="button"
-                            onClick={() => toggleAnimal(g.name, 'waterAnimals')}
-                            className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
-                              form.waterAnimals.includes(g.name) ? 'border-forest text-forest bg-forest/10' : 'border-border text-muted bg-cream'
-                            }`} disabled={saving}>{g.name} ({g.count})</button>
-                        ))}
-                      </div>
-                    </FormSection>
-                  )}
                 </>
               )}
 
@@ -4897,26 +4838,6 @@ export default function MapPage() {
                     </div>
                   </FormSection>
                 </>
-              )}
-
-              {/* ── Champs zone animaux ── */}
-              {form.type === 'zone' && animalGroups.length > 0 && (
-                <FormSection label="Occupants actuels">
-                  <div className="flex flex-wrap gap-1.5">
-                    {animalGroups.map(g => (
-                      <button key={g.name} type="button"
-                        onClick={() => toggleAnimal(g.name, 'currentOccupants')}
-                        className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
-                          form.currentOccupants.includes(g.name) ? 'border-forest text-forest bg-forest/10' : 'border-border text-muted bg-cream'
-                        }`} disabled={saving}>{g.name} ({g.count})</button>
-                    ))}
-                  </div>
-                  {form.currentOccupants.length > 0 && (
-                    <p className="text-xs text-forest font-medium mt-2">
-                      ✓ {form.currentOccupants.join(', ')}
-                    </p>
-                  )}
-                </FormSection>
               )}
 
               {/* ── Champs pin perso (nom + emoji + couleur) ── */}
@@ -5403,7 +5324,7 @@ export default function MapPage() {
       {selected && (
         <div className="absolute inset-0 z-[2000] flex flex-col justify-end">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-               onClick={() => { setSelected(null); setEditOccupants(false) }} />
+               onClick={() => setSelected(null)} />
           <div className="relative bg-card rounded-t-3xl px-5 pt-5 pb-10 shadow-2xl max-h-[80vh] overflow-y-auto">
 
             <div className="flex items-start justify-between mb-4">
@@ -5442,7 +5363,7 @@ export default function MapPage() {
                   <p className="text-muted text-xs mt-0.5">{PIN_CFG[selected.type]?.label}</p>
                 </div>
               </div>
-              <button onClick={() => { setSelected(null); setEditOccupants(false); setRenamingPin(false) }}
+              <button onClick={() => { setSelected(null); setRenamingPin(false) }}
                       className="p-2 rounded-xl text-muted active:bg-cream flex-shrink-0">
                 <X size={20} />
               </button>
@@ -5753,72 +5674,9 @@ export default function MapPage() {
               />
             )}
 
-            {/* ── Bloc zone animaux ── */}
-            {selected.type === 'zone' && (
-              <div className="mb-4 space-y-3">
-                {(selected.currentOccupants?.length ?? 0) > 0 ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {selected.currentOccupants!.map(o => (
-                      <span key={o}
-                            className="px-3 py-1.5 rounded-xl bg-forest/10 border border-forest/30 text-forest text-xs font-semibold">
-                        {o}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-muted text-sm italic">Aucun occupant enregistré</p>
-                )}
-                {selected.occupiedSince && (
-                  <DetailRow label="Depuis" value={timeAgo(selected.occupiedSince)} />
-                )}
-                {!editOccupants ? (
-                  <button
-                    onClick={() => { setPendingOccupants(selected.currentOccupants ?? []); setEditOccupants(true) }}
-                    className="w-full py-3 rounded-xl border border-forest/30 text-forest text-sm font-semibold active:bg-forest/10 transition-colors"
-                  >
-                    Modifier les occupants
-                  </button>
-                ) : (
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold text-muted uppercase tracking-wider">Sélectionner les groupes</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {animalGroups.map(g => (
-                        <button key={g.name} type="button"
-                          onClick={() => togglePendingOccupant(g.name)}
-                          className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
-                            pendingOccupants.includes(g.name) ? 'border-forest text-forest bg-forest/10' : 'border-border text-muted bg-cream'
-                          }`}>{g.name} ({g.count})</button>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => saveOccupants(selected)} disabled={actionBusy}
-                        className="flex-1 py-3 rounded-xl bg-forest text-white text-sm font-bold active:opacity-80 disabled:opacity-50">
-                        {actionBusy ? '…' : 'Confirmer'}
-                      </button>
-                      <button onClick={() => setEditOccupants(false)}
-                        className="px-4 py-3 rounded-xl border border-border text-muted text-sm active:bg-cream">
-                        Annuler
-                      </button>
-                    </div>
-                  </div>
-                )}
-                {(selected.rotationHistory?.length ?? 0) > 0 && (
-                  <div className="mt-2">
-                    <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">Historique des rotations</p>
-                    <div className="space-y-1 max-h-40 overflow-y-auto">
-                      {[...selected.rotationHistory!].reverse().map((r, i) => (
-                        <div key={i} className="text-xs text-muted bg-cream rounded-lg px-3 py-2 flex justify-between">
-                          <span>{r.occupants.length > 0 ? r.occupants.join(', ') : 'Vide'}</span>
-                          <span className="text-muted/60">
-                            {new Date(r.from).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Le bloc « zone animaux » a été retiré le 21/07/2026 avec les groupes
+                d'animaux. Le type de pin `zone` était déjà mort : absent de
+                PICKABLE_TYPES, donc impossible à créer, et 0 pin de ce type en prod. */}
 
             {/* ── Bloc tâche "à faire" ── */}
             {selected.type === 'todo' && (

@@ -3,7 +3,7 @@
 Fichier **unique**. Remplace `V4→V9.json`, `bug*.json`, `ferme-bugs-*.json`.
 Source : **59 demandes uniques** dédupliquées depuis 9 exports (18/05 → 21/07/2026),
 statut vérifié dans le code (commit ou `fichier:ligne`), pas déduit.
-**49 livrées · 10 restantes.**
+**53 livrées · 6 restantes.**
 
 > **Vision** (Nils, 21/07/2026) : « identifier le travail à faire, voir **concrètement**
 > ce qu'il y a à faire, **ne pas être découragé**, avoir une **vision ensemble** sur la ferme. »
@@ -16,17 +16,6 @@ statut vérifié dans le code (commit ou `fichier:ligne`), pas déduit.
 ---
 
 ## À FAIRE
-
-### Décidé — prêt à coder
-| Quoi | Où | Effort |
-|---|---|---|
-| **Supprimer la bulle 🐞 flottante** (garder capture auto + bouton dans Réglages) | `BugReportButton.tsx`, `App.tsx:141` | S |
-| **Bannière /alerts → couleur selon gravité** (vert si rien, rouge si urgent) | `Alerts.tsx:74-75` + l.78/79/87 | XS |
-| **Supprimer les groupes d'animaux** (code puis champ `config/farm.animalGroups`) | `Admin.tsx`, `Map.tsx` | S |
-| **Filtrer les AbortError** du patch fetch (16/16 lignes des rapports = du bruit) | `bugReporter.ts:234-242` | XS |
-
-> ⚠️ La bulle 🐞 **recouvre le bouton « + » de la carte** sur 36 px en `z-[9000]` :
-> le tap ouvre la modale bug au lieu d'ajouter une épingle. Ce n'est pas cosmétique.
 
 ### En attente d'une décision de Nils
 - **Vraie app mobile / widgets.** Widget d'écran d'accueil **impossible en PWA** (manifest
@@ -56,7 +45,17 @@ statut vérifié dans le code (commit ou `fichier:ligne`), pas déduit.
 
 ---
 
-## ACQUIS — 115 commits, 18/05 → 02/07/2026
+## ACQUIS — 118 commits, 18/05 → 21/07/2026
+
+- **21/07/2026 — les 4 demandes du rapport V9** (déployées) :
+  bulle 🐞 flottante **supprimée** (elle recouvrait le bouton « + » de la carte sur
+  36 px en `z-[9000]` — bug d'interaction, pas de la cosmétique) → remplacée par
+  Réglages → « Signaler un bug » ; header `/alerts` **coloré selon la gravité**
+  (vert forêt quand il n'y a rien) ; **groupes d'animaux supprimés** (UI Admin + UI
+  carte + champ `config/farm.animalGroups`, sauvegardé dans
+  `backups/animalGroups-supprime-2026-07-21.json`) ; **AbortError filtrés** du patch
+  fetch. Le type de pin `zone`, déjà mort (absent de `PICKABLE_TYPES`, 0 en prod),
+  est parti avec les groupes.
 
 - **Carte · clôtures & espaces** — refonte complète : scission auto d'un espace par une clôture
   (S7, `polygon-split.ts` + `ScindageModal`), **refusion auto à la suppression** (S8),
